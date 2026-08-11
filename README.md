@@ -1,2 +1,2 @@
-# Login_Prototype_JavaFX
+# JavaFX Login
 A JavaFX login window.
