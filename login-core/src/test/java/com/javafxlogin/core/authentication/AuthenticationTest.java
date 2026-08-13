@@ -1,4 +1,4 @@
-package com.javafxlogin.core.daemon;
+package com.javafxlogin.core.authentication;
 
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
@@ -6,19 +6,23 @@ import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
+import com.javafxlogin.core.ipc.ErrorCode;
+import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Response;
-import com.javafxlogin.core.session.SessionToken;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Seam 1: what Authenticate grants, what it denies, and how little the denial says. */
 class AuthenticationTest {
@@ -55,7 +59,6 @@ class AuthenticationTest {
         Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
 
         assertEquals(16, granted.token().copyOfBytes().length);
-        assertEquals(16, SessionToken.LENGTH_IN_BYTES);
     }
 
     @Test
@@ -63,7 +66,30 @@ class AuthenticationTest {
         Granted first = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
         Granted second = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
 
-        assertNotEquals(first.token(), second.token());
+        assertFalse(Arrays.equals(first.token().copyOfBytes(), second.token().copyOfBytes()));
+    }
+
+    /** Never logged: the object a caller would actually print must not carry the token into a log. */
+    @Test
+    void printingAGrantedDoesNotPrintItsToken() {
+        Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+        String printed = granted.toString();
+
+        assertTrue(printed.contains("redacted"), () -> "not redacted: " + printed);
+        assertFalse(printed.contains(HexFormat.of().formatHex(granted.token().copyOfBytes())),
+                () -> "the token leaked into " + printed);
+    }
+
+    /** Every request is answered — a broken store becomes an Error, not an exception. */
+    @Test
+    void aStoreThatCannotBeReadIsAnsweredRatherThanThrown() {
+        harness.close();
+
+        Response response = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+        ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
+        assertEquals(ErrorCode.STORE_UNAVAILABLE, error.code());
     }
 
     @Test

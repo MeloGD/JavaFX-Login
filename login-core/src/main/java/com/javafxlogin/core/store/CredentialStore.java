@@ -15,7 +15,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.time.Clock;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
@@ -60,22 +59,12 @@ public final class CredentialStore implements AutoCloseable {
         try {
             SchemaMigrations.applyTo(connection);
         } catch (SQLException e) {
-            closeQuietly(connection);
-            throw new CredentialStoreException("could not migrate the CredentialStore at " + file, e);
+            throw closeAfter(connection,
+                    new CredentialStoreException("could not migrate the CredentialStore at " + file, e));
         } catch (RuntimeException e) {
-            closeQuietly(connection);
-            throw e;
+            throw closeAfter(connection, e);
         }
         return new CredentialStore(file, connection);
-    }
-
-    /** The schema version this store is currently at. */
-    public int schemaVersion() {
-        try {
-            return SchemaMigrations.userVersionOf(connection);
-        } catch (SQLException e) {
-            throw new CredentialStoreException("could not read the schema version of " + file, e);
-        }
     }
 
     /** Whether the single Administrator has been created. */
@@ -116,15 +105,14 @@ public final class CredentialStore implements AutoCloseable {
      *
      * @throws CredentialStoreException if the name is taken, or a second Administrator was attempted
      */
-    public void insert(Account account, Clock clock) {
+    public void insert(Account account) {
         Objects.requireNonNull(account, "account");
-        Objects.requireNonNull(clock, "clock");
         try (PreparedStatement statement = connection.prepareStatement(
                 "INSERT INTO accounts (name, role, password_hash, created_at) VALUES (?, ?, ?, ?)")) {
             statement.setString(1, account.name());
             statement.setString(2, account.role().name());
             statement.setString(3, account.passwordHash());
-            statement.setString(4, ZonedDateTime.now(clock).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+            statement.setString(4, ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
             statement.executeUpdate();
         } catch (SQLException e) {
             throw new CredentialStoreException("could not record an Account in " + file, e);
@@ -133,7 +121,11 @@ public final class CredentialStore implements AutoCloseable {
 
     @Override
     public void close() {
-        closeQuietly(connection);
+        try {
+            connection.close();
+        } catch (SQLException e) {
+            throw new CredentialStoreException("could not close the CredentialStore at " + file, e);
+        }
     }
 
     private static Connection connect(Path file) {
@@ -185,26 +177,36 @@ public final class CredentialStore implements AutoCloseable {
     }
 
     /**
-     * The fallback where POSIX modes do not exist. It is weaker than an ACL and is not the mechanism
-     * the Windows half will ship with — there the store lives inside an already-restricted directory
-     * created by the installer. Left deliberately unverified: no Windows machine exists for this
-     * project yet, and nothing here may be reported as working on it.
+     * Best-effort narrowing where POSIX modes do not exist.
+     *
+     * <p>It deliberately does not fail when the platform refuses these calls, because it is not what
+     * protects the store there: on Windows the store lives inside a directory the installer has
+     * already restricted by ACL, and {@code setReadable(false, false)} is documented to return false
+     * rather than take effect. Failing here would stop the service starting at all instead of
+     * starting it with a weaker mode.
+     *
+     * <p>Designed, unbuilt and unverified: no Windows machine exists for this project yet, and none
+     * of this may be reported as working on one.
      */
-    private static void restrictWithoutPosix(Path file) throws IOException {
+    private static void restrictWithoutPosix(Path file) {
         java.io.File asFile = file.toFile();
-        if (!asFile.setReadable(false, false) || !asFile.setWritable(false, false)) {
-            throw new IOException("could not remove inherited access from " + file);
-        }
-        if (!asFile.setReadable(true, true) || !asFile.setWritable(true, true)) {
-            throw new IOException("could not grant owner-only access to " + file);
-        }
+        asFile.setReadable(false, false);
+        asFile.setWritable(false, false);
+        asFile.setReadable(true, true);
+        asFile.setWritable(true, true);
     }
 
-    private static void closeQuietly(Connection connection) {
+    /**
+     * Closes a connection that failed on the way up and returns the failure to throw. A close that
+     * also fails is attached as suppressed rather than raised, so the reason the store would not
+     * open is never replaced by the reason it would not shut.
+     */
+    private static <E extends RuntimeException> E closeAfter(Connection connection, E failure) {
         try {
             connection.close();
         } catch (SQLException e) {
-            throw new CredentialStoreException("could not close the CredentialStore", e);
+            failure.addSuppressed(e);
         }
+        return failure;
     }
 }

@@ -1,7 +1,7 @@
 package com.javafxlogin.core.store;
 
 import com.javafxlogin.core.auth.Argon2Parameters;
-import com.javafxlogin.core.daemon.AuthenticationService;
+import com.javafxlogin.core.authentication.AuthenticationService;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Bootstrap;
 import org.junit.jupiter.api.Test;
@@ -30,10 +30,10 @@ class CredentialStoreSchemaTest {
     @Test
     void aFreshStoreIsMigratedToTheLatestVersion() {
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
 
-        assertEquals(SchemaMigrations.latestVersion(), userVersionOf(directory.resolve("credentials.db")));
+        assertEquals(SchemaMigrations.latestVersion(), userVersionOf(ServiceHarness.storeFileIn(directory)));
     }
 
     /**
@@ -58,11 +58,11 @@ class CredentialStoreSchemaTest {
     @Test
     void reopeningAnExistingStoreRunsNoMigrationAndKeepsItsContents() {
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
             harness.restart();
         }
 
-        assertEquals(SchemaMigrations.latestVersion(), userVersionOf(directory.resolve("credentials.db")));
+        assertEquals(SchemaMigrations.latestVersion(), userVersionOf(ServiceHarness.storeFileIn(directory)));
     }
 
     /**
@@ -72,19 +72,19 @@ class CredentialStoreSchemaTest {
     @Test
     void theAccountsTableReservesAColumnForAFutureSecondFactor() {
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
 
-        assertTrue(columnsOf(directory.resolve("credentials.db"), "accounts").contains("second_factor"),
+        assertTrue(columnsOf(ServiceHarness.storeFileIn(directory), "accounts").contains("second_factor"),
                 "accounts has no reserved second_factor column");
     }
 
     /** A downgrade must fail loudly rather than write into a schema it does not understand. */
     @Test
     void theServiceRefusesToStartAgainstANewerSchemaThanItUnderstands() {
-        Path storeFile = directory.resolve("credentials.db");
+        Path storeFile = ServiceHarness.storeFileIn(directory);
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
         setUserVersion(storeFile, SchemaMigrations.latestVersion() + 1);
 
@@ -97,9 +97,9 @@ class CredentialStoreSchemaTest {
 
     @Test
     void aStoreAtTheUnderstoodVersionStillOpens() {
-        Path storeFile = directory.resolve("credentials.db");
+        Path storeFile = ServiceHarness.storeFileIn(directory);
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
 
         try (AuthenticationService reopened = AuthenticationService.open(storeFile, Argon2Parameters.PRODUCTION)) {

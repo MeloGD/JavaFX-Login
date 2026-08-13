@@ -1,8 +1,6 @@
 package com.javafxlogin.core.session;
 
-import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -30,35 +28,9 @@ public final class SessionToken {
         return new SessionToken(value);
     }
 
-    /** Reconstructs a token from bytes that arrived from elsewhere, such as over the wire. */
-    public static SessionToken of(byte[] value) {
-        Objects.requireNonNull(value, "value");
-        if (value.length != LENGTH_IN_BYTES) {
-            throw new IllegalArgumentException(
-                    "a SessionToken is " + LENGTH_IN_BYTES + " bytes, got " + value.length);
-        }
-        return new SessionToken(value.clone());
-    }
-
     /** The token's bytes, as a copy so that a caller cannot mutate the token it was handed. */
     public byte[] copyOfBytes() {
         return value.clone();
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (this == other) {
-            return true;
-        }
-        if (!(other instanceof SessionToken token)) {
-            return false;
-        }
-        return MessageDigest.isEqual(value, token.value);
-    }
-
-    @Override
-    public int hashCode() {
-        return Arrays.hashCode(value);
     }
 
     /** Never logged. */

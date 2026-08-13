@@ -40,21 +40,21 @@ class StoreFilePermissionsTest {
     @EnabledOnOs({OS.LINUX, OS.MAC})
     void theStoreFileIsCreatedOwnerOnly() throws IOException {
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
 
         assertEquals(
                 OWNER_ONLY,
-                Files.getPosixFilePermissions(directory.resolve("credentials.db")),
+                Files.getPosixFilePermissions(ServiceHarness.storeFileIn(directory)),
                 "the CredentialStore must not be readable by the account the client runs as");
     }
 
     @Test
     @EnabledOnOs({OS.LINUX, OS.MAC})
     void thePermissionsAreReassertedWhenAnExistingStoreIsReopened() throws IOException {
-        Path storeFile = directory.resolve("credentials.db");
+        Path storeFile = ServiceHarness.storeFileIn(directory);
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
         }
         Files.setPosixFilePermissions(storeFile, WORLD_READABLE);
 

@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -19,7 +20,6 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** The SessionToken is opaque, 128 bits, and outlives neither the process nor a log line. */
 class SessionTokenTest {
@@ -37,21 +37,13 @@ class SessionTokenTest {
     @Test
     void isDistinctEveryTimeItIsGenerated() {
         SecureRandom random = new SecureRandom();
-        Set<SessionToken> tokens = new HashSet<>();
+        Set<String> values = new HashSet<>();
 
         for (int i = 0; i < 1000; i++) {
-            tokens.add(SessionToken.generate(random));
+            values.add(HexFormat.of().formatHex(SessionToken.generate(random).copyOfBytes()));
         }
 
-        assertEquals(1000, tokens.size());
-    }
-
-    @Test
-    void equalsComparesTheValueRatherThanTheIdentity() {
-        SessionToken token = SessionToken.generate(new SecureRandom());
-
-        assertEquals(token, SessionToken.of(token.copyOfBytes()));
-        assertNotEquals(token, SessionToken.generate(new SecureRandom()));
+        assertEquals(1000, values.size());
     }
 
     @Test
@@ -77,7 +69,7 @@ class SessionTokenTest {
     void isNeverWrittenToDisk() throws IOException {
         Granted granted;
         try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
-            harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+            harness.bootstrap("wren.holloway", "Correct-Horse-1");
             granted = (Granted) harness.send(new Authenticate("wren.holloway", "Correct-Horse-1".toCharArray()));
         }
 
@@ -107,9 +99,4 @@ class SessionTokenTest {
         return false;
     }
 
-    @Test
-    void refusesAValueThatIsNotOneHundredAndTwentyEightBits() {
-        assertThrows(IllegalArgumentException.class, () -> SessionToken.of(new byte[15]));
-        assertThrows(IllegalArgumentException.class, () -> SessionToken.of(new byte[17]));
-    }
 }

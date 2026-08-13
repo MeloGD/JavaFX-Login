@@ -1,7 +1,16 @@
 package com.javafxlogin.core.auth;
 
+import com.javafxlogin.core.authentication.AuthenticationService;
+import com.javafxlogin.core.ipc.Bootstrap;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,5 +94,40 @@ class ProductionHashingTest {
         Authenticator authenticator = new Authenticator(new Argon2Parameters(256, 1, 1, 32));
 
         assertFalse(authenticator.verifyAgainstAbsentAccount("Correct-Horse-1".toCharArray()));
+    }
+
+    /**
+     * The criterion is about what the service stores, not about what a constant says. Opening the
+     * service the way production opens it must put a PHC string carrying the OWASP parameters into
+     * the store — and must not put the password there in any form.
+     */
+    @Test
+    void openingTheServiceAsProductionDoesStoresAnOwaspGradePhcHash(@TempDir Path directory) {
+        try (AuthenticationService service = AuthenticationService.open(directory.resolve("credentials.db"))) {
+            service.handle(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        }
+
+        String stored = storedHashOf(directory.resolve("credentials.db"), "wren.holloway");
+
+        Matcher matcher = PHC.matcher(stored);
+        assertTrue(matcher.matches(), () -> "the store does not hold a PHC string: " + stored);
+        assertEquals(String.valueOf(Argon2Parameters.OWASP_MINIMUM_MEMORY_KIB), matcher.group(2));
+        assertEquals(String.valueOf(Argon2Parameters.OWASP_MINIMUM_ITERATIONS), matcher.group(3));
+        assertEquals(String.valueOf(Argon2Parameters.OWASP_MINIMUM_PARALLELISM), matcher.group(4));
+        assertFalse(stored.contains("Correct-Horse-1"), "the password reached the store");
+    }
+
+    private static String storedHashOf(Path storeFile, String accountName) {
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+             PreparedStatement statement =
+                     connection.prepareStatement("SELECT password_hash FROM accounts WHERE name = ?")) {
+            statement.setString(1, accountName);
+            try (ResultSet results = statement.executeQuery()) {
+                assertTrue(results.next(), () -> "no Account named " + accountName + " was stored");
+                return results.getString(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

@@ -1,9 +1,10 @@
-package com.javafxlogin.core.daemon;
+package com.javafxlogin.core.authentication;
 
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
@@ -39,14 +40,14 @@ class BootstrapTest {
 
     @Test
     void createsTheSingleAdministratorWhenNoneExists() {
-        Response response = harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        Response response = harness.bootstrap("wren.holloway", "Correct-Horse-1");
 
         assertInstanceOf(Ok.class, response);
     }
 
     @Test
     void theAdministratorItCreatedCanAuthenticate() {
-        harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        harness.bootstrap("wren.holloway", "Correct-Horse-1");
 
         Response response = harness.send(new Authenticate("wren.holloway", "Correct-Horse-1".toCharArray()));
 
@@ -56,7 +57,7 @@ class BootstrapTest {
 
     @Test
     void isRefusedOnceAnAdministratorExists() {
-        harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        harness.bootstrap("wren.holloway", "Correct-Horse-1");
 
         Response response = harness.send(new Bootstrap("finch.mercer", "Another-Horse-2".toCharArray()));
 
@@ -66,7 +67,7 @@ class BootstrapTest {
 
     @Test
     void theRefusalSurvivesAServiceRestart() {
-        harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        harness.bootstrap("wren.holloway", "Correct-Horse-1");
 
         harness.restart();
         Response response = harness.send(new Bootstrap("finch.mercer", "Another-Horse-2".toCharArray()));
@@ -77,11 +78,11 @@ class BootstrapTest {
 
     @Test
     void theSecondAdministratorIsNotCreatedByTheRefusedAttempt() {
-        harness.send(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+        harness.bootstrap("wren.holloway", "Correct-Horse-1");
         harness.send(new Bootstrap("finch.mercer", "Another-Horse-2".toCharArray()));
 
         Response response = harness.send(new Authenticate("finch.mercer", "Another-Horse-2".toCharArray()));
 
-        assertInstanceOf(com.javafxlogin.core.ipc.Denied.class, response);
+        assertInstanceOf(Denied.class, response);
     }
 }

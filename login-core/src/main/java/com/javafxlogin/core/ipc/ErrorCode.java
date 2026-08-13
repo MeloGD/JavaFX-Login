@@ -10,5 +10,12 @@ package com.javafxlogin.core.ipc;
 public enum ErrorCode {
 
     /** Bootstrap was attempted when the single Administrator already exists. */
-    ADMINISTRATOR_EXISTS
+    ADMINISTRATOR_EXISTS,
+
+    /**
+     * The CredentialStore could not be read or written. Says nothing about why: the caller can only
+     * retry or give up either way, and the detail belongs in the service's own record, not in a
+     * response an unprivileged client receives.
+     */
+    STORE_UNAVAILABLE
 }

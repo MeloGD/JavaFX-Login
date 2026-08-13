@@ -9,11 +9,11 @@ import java.security.SecureRandom;
 import java.util.Objects;
 
 /**
- * The only component permitted to verify a password.
+ * Turns a password into a hash, and checks a password against one.
  *
- * <p>Not to be confused with the AuthenticationService, which is the privileged process this runs
- * inside. That distinction is settled vocabulary, not a preference: two different things sharing one
- * name would poison the glossary.
+ * <p>It is the AuthenticationService that is permitted to verify a password — this is the component
+ * it verifies with, and it exists only inside that process. The two names are deliberately distinct:
+ * two different things sharing one would poison the glossary from the first commit.
  *
  * <p>Hashes are Argon2id PHC strings, so the salt and the cost parameters travel with each hash.
  * Verification therefore reads its parameters from the stored hash rather than from this object's
@@ -24,7 +24,6 @@ public final class Authenticator {
     private static final int SALT_LENGTH_IN_BYTES = 16;
     private static final int REFERENCE_PASSWORD_LENGTH = 32;
 
-    private final Argon2Parameters parameters;
     private final Argon2Function function;
 
     /**
@@ -35,7 +34,7 @@ public final class Authenticator {
     private final String absentAccountReferenceHash;
 
     public Authenticator(Argon2Parameters parameters) {
-        this.parameters = Objects.requireNonNull(parameters, "parameters");
+        Objects.requireNonNull(parameters, "parameters");
         this.function = Argon2Function.getInstance(
                 parameters.memoryKib(),
                 parameters.iterations(),
@@ -43,11 +42,6 @@ public final class Authenticator {
                 parameters.outputLength(),
                 Argon2.ID);
         this.absentAccountReferenceHash = hash(unguessablePassword());
-    }
-
-    /** The parameters new hashes are produced with. */
-    public Argon2Parameters parameters() {
-        return parameters;
     }
 
     /** Hashes a password into a PHC string carrying its own random salt and cost parameters. */
@@ -75,6 +69,13 @@ public final class Authenticator {
      *
      * <p>Always returning false is the point: the caller cannot accidentally treat an absent Account
      * as authenticated, and the attempt costs what a real one costs.
+     *
+     * <p>The equality is exact only while stored Accounts carry these same parameters, which is the
+     * case for any Account this Authenticator hashed. Once parameters are raised and existing hashes
+     * are re-made on next login, an Account still at the older cost is measurably cheaper than this
+     * — until it logs in once. That window is the reason the rehash happens on login rather than
+     * lazily, and it is the residue this method cannot close on its own: there is no Account to read
+     * parameters from when the name matches nothing.
      */
     public boolean verifyAgainstAbsentAccount(char[] password) {
         verify(password, absentAccountReferenceHash);

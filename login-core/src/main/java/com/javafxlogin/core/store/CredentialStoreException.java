@@ -8,8 +8,4 @@ public class CredentialStoreException extends RuntimeException {
     public CredentialStoreException(String message, Throwable cause) {
         super(message, cause);
     }
-
-    public CredentialStoreException(String message) {
-        super(message);
-    }
 }

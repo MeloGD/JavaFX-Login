@@ -1,4 +1,4 @@
-package com.javafxlogin.core.daemon;
+package com.javafxlogin.core.authentication;
 
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.harness.ServiceHarness;
@@ -32,8 +32,12 @@ class AbsentAccountCostsTheSameTest {
     private static final int WARMUP_ATTEMPTS = 5;
     private static final int MEASURED_ATTEMPTS = 15;
 
-    /** A real Account and an absent one may differ by half the larger median, and no more. */
-    private static final double TOLERATED_RELATIVE_DIFFERENCE = 0.5;
+    /**
+     * A real Account and an absent one may differ by a quarter of the larger median, and no more.
+     * Wide enough to absorb scheduling noise on a loaded machine, narrow enough that it fails long
+     * before a difference becomes usable at a login screen.
+     */
+    private static final double TOLERATED_RELATIVE_DIFFERENCE = 0.25;
 
     @TempDir
     Path directory;
@@ -55,8 +59,19 @@ class AbsentAccountCostsTheSameTest {
     void anAttemptAgainstANonexistentAccountCostsTheSameAsAgainstARealOne() {
         warmUp();
 
-        long realAccount = medianNanos(NAME);
-        long absentAccount = medianNanos("nobody.here");
+        long[] realAccountSamples = new long[MEASURED_ATTEMPTS];
+        long[] absentAccountSamples = new long[MEASURED_ATTEMPTS];
+
+        // Interleaved rather than measured in two phases: this machine builds several projects at
+        // once, and load that drifts between one phase and the next would read as a difference
+        // between the two branches. Alternating makes any such drift hit both equally.
+        for (int i = 0; i < MEASURED_ATTEMPTS; i++) {
+            realAccountSamples[i] = nanosToRefuse(NAME);
+            absentAccountSamples[i] = nanosToRefuse("nobody.here");
+        }
+
+        long realAccount = medianOf(realAccountSamples);
+        long absentAccount = medianOf(absentAccountSamples);
 
         double difference = Math.abs(realAccount - absentAccount);
         double larger = Math.max(realAccount, absentAccount);
@@ -69,19 +84,20 @@ class AbsentAccountCostsTheSameTest {
 
     private void warmUp() {
         for (int i = 0; i < WARMUP_ATTEMPTS; i++) {
-            harness.send(new Authenticate(NAME, "Wrong-Horse-9".toCharArray()));
-            harness.send(new Authenticate("nobody.here", "Wrong-Horse-9".toCharArray()));
+            nanosToRefuse(NAME);
+            nanosToRefuse("nobody.here");
         }
     }
 
-    private long medianNanos(String accountName) {
-        long[] samples = new long[MEASURED_ATTEMPTS];
-        for (int i = 0; i < samples.length; i++) {
-            long started = System.nanoTime();
-            harness.send(new Authenticate(accountName, "Wrong-Horse-9".toCharArray()));
-            samples[i] = System.nanoTime() - started;
-        }
-        Arrays.sort(samples);
-        return samples[samples.length / 2];
+    private long nanosToRefuse(String accountName) {
+        long started = System.nanoTime();
+        harness.send(new Authenticate(accountName, "Wrong-Horse-9".toCharArray()));
+        return System.nanoTime() - started;
+    }
+
+    private static long medianOf(long[] samples) {
+        long[] sorted = samples.clone();
+        Arrays.sort(sorted);
+        return sorted[sorted.length / 2];
     }
 }

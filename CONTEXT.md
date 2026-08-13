@@ -27,6 +27,13 @@ _Avoid_: user, regular user, standard account
 The single capability set attached to an Account: either Administrator or
 Operator. Roles are mutually exclusive and an Account never holds both.
 
+**SecondFactor**:
+A second proof of identity, beyond the password, that an Account could be asked
+for. Deferred from v1: a seam and a reserved column in the CredentialStore exist
+so that adding one later is a change of behaviour rather than of shape. Nothing
+implements it, and the administration UI shows the option visibly disabled.
+_Avoid_: 2FA, MFA, TOTP, one-time code
+
 **PasswordStrength**:
 A coarse estimate — weak, acceptable or strong — of how resistant an Account's
 password is to guessing. Only the coarse band is ever recorded.
@@ -39,6 +46,13 @@ The privileged component that owns every credential file and is the only party
 that can verify a password. It is the security boundary of this system: nothing
 outside it can read a password hash.
 _Avoid_: daemon, server, backend, auth server
+
+**Authenticator**:
+The component inside the AuthenticationService that turns a password into a hash
+and checks a password against one. It is named apart from the service on
+purpose: the service is the privileged process, and letting one name cover both
+would blur what the security boundary is.
+_Avoid_: password checker, credential validator, auth helper
 
 **Session**:
 The period during which an authenticated Operator may reach the ProtectedFeature.

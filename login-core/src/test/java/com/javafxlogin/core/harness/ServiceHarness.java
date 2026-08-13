@@ -1,7 +1,8 @@
 package com.javafxlogin.core.harness;
 
 import com.javafxlogin.core.auth.Argon2Parameters;
-import com.javafxlogin.core.daemon.AuthenticationService;
+import com.javafxlogin.core.authentication.AuthenticationService;
+import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
 
@@ -51,6 +52,11 @@ public final class ServiceHarness implements AutoCloseable {
         return service.handle(request);
     }
 
+    /** Creates the single Administrator, which almost every test needs before it can do anything. */
+    public Response bootstrap(String administratorName, String password) {
+        return send(new Bootstrap(administratorName, password.toCharArray()));
+    }
+
     /** Closes and reopens the service against the same files, as a service restart would. */
     public void restart() {
         service.close();
@@ -62,6 +68,11 @@ public final class ServiceHarness implements AutoCloseable {
     }
 
     public Path storeFile() {
+        return storeFileIn(directory);
+    }
+
+    /** Where the store lives, for tests that must reach it without holding a harness. */
+    public static Path storeFileIn(Path directory) {
         return directory.resolve("credentials.db");
     }
 
