@@ -28,8 +28,18 @@ Messages are JSON with a four-byte length prefix and a hard 1 MiB cap.
   A challenge-response scheme was rejected because verifying against Argon2id
   requires the original password; deriving client-side would turn the derived
   value into the password.
-- The socket file inherits `umask` permissions at `bind()`, so it is created
-  inside an already-restricted directory rather than being chmod'ed afterwards.
+- On Windows the service binds its own socket, which therefore inherits `umask`
+  permissions at `bind()` and must be created inside an already-restricted
+  directory rather than chmod'ed afterwards. **On Linux this does not apply**:
+  systemd creates the socket under socket activation, so `SocketUser=`,
+  `SocketGroup=` and `SocketMode=` make its ownership and mode declarative and it
+  never exists with the wrong permissions.
+- The two platforms share the transport, the framing and the Session model, but
+  **not the activation trigger**. Linux is socket-activated, so connecting is what
+  starts the service and the socket is always present. Windows keeps a
+  Manual-start service and must start it and then wait for the socket to appear.
+  Only the few lines that obtain the listening `ServerSocketChannel` differ, and
+  they sit behind one seam.
 - A Session is bound to its connection. When the client dies the kernel closes
   the socket and the service ends the Session immediately — no heartbeats, and no
   Operator locked out by a crashed client.

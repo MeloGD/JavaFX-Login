@@ -34,6 +34,16 @@ delegates to the setgid `unix_chkpwd`, and Windows delegates to LSASS over ALPC.
   Manual-start Windows service whose ACL grants `SERVICE_START` (never
   `SERVICE_STOP`) to normal users — and stops after five minutes without
   Sessions. Consequently no rate-limiting state may live in memory.
+- Socket activation was proven on Ubuntu 26.04 with systemd 259 and JDK 21. The
+  mechanism is not obvious and is easy to get silently wrong:
+  `System.inheritedChannel()` inspects **only file descriptor 0**, while systemd
+  passes the listening socket as fd 3, so the `.service` unit needs
+  `StandardInput=socket` and the `.socket` unit exactly one `ListenStream=`.
+  `StandardOutput=`/`StandardError=` must be set explicitly or JVM output is
+  written into the client connection, and `$LISTEN_FDS` is deliberately not set
+  in this mode. No reflection and no `--add-opens` are required. See
+  `docs/spikes/linux-service-activation.md` for the measurements and the full set
+  of installer traps.
 - The application is no longer a single process. It remains self-contained: no
   network, no external service.
 - If the service cannot be reached the application refuses to start,
