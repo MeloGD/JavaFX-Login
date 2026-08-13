@@ -30,6 +30,16 @@ delegates to the setgid `unix_chkpwd`, and Windows delegates to LSASS over ALPC.
 - Lockout state and the audit log become tamper-resistant, because the service
   owns those files too. Both must be flushed to disk on every write, since the
   service does not run continuously.
+- Account names become part of what the CredentialStore keeps secret, not mere
+  labels. Since an unprivileged attacker cannot read the account list, a
+  predictable name donates an entry of it back for free. No Account is therefore
+  pre-created, nothing is prefilled or suggested at first run, and a blocklist of
+  predictable names — `admin`, `root`, `sa` and the like, matched
+  case-insensitively after normalising separators and digit-for-letter
+  substitutions — is refused for every Account. This satisfies ASVS 5.0 §6.3.2
+  and goes past it: that requirement only forbids shipping such accounts, while
+  here the concern is an installer creating one by hand. The Administrator and
+  Operator Roles keep their names, being capability sets rather than credentials.
 - The service starts on demand — socket activation under systemd, and a
   Manual-start Windows service whose ACL grants `SERVICE_START` (never
   `SERVICE_STOP`) to normal users — and stops after five minutes without
