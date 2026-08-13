@@ -15,6 +15,23 @@ rights on the machine. Such an attacker can read the MachineKey and reach every
 secret; at that point the ProtectedFeature is not the most valuable thing they
 have compromised.
 
+**Also explicitly out of scope: a compromised Administrator Account.** This is a
+different attacker from the one above — not an operating-system administrator,
+but whoever holds the password to this application's single Administrator
+Account. That password yields the SecretVault. Its holder cannot read the Vault
+file directly, being an unprivileged operating-system user, but they can create
+an Operator, enrol it, authenticate as it and ask the service for secrets one at
+a time. Refusing Vault operations to an Administrator Session does not prevent
+this and was never capable of preventing it, because the refusal is scoped to the
+Role of a Session and a new Session is one provisioning step away.
+
+The consequence is worth stating plainly: **the Administrator password is as
+valuable as the Vault it can reach.** The compensating control is the audit log,
+which records the creation, the enrolment and the authentication under an HMAC
+chain that cannot be edited or removed — detection, not prevention. See ADR-0005
+for why closing this properly would require a provisioning ceremony this project
+deliberately rejected.
+
 ## Consequences
 
 - Every control that matters is enforced by a process the attacker cannot
