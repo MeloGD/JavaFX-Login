@@ -1,0 +1,104 @@
+# JavaFX Login
+
+A reusable, offline login template that gates access to a feature owned by a host
+product. It has no network dependencies: every account, secret and audit record
+lives on the machine where the application is installed.
+
+## Language
+
+### Identity and roles
+
+**Account**:
+A named identity that can authenticate against this system. Every Account holds
+exactly one Role.
+_Avoid_: user, profile
+
+**Administrator**:
+The single Account that manages other Accounts and application configuration. An
+Administrator can never read secrets held by the Vault.
+_Avoid_: admin user, superuser, root
+
+**Operator**:
+An Account allowed to reach the ProtectedFeature. A deployment holds one or more
+Operators.
+_Avoid_: user, regular user, standard account
+
+**Role**:
+The single capability set attached to an Account: either Administrator or
+Operator. Roles are mutually exclusive and an Account never holds both.
+
+**PasswordStrength**:
+A coarse estimate — weak, acceptable or strong — of how resistant an Account's
+password is to guessing. Only the coarse band is ever recorded.
+_Avoid_: score, entropy, complexity rating
+
+### Access and sessions
+
+**AuthenticationService**:
+The privileged component that owns every credential file and is the only party
+that can verify a password. It is the security boundary of this system: nothing
+outside it can read a password hash.
+_Avoid_: daemon, server, backend, auth server
+
+**Session**:
+The period during which an authenticated Operator may reach the ProtectedFeature.
+A Session ends on logout, on inactivity, or when the client that owns it
+disappears.
+_Avoid_: login, connection, sign-in
+
+**SessionToken**:
+The opaque value that identifies a Session to the AuthenticationService. It never
+outlives the process that issued it.
+_Avoid_: session id, ticket, cookie
+
+**LoginGate**:
+The entry point a host product calls to obtain a Session. It is the only part of
+this system a host product is required to know about.
+_Avoid_: login manager, auth facade
+
+**SessionGuard**:
+The component that reports Operator activity so an idle Session can expire. It
+reports; it does not decide — expiry belongs to the AuthenticationService.
+_Avoid_: idle timer, session watcher
+
+**ProtectedFeature**:
+The host product's functionality that sits behind the gate. This system knows it
+only as a view it is handed, never by name or content.
+_Avoid_: MainController, protected screen, main app
+
+### Secret custody
+
+**CredentialStore**:
+The record of every Account, its password hash and the configuration of the
+application. Only the AuthenticationService can read it.
+_Avoid_: user database, account table, shadow file
+
+**SecretVault**:
+The named store of secrets a ProtectedFeature needs but must not hold in the
+clear, such as credentials for other systems. Secrets are served one at a time,
+only to an Operator, and only for as long as their Session lasts.
+_Avoid_: keystore, secret store, credential cache
+
+**DataKey**:
+The single key that encrypts the SecretVault, shared by every Operator and never
+stored unwrapped.
+_Avoid_: master key, vault key
+
+**MachineKey**:
+The key, readable only by the AuthenticationService, that holds a second wrapped
+copy of the DataKey. It is what lets an Administrator provision an Operator
+without ever seeing the DataKey.
+_Avoid_: host key, system key
+
+### Auditing
+
+**AuthenticationEvent**:
+A recorded fact about access: an authentication attempt, a lockout, an Account
+change, a configuration change, or an export. Events are written and never read
+back by the application.
+_Avoid_: log line, audit entry, log record
+
+**Lockout**:
+The state of an Account that has failed authentication often enough to be
+temporarily refused. Lockout survives restarts of the AuthenticationService.
+_Avoid_: ban, throttle, block

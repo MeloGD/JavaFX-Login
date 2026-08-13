@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.javafxlogin</groupId>
+    <artifactId>javafx-login-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>login-ui</artifactId>
+  <name>JavaFX Login :: UI</name>
+  <description>
+    Login and administration windows, LoginGate and SessionGuard. Runs
+    unprivileged and never reads a credential file: see ADR-0002.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.javafxlogin</groupId>
+      <artifactId>login-core</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-controls</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.openjfx</groupId>
+      <artifactId>javafx-fxml</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.testfx</groupId>
+      <artifactId>testfx-junit5</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.testfx</groupId>
+      <artifactId>openjfx-monocle</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- Headless rendering: no X11, no Wayland. -->
+          <systemPropertyVariables>
+            <testfx.robot>glass</testfx.robot>
+            <testfx.headless>true</testfx.headless>
+            <glass.platform>Monocle</glass.platform>
+            <monocle.platform>Headless</monocle.platform>
+            <prism.order>sw</prism.order>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

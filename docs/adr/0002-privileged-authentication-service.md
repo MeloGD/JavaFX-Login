@@ -1,0 +1,41 @@
+# A privileged service owns the credential files
+
+Password hashes must not be readable by unprivileged accounts — the same reason
+Linux moved them out of `/etc/passwd` into `/etc/shadow` and Windows keeps the
+SAM hive readable only by SYSTEM. But the graphical application runs as the
+Operator, so it cannot read a file the Operator is denied. We therefore split
+the system into an unprivileged UI process and a privileged AuthenticationService
+that owns every credential file and performs verification on the UI's behalf.
+
+This mirrors what both target platforms already do for their own logins: PAM
+delegates to the setgid `unix_chkpwd`, and Windows delegates to LSASS over ALPC.
+
+## Considered options
+
+- **Setuid helper binary.** Rejected: a setuid JVM is exploitable through
+  `JAVA_TOOL_OPTIONS` and friends, and Windows has no equivalent mechanism.
+- **System group with a group-readable store.** Rejected: it forces every
+  Operator to map onto an operating-system account, which defeats the point of
+  the application having its own accounts.
+- **World-readable hashes protected only by Argon2id cost.** Rejected: it leaks
+  the account list and invites offline attack.
+
+## Consequences
+
+- Runtime privilege elevation disappears. The service already holds privileges,
+  so administrative writes are authorised by verifying the Administrator's own
+  password. There is no `pkexec` or UAC prompt during normal use, which also
+  sidesteps the fact that a GUI cannot run as root under Wayland. Elevation is
+  needed only at install time.
+- Lockout state and the audit log become tamper-resistant, because the service
+  owns those files too. Both must be flushed to disk on every write, since the
+  service does not run continuously.
+- The service starts on demand — socket activation under systemd, and a
+  Manual-start Windows service whose ACL grants `SERVICE_START` (never
+  `SERVICE_STOP`) to normal users — and stops after five minutes without
+  Sessions. Consequently no rate-limiting state may live in memory.
+- The application is no longer a single process. It remains self-contained: no
+  network, no external service.
+- If the service cannot be reached the application refuses to start,
+  distinguishing "not running", "incompatible version" and "socket not
+  accessible", because the three have different remedies.
