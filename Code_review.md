@@ -594,3 +594,185 @@ mvn -o -pl login-core test -Dtest='*PolicyTest'         # the rules as units
 To check the naming test still has teeth, delete the `case 'i', 'l', …` arm of
 `AccountNameRules.folded` and confirm `digitForLetterSubstitutionsAreSeenThrough`
 fails on `Adm1n` before restoring it.
+
+---
+
+# Code review — the walking skeleton (issue #5, Seams 1+2 joined and Seam 3)
+
+Written for a final reviewing agent, in the same shape as the sections above:
+what was built, what the two-axis review found, what was acted on and — more
+usefully — what was **not**.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commits | `316482a` (implementation), `25bb670` (review fixes) |
+| Base / fixed point | `0c22a2e`, the tip of `dev-login` before this ticket |
+| Diff to review | `git diff 0c22a2e...HEAD` — 44 files, +2198 / −39 |
+| Packages | `…core.ipc`, `…core.authentication`, `…core.session` in `login-core`; `…ui.login` in `login-ui`; `…feature` in `protected-feature` |
+| Build | `mvn -o test` → 200 tests, 0 failures, 1 skipped by the Windows OS guard |
+
+## 2. What the ticket asked for
+
+Issue #5, "Walking skeleton: authenticate and open the ProtectedFeature" — the
+first thing a human can watch work, and the join of everything #2 and #3 built.
+Parent spec is issue #1; the binding decisions are ADR-0002 (privileged
+service), ADR-0003 (AF_UNIX and length-prefixed JSON) and ADR-0007 (no JPMS).
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| An Operator authenticates through the window and the ProtectedFeature opens | met | `LoginWindowTest.anOperatorAuthenticatesAndTheProtectedFeatureOpens` |
+| The login stage closes rather than lingering behind the feature | met | `LoginWindowTest.theLoginStageClosesOnceAccessIsGranted` |
+| A wrong password reveals nothing about whether the Account exists | met | `LoginWindowTest.aRefusalSaysNothingAboutWhetherTheAccountExists` (two refusals, identical text), `AuthenticationTest.theDenialRevealsNothingAboutWhetherTheAccountExists` |
+| An Administrator is refused, **by the service** | met | `RoleEnforcementTest` (5 tests), `ServiceOverTheSocketTest.deniesTheAdministratorTheOperatorsRoleOverTheSocket`, `ServiceLoginGateTest.refusesTheAdministratorEvenWithTheRightPassword` — see §3 for how far it goes |
+| A host reaches everything through `LoginGate`, handing over a view it knows nothing about | met | `LoginGate` (one abstract method, one default); `LoginWindowTest.handsTheHostTheSessionThatAdmittingSomeoneProduced`, `…nothingBehindTheGateIsBuiltUntilSomeoneIsAdmitted`; `ProtectedFeatureApplication` is one line |
+| The client talks to the service over the real socket from #2 | met | `ServiceOverTheSocketTest` (7 tests), `ServiceLoginGateTest` (6 tests) |
+| UI tests headless on Monocle against a fake `LoginGate` | met | `LoginWindowTest` extends `ApplicationTest`; `FakeLoginGate`; verified with `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` unset |
+| `login-core` still has no JavaFX on its classpath | met | `NoJavaFxOnTheCoreClasspathTest` asks for `javafx.stage.Stage` and expects not to find it |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The Role moved into the request.** `Authenticate` now carries the Role the
+  client asks to act in, and `Granted` no longer echoes one back. This is the
+  ticket's load-bearing decision and the alternative was a Session registry in
+  the service, which is #7's work. **Consequence for #12:** one login screen
+  serving both Roles cannot know which Role the person holds before
+  authenticating, so it must offer the choice — "one way in" becomes one screen
+  with an explicit administration affordance, which story 38 arguably wants
+  anyway. A reviewer who dislikes this should say so before the admin panel is
+  built on it.
+- **A Role mismatch is `Denied(AUTH_FAILED)`, indistinguishable from a wrong
+  password.** Telling them apart would confirm which name is the Administrator
+  — the one Account whose Role an attacker can guess. The check runs *after*
+  the Argon2id verification so the refusal costs the same.
+- **How far the exclusion goes today, exactly.** No Session for an Operator is
+  ever issued against an Administrator's password. A patched client can still
+  ask to act as an Administrator, be granted a Session, and draw the feature's
+  window over a SecretVault that will not open for it (ADR-0005: no wrapped
+  DataKey). That paragraph is in `ServiceLoginGate`'s Javadoc rather than only
+  here, because it is exactly what a reader will otherwise overestimate.
+- **The codec is hand-built, not annotation-driven.** The tree is read as data
+  and every message is constructed by name against a closed set, so nothing the
+  peer writes chooses a class to instantiate inside the privileged process.
+  ADR-0003 refused RMI for this reason; Jackson databind is used only for its
+  tree API, with `FAIL_ON_TRAILING_TOKENS` and `STRICT_DUPLICATE_DETECTION` on.
+- **An unreadable payload costs the connection.** `MalformedMessageException` is
+  unchecked so it can leave `RequestHandler.handle`, and the transport drops the
+  connection — ADR-0003's rule one layer up. `TransportServer`'s comment about a
+  throwing handler was amended to stop claiming that can only be a defect.
+- **`AuthenticationService.handle` is now synchronised**, and `close()` with it.
+  `RequestHandler` requires thread-safety across connections and the
+  CredentialStore holds one JDBC connection. Serialising a single-desktop
+  privileged process costs nothing worth having.
+- **The gate keeps one connection.** A Session is bound to its connection, so
+  `ServiceLoginGate` opens one lazily and keeps it; a dead one costs the attempt
+  in flight and the next attempt reconnects (`reconnectsAfterTheServiceHasBeenRestarted`).
+- **`ProtectedFeatureLauncher` exists because of ADR-0007.** JavaFX refuses to
+  start from the classpath when the main class is an `Application` subclass. Any
+  host product copying this module needs the same trick, so it is in the
+  reference rather than in a footnote.
+
+## 4. Two-axis review: what was found and what was done
+
+Both axes ran as parallel sub-agents against `0c22a2e...HEAD`.
+
+### Acted on
+
+| Axis | Finding | What was done |
+|---|---|---|
+| Spec | The host never obtains a Session, though `CONTEXT.md` defines `LoginGate` as what a host calls to obtain one | `protect` now takes `Function<Session, Parent>`; the view is built from the Session. Test: `handsTheHostTheSessionThatAdmittingSomeoneProduced` |
+| Standards | Speculative generality: the `Consumer<Session>` discarded its argument | Same change, from the other end — the argument is now consumed |
+| Spec | Any `RuntimeException` other than `ServiceUnreachableException` left the window disabled with nothing said | Every failure re-enables the window and says something |
+| Spec | Story 39 holds only halfway and nothing said so | The paragraph in `ServiceLoginGate` described in §3 |
+| Spec | `account.orElseThrow()` leaned on an implicit invariant | `!verified \|\| account.isEmpty()` states it |
+| Standards | Import order in `PolicyEnforcementTest` (Google style §3.3.3) — the only hard violation found | Fixed |
+| Standards | `MessageCodec` and a test cited ADR-0003 for a message catalogue the ADR does not contain | Citation narrowed to what ADR-0003 actually decided; the `Error` name now cites `ErrorResponse` |
+| Standards | Mysterious names: `finished`, `waiting`, `boundTo` | `showOutcome`, `showWaiting`, `boundToTheSocketNamedIn` |
+| Standards | Two hunks wrapped where the formatter would join them | Joined |
+| — (own) | `close()` could race a request in flight | Synchronised with `handle` |
+
+### Not acted on, deliberately
+
+- **`ServiceProcess.main` and the README recipe are scope creep (Spec).** True
+  to the letter of the acceptance criteria. Kept, because "the first thing a
+  human can watch work" is the ticket's own framing and a skeleton nobody can
+  start is not one. #15 replaces the channel source, not the class. The
+  installed path `/run/javafx-login/authentication.sock` is a constant with a
+  Javadoc saying the installer owns it — **the most defensible thing to delete
+  if a reviewer disagrees.**
+- **`Assess`/`Assessed`/`PolicyRefused` encoding serves #6 (Spec).** A codec
+  covering part of a closed set is a trap for whoever adds the next message. The
+  types already existed; only their encoding is new.
+- **The provisioning helper is duplicated across the module boundary
+  (Standards).** `ServiceHarness.provisionOperatorIn` and
+  `ServiceLoginGateTest.provisionOperator` are the same four lines, because
+  `login-ui`'s tests cannot see `login-core`'s. Closing it means a test-jar in
+  the build; four lines of test fixture did not seem worth that, and #10 deletes
+  both when enrolment exists.
+- **`(String accountName, char[] password)` is a data clump (Standards).**
+  Agreed, and there is no term in `CONTEXT.md` for the pair a person types.
+  Logged here as a glossary gap rather than fixed by inventing vocabulary — see
+  §5.
+- **`ServiceClient` and `ServiceEndpoint` are light Middle Men (Standards).**
+  Both are seams named in ADR-0003 and the Seams section of #1; delegation is
+  what they are for.
+
+## 5. What a final reviewer should attack first
+
+1. **The Role in the request.** §3's first bullet. Everything downstream of the
+   login screen inherits it, and #12 is the ticket that pays if it is wrong.
+2. **Whether the exclusion paragraph is honest enough.** It claims the refusal
+   is worth something before the SecretVault exists. Read it against ADR-0005
+   and disagree loudly if it oversells.
+3. **The codec's refusals.** 27 tests say what it will not read. Look for a
+   payload that is neither accepted nor refused — a shape that reaches a field
+   accessor before the type is checked would be the bug worth finding.
+4. **The gate's single connection.** It survives a service restart at the cost
+   of one attempt. Whether *that* attempt should retry transparently rather than
+   report an unreachable service is a real question, and it becomes #7's
+   problem when a Session hangs off the same connection.
+5. **A glossary gap:** no term for the name-and-password pair a person offers.
+
+## 6. Honest limits on what the green build means
+
+- **Nothing creates an Operator.** Both suites that need one write to the
+  CredentialStore directly and say so. Run by hand, the pair therefore refuses
+  every attempt — correctly — until #6 and #10 land. The README says this
+  plainly rather than implying a demo that does not exist.
+- **The end-to-end path is proven in two halves, not one.** #5 requires UI tests
+  to drive a fake gate, so no test types a password into a window and reaches a
+  real Argon2id hash. `ServiceLoginGateTest` covers gate-to-service and
+  `LoginWindowTest` covers window-to-gate; the seam between them is an
+  interface, not a test.
+- **The window was watched by a human exactly once**, launched by hand against a
+  running service. The 12 seconds it stayed up is the whole of the manual
+  evidence.
+- **`Session` carries a token and nothing else.** No expiry, no logout, no
+  binding to the connection in code — all #7.
+- **JavaFX warns "Unsupported JavaFX configuration: classes were loaded from
+  'unnamed module'"** on every run. That is ADR-0007 being what it is, not a
+  fault, and it will be in every log a host product ever reads.
+- **Passwords become Strings.** `PasswordField.getText()` and the JSON encoding
+  both make one; the `char[]` the window holds is blanked, the String is not.
+  ADR-0003 accepts the password crossing in the clear, which is the same
+  concession one layer down.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o test                                              # whole reactor, 200 tests
+mvn -o -pl login-core test -Dtest=RoleEnforcementTest    # the Administrator's exclusion, Seam 1
+mvn -o -pl login-core test -Dtest=ServiceOverTheSocketTest  # Seams 1+2 joined
+mvn -o -pl login-ui -am test -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dtest=LoginWindowTest                                 # Seam 3, headless
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY mvn -o test   # proves the display claim
+```
+
+To check Seam 3 still has teeth, make `LoginWindow.openProtectedFeature` skip
+`loginStage.close()` and confirm `theLoginStageClosesOnceAccessIsGranted` fails
+before restoring it.
