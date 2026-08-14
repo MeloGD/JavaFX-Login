@@ -6,9 +6,9 @@ package com.javafxlogin.core.account;
  */
 public enum Role {
 
-    /** The single Account that manages other Accounts and application configuration. */
-    ADMINISTRATOR,
+  /** The single Account that manages other Accounts and application configuration. */
+  ADMINISTRATOR,
 
-    /** An Account allowed to reach the ProtectedFeature. */
-    OPERATOR
+  /** An Account allowed to reach the ProtectedFeature. */
+  OPERATOR
 }

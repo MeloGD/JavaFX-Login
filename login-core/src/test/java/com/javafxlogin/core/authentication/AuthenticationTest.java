@@ -1,5 +1,10 @@
 package com.javafxlogin.core.authentication;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
@@ -10,11 +15,6 @@ import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Response;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -22,142 +22,145 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.HexFormat;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Seam 1: what Authenticate grants, what it denies, and how little the denial says. */
 class AuthenticationTest {
 
-    private static final String NAME = "wren.holloway";
-    private static final String PASSWORD = "Correct-Horse-1";
+  private static final String NAME = "wren.holloway";
+  private static final String PASSWORD = "Correct-Horse-1";
 
-    @TempDir
-    Path directory;
+  @TempDir Path directory;
 
-    private ServiceHarness harness;
+  private ServiceHarness harness;
 
-    @BeforeEach
-    void openServiceWithAnAdministrator() {
-        harness = ServiceHarness.cheap(directory);
-        harness.send(new Bootstrap(NAME, PASSWORD.toCharArray()));
+  @BeforeEach
+  void openServiceWithAnAdministrator() {
+    harness = ServiceHarness.cheap(directory);
+    harness.send(new Bootstrap(NAME, PASSWORD.toCharArray()));
+  }
+
+  @AfterEach
+  void closeService() {
+    harness.close();
+  }
+
+  @Test
+  void aCorrectPasswordIsGranted() {
+    Response response = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+    Granted granted = assertInstanceOf(Granted.class, response);
+    assertEquals(Role.ADMINISTRATOR, granted.role());
+  }
+
+  @Test
+  void theGrantedTokenIs128Bits() {
+    Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+    assertEquals(16, granted.token().copyOfBytes().length);
+  }
+
+  @Test
+  void everyAuthenticationIssuesAFreshToken() {
+    Granted first = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+    Granted second = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+    assertFalse(Arrays.equals(first.token().copyOfBytes(), second.token().copyOfBytes()));
+  }
+
+  /** Never logged: the object a caller would actually print must not carry the token into a log. */
+  @Test
+  void printingAGrantedDoesNotPrintItsToken() {
+    Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+    String printed = granted.toString();
+
+    assertTrue(printed.contains("redacted"), () -> "not redacted: " + printed);
+    assertFalse(
+        printed.contains(HexFormat.of().formatHex(granted.token().copyOfBytes())),
+        () -> "the token leaked into " + printed);
+  }
+
+  /** Every request is answered — a broken store becomes an Error, not an exception. */
+  @Test
+  void aStoreThatCannotBeReadIsAnsweredRatherThanThrown() {
+    harness.close();
+
+    Response response = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+
+    ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
+    assertEquals(ErrorCode.STORE_UNAVAILABLE, error.code());
+  }
+
+  /**
+   * A stored hash that cannot be read is still a refusal, and the same refusal as any other. Were
+   * it to escape as an exception, or to answer with an Error, a real Account with a damaged hash
+   * would be distinguishable from one that does not exist — which is precisely what the denial is
+   * not allowed to reveal.
+   */
+  @Test
+  void anAccountWhoseStoredHashCannotBeReadIsDeniedLikeAnyOther() {
+    overwriteStoredHashOf(NAME, "not-a-phc-string");
+
+    Response forDamagedAccount = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+    Response forAbsentAccount =
+        harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
+
+    assertInstanceOf(Denied.class, forDamagedAccount);
+    assertEquals(forAbsentAccount, forDamagedAccount);
+  }
+
+  private void overwriteStoredHashOf(String accountName, String hash) {
+    String storeFile = ServiceHarness.storeFileIn(directory).toString();
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+        PreparedStatement statement =
+            connection.prepareStatement("UPDATE accounts SET password_hash = ? WHERE name = ?")) {
+      statement.setString(1, hash);
+      statement.setString(2, accountName);
+      assertEquals(
+          1,
+          statement.executeUpdate(),
+          () -> "there was no Account named " + accountName + " to damage");
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
     }
+  }
 
-    @AfterEach
-    void closeService() {
-        harness.close();
-    }
+  @Test
+  void aWrongPasswordIsDenied() {
+    Response response = harness.send(new Authenticate(NAME, "Wrong-Horse-9".toCharArray()));
 
-    @Test
-    void aCorrectPasswordIsGranted() {
-        Response response = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+    Denied denied = assertInstanceOf(Denied.class, response);
+    assertEquals(DeniedReason.AUTH_FAILED, denied.reason());
+  }
 
-        Granted granted = assertInstanceOf(Granted.class, response);
-        assertEquals(Role.ADMINISTRATOR, granted.role());
-    }
+  @Test
+  void anUnknownAccountIsDenied() {
+    Response response = harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
 
-    @Test
-    void theGrantedTokenIs128Bits() {
-        Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+    assertInstanceOf(Denied.class, response);
+  }
 
-        assertEquals(16, granted.token().copyOfBytes().length);
-    }
+  /**
+   * The refusal must not distinguish "no such Account" from "wrong password", or the login screen
+   * becomes an oracle for the account list — which ADR-0002 exists to keep secret.
+   */
+  @Test
+  void theDenialRevealsNothingAboutWhetherTheAccountExists() {
+    Response forWrongPassword = harness.send(new Authenticate(NAME, "Wrong-Horse-9".toCharArray()));
+    Response forUnknownAccount =
+        harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
 
-    @Test
-    void everyAuthenticationIssuesAFreshToken() {
-        Granted first = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
-        Granted second = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+    assertEquals(forWrongPassword, forUnknownAccount);
+  }
 
-        assertFalse(Arrays.equals(first.token().copyOfBytes(), second.token().copyOfBytes()));
-    }
+  @Test
+  void anAccountNameIsMatchedExactly() {
+    Response response = harness.send(new Authenticate(NAME.toUpperCase(), PASSWORD.toCharArray()));
 
-    /** Never logged: the object a caller would actually print must not carry the token into a log. */
-    @Test
-    void printingAGrantedDoesNotPrintItsToken() {
-        Granted granted = (Granted) harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
-
-        String printed = granted.toString();
-
-        assertTrue(printed.contains("redacted"), () -> "not redacted: " + printed);
-        assertFalse(printed.contains(HexFormat.of().formatHex(granted.token().copyOfBytes())),
-                () -> "the token leaked into " + printed);
-    }
-
-    /** Every request is answered — a broken store becomes an Error, not an exception. */
-    @Test
-    void aStoreThatCannotBeReadIsAnsweredRatherThanThrown() {
-        harness.close();
-
-        Response response = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
-
-        ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
-        assertEquals(ErrorCode.STORE_UNAVAILABLE, error.code());
-    }
-
-    /**
-     * A stored hash that cannot be read is still a refusal, and the same refusal as any other. Were
-     * it to escape as an exception, or to answer with an Error, a real Account with a damaged hash
-     * would be distinguishable from one that does not exist — which is precisely what the denial is
-     * not allowed to reveal.
-     */
-    @Test
-    void anAccountWhoseStoredHashCannotBeReadIsDeniedLikeAnyOther() {
-        overwriteStoredHashOf(NAME, "not-a-phc-string");
-
-        Response forDamagedAccount = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
-        Response forAbsentAccount = harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
-
-        assertInstanceOf(Denied.class, forDamagedAccount);
-        assertEquals(forAbsentAccount, forDamagedAccount);
-    }
-
-    private void overwriteStoredHashOf(String accountName, String hash) {
-        String storeFile = ServiceHarness.storeFileIn(directory).toString();
-        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
-             PreparedStatement statement = connection.prepareStatement(
-                     "UPDATE accounts SET password_hash = ? WHERE name = ?")) {
-            statement.setString(1, hash);
-            statement.setString(2, accountName);
-            assertEquals(1, statement.executeUpdate(),
-                    () -> "there was no Account named " + accountName + " to damage");
-        } catch (SQLException e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
-    @Test
-    void aWrongPasswordIsDenied() {
-        Response response = harness.send(new Authenticate(NAME, "Wrong-Horse-9".toCharArray()));
-
-        Denied denied = assertInstanceOf(Denied.class, response);
-        assertEquals(DeniedReason.AUTH_FAILED, denied.reason());
-    }
-
-    @Test
-    void anUnknownAccountIsDenied() {
-        Response response = harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
-
-        assertInstanceOf(Denied.class, response);
-    }
-
-    /**
-     * The refusal must not distinguish "no such Account" from "wrong password", or the login screen
-     * becomes an oracle for the account list — which ADR-0002 exists to keep secret.
-     */
-    @Test
-    void theDenialRevealsNothingAboutWhetherTheAccountExists() {
-        Response forWrongPassword = harness.send(new Authenticate(NAME, "Wrong-Horse-9".toCharArray()));
-        Response forUnknownAccount = harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
-
-        assertEquals(forWrongPassword, forUnknownAccount);
-    }
-
-    @Test
-    void anAccountNameIsMatchedExactly() {
-        Response response = harness.send(new Authenticate(NAME.toUpperCase(), PASSWORD.toCharArray()));
-
-        assertInstanceOf(Denied.class, response);
-    }
+    assertInstanceOf(Denied.class, response);
+  }
 }

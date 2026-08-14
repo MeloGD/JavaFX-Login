@@ -8,7 +8,7 @@ import java.util.Objects;
  */
 public record ErrorResponse(ErrorCode code) implements Response {
 
-    public ErrorResponse {
-        Objects.requireNonNull(code, "code");
-    }
+  public ErrorResponse {
+    Objects.requireNonNull(code, "code");
+  }
 }

@@ -7,25 +7,28 @@ package com.javafxlogin.core.store;
  */
 public final class SchemaTooNewException extends RuntimeException {
 
-    private static final long serialVersionUID = 1L;
+  private static final long serialVersionUID = 1L;
 
-    private final int foundVersion;
-    private final int understoodVersion;
+  private final int foundVersion;
+  private final int understoodVersion;
 
-    public SchemaTooNewException(int foundVersion, int understoodVersion) {
-        super("the CredentialStore is at schema version " + foundVersion
-                + ", but this build understands only version " + understoodVersion);
-        this.foundVersion = foundVersion;
-        this.understoodVersion = understoodVersion;
-    }
+  public SchemaTooNewException(int foundVersion, int understoodVersion) {
+    super(
+        "the CredentialStore is at schema version "
+            + foundVersion
+            + ", but this build understands only version "
+            + understoodVersion);
+    this.foundVersion = foundVersion;
+    this.understoodVersion = understoodVersion;
+  }
 
-    /** The schema version found in the store. */
-    public int foundVersion() {
-        return foundVersion;
-    }
+  /** The schema version found in the store. */
+  public int foundVersion() {
+    return foundVersion;
+  }
 
-    /** The highest schema version this build understands. */
-    public int understoodVersion() {
-        return understoodVersion;
-    }
+  /** The highest schema version this build understands. */
+  public int understoodVersion() {
+    return understoodVersion;
+  }
 }
