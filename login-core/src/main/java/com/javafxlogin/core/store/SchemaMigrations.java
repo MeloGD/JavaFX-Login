@@ -30,8 +30,11 @@ public final class SchemaMigrations {
         return MIGRATIONS.size();
     }
 
-    /** The migration resources, in the order they are applied. */
-    public static List<String> resourceNames() {
+    /**
+     * The migration resources, in the order they are applied. Package-private on purpose: nothing
+     * outside this package migrates a store, and the schema test lives alongside it.
+     */
+    static List<String> resourceNames() {
         return MIGRATIONS;
     }
 

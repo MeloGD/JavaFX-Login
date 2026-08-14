@@ -8,9 +8,9 @@ CREATE TABLE accounts (
     role          TEXT NOT NULL CHECK (role IN ('ADMINISTRATOR', 'OPERATOR')),
     password_hash TEXT NOT NULL,
 
-    -- Reserved for a future SecondFactor. TOTP is deferred from v1 and nothing writes this column
-    -- yet; it exists now so that adding a second factor is a migration about behaviour rather than
-    -- about shape.
+    -- Reserved for a future SecondFactor, which is deferred from v1. Nothing writes this column yet;
+    -- it exists now so that adding a second factor is a migration about behaviour rather than about
+    -- shape. No mechanism is named here on purpose: the column is for whichever one is chosen.
     second_factor TEXT,
 
     created_at    TEXT NOT NULL

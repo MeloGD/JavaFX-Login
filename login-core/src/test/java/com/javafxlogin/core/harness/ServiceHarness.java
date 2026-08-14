@@ -63,11 +63,7 @@ public final class ServiceHarness implements AutoCloseable {
         service = AuthenticationService.open(storeFile(), parameters);
     }
 
-    public Path directory() {
-        return directory;
-    }
-
-    public Path storeFile() {
+    private Path storeFile() {
         return storeFileIn(directory);
     }
 
