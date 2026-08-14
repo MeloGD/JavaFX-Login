@@ -3,3 +3,7 @@ target/
 .idea/
 *.iml
 .vscode/
+
+# Scratch worktrees. Tracking these recorded them as gitlinks pinned to stale
+# commits, which every merge then dragged along.
+.claude/worktrees/
