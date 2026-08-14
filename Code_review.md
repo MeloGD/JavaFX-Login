@@ -374,36 +374,51 @@ than code. **It is scheduled work in another ticket, not a gap in #3.**
   sampling before the mechanism**, and re-run the mutation check before believing
   the mechanism is fine.
 
-## 7. Merging this into `dev-login` — read before you do
+## 7. The merge into `dev-login` — what actually happened
 
-`dev-login` (`2c73169`) and this branch have diverged in ways that go past
-textual conflicts. Neither has ever been compiled against the other.
+`dev-login` (`2c73169`) was merged into this branch and the result pushed. Before
+that merge the two branches had never been compiled against each other. **They
+now have: 79 tests, 0 failures, 1 skipped by the Windows OS guard.** What follows
+records what the merge cost, including the two places this section previously
+predicted wrong.
 
-- **This file.** `dev-login` already carries the wire's `Code_review.md`. The
-  version on this branch is that file *plus* this section, so on merge the
-  resolution is to take this branch's copy — it is a strict superset. Do not take
-  "ours" and lose §1–§8 above.
+- **One textual conflict, this file.** `dev-login` already carried the wire's
+  `Code_review.md`; this branch's copy was that file *plus* this section, so the
+  resolution was to take this branch's — a strict superset. Nothing was lost.
 - **`com.javafxlogin.core.ipc` is being written from both ends.** `dev-login` has
   the transport there (`FrameCodec`, `FrameDecoder`, `TransportServer`,
   `TransportClient`, `RequestHandler`, `ConnectionHandle`,
   `ListeningChannelSource` and friends); this branch adds the message types
   (`Request`, `Response`, `Bootstrap`, `Authenticate`, `Granted`, `Denied`, `Ok`,
   `ErrorResponse`, `ErrorCode`, `DeniedReason`) to the same package. No file
-  names collide, so git will merge them quietly. That quiet is the risk.
+  names collided, so git merged them silently — it compiles precisely because the
+  two halves do not reference each other at all.
 - **The two halves do not join yet, and nobody owns the join.** The wire's seam is
   `byte[] handle(byte[] request, ConnectionHandle connection)`; this branch's is
   `Response handle(Request request)`. Nothing maps between them. That gap is
   precisely the "JSON framing unimplemented" question the wire report calls its
-  largest open item (§3 and §5 of that report) — **it is still open, and merging
-  these two branches is what makes it urgent.** Whoever merges inherits writing
-  that adapter and deciding where JSON validation lives.
-- **`core/daemon/.gitkeep` will come back.** `dev-login` still has it; this branch
-  renamed `daemon` to `authentication`. A merge produces both, resurrecting an
-  empty package whose name `CONTEXT.md` explicitly forbids. Delete it, along with
-  the six stale placeholders listed in §4.
-- **`CLAUDE.md` and `docs/agents/` exist only on `dev-login`.** They arrive
-  cleanly, but they are the reason for the style finding: this branch was written
-  without them.
+  largest open item (§3 and §5 of that report). **The merge did not close it — it
+  made it the next thing that has to happen.** A green build on `dev-login` now
+  means two halves that each work alone, not a service anyone can talk to. Writing
+  that adapter, and deciding where JSON validation lives, is the first real task
+  on top of this merge.
+- **`core/daemon/.gitkeep` did *not* come back — this section predicted wrong.**
+  Git followed the rename to `authentication` and `dev-login`'s untouched copy
+  merged into it cleanly, so no forbidden empty package was resurrected. The six
+  stale placeholders listed in §4 are still there and still worth deleting.
+- **`CLAUDE.md` and `docs/agents/` existed only on `dev-login`.** They arrived
+  cleanly, and they are the reason for the style finding in §4: this branch was
+  written without them.
+- **`dev-login` has three worktrees committed as gitlinks, and that is a bug
+  nobody has noticed.** `.claude/worktrees/design-docs`,
+  `.claude/worktrees/issue-3-credential-store` and `.claude/worktrees/wire` are
+  tracked at mode `160000` — submodule entries, with no `.gitmodules` behind
+  them, each pinned to a stale commit (this branch's entry points at `2579235`,
+  four commits behind). They predate this merge and arrived through it untouched;
+  nothing here created them and nothing here removed them, because deleting
+  another branch's content was outside what was asked. **They should be deleted
+  and `.claude/worktrees/` added to `.gitignore`** — a repo that tracks its own
+  scratch worktrees will keep re-pinning stale commits into every merge.
 
 ## 8. Reproducing
 
