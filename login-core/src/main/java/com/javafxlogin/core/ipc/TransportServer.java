@@ -161,8 +161,9 @@ public final class TransportServer implements AutoCloseable {
       } catch (IOException e) {
         // The peer went away, or the response could not be written. Same remedy.
       } catch (RuntimeException e) {
-        // A handler that throws is a defect in the service, not a wire event. The
-        // connection still cannot be left half-answered.
+        // Either a defect in the service, or the layer above refusing a payload that
+        // is not a message it reads. The remedy is the same one a malformed frame
+        // gets: the connection cannot be left half-answered, so it goes.
       } finally {
         closeNow();
       }

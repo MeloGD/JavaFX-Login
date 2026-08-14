@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Assess;
@@ -96,7 +97,9 @@ class PolicyEnforcementTest {
   @Test
   void anAccountThatBreaksNoRuleIsCreated() {
     assertInstanceOf(Ok.class, harness.bootstrap(NAME, PASSWORD));
-    assertInstanceOf(Granted.class, harness.send(new Authenticate(NAME, PASSWORD.toCharArray())));
+    assertInstanceOf(
+        Granted.class,
+        harness.send(new Authenticate(NAME, PASSWORD.toCharArray(), Role.ADMINISTRATOR)));
   }
 
   /** The wizard asks before it submits, so that the rules it shows are the rules that apply. */
@@ -106,7 +109,9 @@ class PolicyEnforcementTest {
 
     Assessed assessed = assertInstanceOf(Assessed.class, response);
     assertFalse(assessed.assessment().violations().isEmpty());
-    assertInstanceOf(Denied.class, harness.send(new Authenticate("root", "short".toCharArray())));
+    assertInstanceOf(
+        Denied.class,
+        harness.send(new Authenticate("root", "short".toCharArray(), Role.ADMINISTRATOR)));
   }
 
   @Test

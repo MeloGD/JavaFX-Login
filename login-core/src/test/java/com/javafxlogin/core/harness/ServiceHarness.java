@@ -1,10 +1,15 @@
 package com.javafxlogin.core.harness;
 
+import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.PasswordStrength;
+import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.auth.Argon2Parameters;
+import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.authentication.AuthenticationService;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.store.CredentialStore;
 import java.nio.file.Path;
 
 /**
@@ -54,6 +59,28 @@ public final class ServiceHarness implements AutoCloseable {
   /** Creates the single Administrator, which almost every test needs before it can do anything. */
   public Response bootstrap(String administratorName, String password) {
     return send(new Bootstrap(administratorName, password.toCharArray()));
+  }
+
+  /**
+   * Writes an Operator straight into the CredentialStore, hashed with this harness's parameters.
+   *
+   * <p>It goes round the service because no request creates an Operator yet: an Administrator
+   * provisions one and never chooses their password, which is issue #10's enrolment. Until then a
+   * test that needs someone who may reach the ProtectedFeature has to put them there itself. The
+   * store is opened and closed again around the insert, so the service's own connection keeps
+   * owning the file for the rest of the test.
+   */
+  public void provisionOperator(String name, String password) {
+    provisionOperatorIn(directory, parameters, name, password);
+  }
+
+  /** The same, for a test that owns the store's directory but holds no harness over it. */
+  public static void provisionOperatorIn(
+      Path directory, Argon2Parameters parameters, String name, String password) {
+    String hash = new Authenticator(parameters).hash(password.toCharArray());
+    try (CredentialStore store = CredentialStore.openOrCreate(storeFileIn(directory))) {
+      store.insert(new Account(name, Role.OPERATOR, hash, PasswordStrength.ACCEPTABLE));
+    }
   }
 
   /** Closes and reopens the service against the same files, as a service restart would. */

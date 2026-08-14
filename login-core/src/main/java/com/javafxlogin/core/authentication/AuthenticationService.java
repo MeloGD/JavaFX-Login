@@ -99,8 +99,13 @@ public final class AuthenticationService implements AutoCloseable {
    * Answers a request. Every request is answered: a store that cannot be read becomes an {@link
    * ErrorResponse} rather than an exception thrown at whatever is carrying the request, because the
    * caller is owed an outcome and must not be told which failure produced it.
+   *
+   * <p>Synchronised, because the transport calls this from one thread per connection while the
+   * CredentialStore behind it holds a single JDBC connection. Serialising the privileged process's
+   * work is also the conservative reading of a machine with one person at the keyboard: nothing
+   * here is worth the concurrency, and an Argon2id verification is meant to be slow.
    */
-  public Response handle(Request request) {
+  public synchronized Response handle(Request request) {
     Objects.requireNonNull(request, "request");
     try {
       return switch (request) {
@@ -148,7 +153,15 @@ public final class AuthenticationService implements AutoCloseable {
     if (!verified) {
       return new Denied(DeniedReason.AUTH_FAILED);
     }
-    return new Granted(SessionToken.generate(random), account.orElseThrow().role());
+
+    // An Administrator asking to act as an Operator is refused here, in the privileged process,
+    // and refused in the same words as a wrong password: telling the two apart would name the one
+    // Account whose Role an attacker can guess. The check follows the verification rather than
+    // replacing it, so the refusal costs what every other refusal costs.
+    if (account.orElseThrow().role() != request.requestedRole()) {
+      return new Denied(DeniedReason.AUTH_FAILED);
+    }
+    return new Granted(SessionToken.generate(random));
   }
 
   @Override

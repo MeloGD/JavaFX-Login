@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  The host product's own view. The gate is handed this and knows nothing else about it: no
+  controller of the gate's, no class of the gate's, nothing but a Parent.
+-->
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.layout.StackPane?>
+
+<StackPane xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+           prefWidth="520.0" prefHeight="240.0">
+
+  <padding>
+    <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
+  </padding>
+
+  <Label fx:id="message" text="Has accedido a la funcionalidad detrás del sistema de login"
+         wrapText="true"/>
+</StackPane>

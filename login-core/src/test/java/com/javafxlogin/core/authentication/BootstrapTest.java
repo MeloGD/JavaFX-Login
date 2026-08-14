@@ -48,10 +48,10 @@ class BootstrapTest {
     harness.bootstrap("wren.holloway", "Correct-Horse-1");
 
     Response response =
-        harness.send(new Authenticate("wren.holloway", "Correct-Horse-1".toCharArray()));
+        harness.send(
+            new Authenticate("wren.holloway", "Correct-Horse-1".toCharArray(), Role.ADMINISTRATOR));
 
-    Granted granted = assertInstanceOf(Granted.class, response);
-    assertEquals(Role.ADMINISTRATOR, granted.role());
+    assertInstanceOf(Granted.class, response);
   }
 
   @Test
@@ -83,7 +83,8 @@ class BootstrapTest {
     harness.send(new Bootstrap("finch.mercer", "Another-Horse-2".toCharArray()));
 
     Response response =
-        harness.send(new Authenticate("finch.mercer", "Another-Horse-2".toCharArray()));
+        harness.send(
+            new Authenticate("finch.mercer", "Another-Horse-2".toCharArray(), Role.ADMINISTRATOR));
 
     assertInstanceOf(Denied.class, response);
   }

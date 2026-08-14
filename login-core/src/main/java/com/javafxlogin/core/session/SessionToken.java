@@ -28,6 +28,24 @@ public final class SessionToken {
     return new SessionToken(value);
   }
 
+  /**
+   * Reconstitutes the token the service issued, on the client side of the wire.
+   *
+   * <p>Only the service generates tokens; this is how the one it granted survives being carried
+   * across the socket. The length is checked because a value of any other size did not come from
+   * {@link #generate(SecureRandom)}.
+   *
+   * @throws IllegalArgumentException if the value is not {@link #LENGTH_IN_BYTES} long
+   */
+  public static SessionToken of(byte[] value) {
+    Objects.requireNonNull(value, "value");
+    if (value.length != LENGTH_IN_BYTES) {
+      throw new IllegalArgumentException(
+          "A SessionToken is " + LENGTH_IN_BYTES + " bytes, not " + value.length);
+    }
+    return new SessionToken(value.clone());
+  }
+
   /** The token's bytes, as a copy so that a caller cannot mutate the token it was handed. */
   public byte[] copyOfBytes() {
     return value.clone();

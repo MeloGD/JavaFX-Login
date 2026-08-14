@@ -2,6 +2,7 @@ package com.javafxlogin.core.authentication;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
@@ -92,7 +93,7 @@ class AbsentAccountCostsTheSameTest {
 
   private long nanosToRefuse(String accountName) {
     long started = System.nanoTime();
-    harness.send(new Authenticate(accountName, "Wrong-Horse-9".toCharArray()));
+    harness.send(new Authenticate(accountName, "Wrong-Horse-9".toCharArray(), Role.ADMINISTRATOR));
     return System.nanoTime() - started;
   }
 

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
+import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Granted;
@@ -69,7 +70,9 @@ class SessionTokenTest {
       harness.bootstrap("wren.holloway", "Correct-Horse-1");
       granted =
           (Granted)
-              harness.send(new Authenticate("wren.holloway", "Correct-Horse-1".toCharArray()));
+              harness.send(
+                  new Authenticate(
+                      "wren.holloway", "Correct-Horse-1".toCharArray(), Role.ADMINISTRATOR));
     }
 
     byte[] token = granted.token().copyOfBytes();
