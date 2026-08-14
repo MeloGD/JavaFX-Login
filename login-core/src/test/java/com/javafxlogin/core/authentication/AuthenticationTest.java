@@ -16,6 +16,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.HexFormat;
 
@@ -90,6 +94,37 @@ class AuthenticationTest {
 
         ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
         assertEquals(ErrorCode.STORE_UNAVAILABLE, error.code());
+    }
+
+    /**
+     * A stored hash that cannot be read is still a refusal, and the same refusal as any other. Were
+     * it to escape as an exception, or to answer with an Error, a real Account with a damaged hash
+     * would be distinguishable from one that does not exist — which is precisely what the denial is
+     * not allowed to reveal.
+     */
+    @Test
+    void anAccountWhoseStoredHashCannotBeReadIsDeniedLikeAnyOther() {
+        overwriteStoredHashOf(NAME, "not-a-phc-string");
+
+        Response forDamagedAccount = harness.send(new Authenticate(NAME, PASSWORD.toCharArray()));
+        Response forAbsentAccount = harness.send(new Authenticate("nobody.here", PASSWORD.toCharArray()));
+
+        assertInstanceOf(Denied.class, forDamagedAccount);
+        assertEquals(forAbsentAccount, forDamagedAccount);
+    }
+
+    private void overwriteStoredHashOf(String accountName, String hash) {
+        String storeFile = ServiceHarness.storeFileIn(directory).toString();
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE accounts SET password_hash = ? WHERE name = ?")) {
+            statement.setString(1, hash);
+            statement.setString(2, accountName);
+            assertEquals(1, statement.executeUpdate(),
+                    () -> "there was no Account named " + accountName + " to damage");
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

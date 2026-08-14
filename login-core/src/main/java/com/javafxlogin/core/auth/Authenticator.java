@@ -1,6 +1,7 @@
 package com.javafxlogin.core.auth;
 
 import com.password4j.Argon2Function;
+import com.password4j.BadParametersException;
 import com.password4j.Password;
 import com.password4j.types.Argon2;
 
@@ -56,12 +57,22 @@ public final class Authenticator {
     /**
      * Verifies a password against a stored PHC hash, using the parameters recorded inside that hash
      * rather than this Authenticator's own.
+     *
+     * <p>A hash this build cannot read — damaged on disk, or written by something that is not
+     * Argon2id — refuses at the same cost as an absent Account rather than throwing. An Account whose
+     * hash is unreadable must be indistinguishable from one that does not exist: an exception
+     * escaping here would reach the caller as a different outcome, and a bare {@code false} would
+     * return in no time at all, both of which name the Account as real.
      */
     public boolean verify(char[] password, String phcHash) {
         Objects.requireNonNull(password, "password");
         Objects.requireNonNull(phcHash, "phcHash");
-        return Password.check(CharBuffer.wrap(password), phcHash)
-                .with(Argon2Function.getInstanceFromHash(phcHash));
+        try {
+            return Password.check(CharBuffer.wrap(password), phcHash)
+                    .with(Argon2Function.getInstanceFromHash(phcHash));
+        } catch (BadParametersException e) {
+            return refuseAtEqualCost(password);
+        }
     }
 
     /**
@@ -78,7 +89,21 @@ public final class Authenticator {
      * parameters from when the name matches nothing.
      */
     public boolean verifyAgainstAbsentAccount(char[] password) {
-        verify(password, absentAccountReferenceHash);
+        Objects.requireNonNull(password, "password");
+        return refuseAtEqualCost(password);
+    }
+
+    /**
+     * Spends a verification's worth of Argon2id work against the reference hash, then refuses.
+     *
+     * <p>Deliberately not routed through {@link #verify}: verify falls back to this method when a
+     * stored hash cannot be read, and going back the other way would turn an unreadable reference
+     * hash into unbounded recursion. Reaching the library directly makes that impossible by shape
+     * rather than by argument.
+     */
+    private boolean refuseAtEqualCost(char[] password) {
+        Password.check(CharBuffer.wrap(password), absentAccountReferenceHash)
+                .with(Argon2Function.getInstanceFromHash(absentAccountReferenceHash));
         return false;
     }
 
