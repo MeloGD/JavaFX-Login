@@ -135,6 +135,28 @@ class TransportTest {
   }
 
   @Test
+  void refusesAnOversizedDeclarationWithoutWaitingForTheBodyBehindIt() throws Exception {
+    // The declaration promises 1 MiB and one more byte. Only a few hundred follow, and
+    // the connection still goes: the refusal came from the prefix, so the body behind it
+    // was never waited for and never read.
+    byte[] startOfABody = new byte[512];
+    Arrays.fill(startOfABody, (byte) 'x');
+
+    try (RawClient raw = rawConnect()) {
+      raw.write(lengthPrefix(FrameCodec.MAX_FRAME_BYTES + 1));
+      try {
+        raw.write(startOfABody);
+      } catch (IOException refusalBeatUsToIt) {
+        // The connection was already gone before the body reached the wire. That is
+        // the property under test arriving early, not a failure.
+      }
+
+      raw.assertClosedByServer();
+      assertTrue(handler.requests().isEmpty(), "an over-cap frame must never reach the handler");
+    }
+  }
+
+  @Test
   void closesTheConnectionOnAMalformedFrame() throws Exception {
     try (RawClient raw = rawConnect()) {
       raw.write(lengthPrefix(0));

@@ -118,6 +118,34 @@ class FrameCodecTest {
   }
 
   @Test
+  void growsWithoutLosingBytesWhenItsBufferAlreadyHasAConsumedPrefix() throws Exception {
+    // Growing while the unconsumed bytes sit at an offset is the one path where the
+    // buffer is both moved and resized. Take a frame out first so the offset is real.
+    FrameDecoder decoder = new FrameDecoder();
+    decoder.append(FrameCodec.encode(payload("consumed first")));
+    assertArrayEquals(payload("consumed first"), decoder.next().orElseThrow());
+
+    byte[] big = new byte[64 * 1024];
+    for (int i = 0; i < big.length; i++) {
+      big[i] = (byte) i;
+    }
+    byte[] frame = FrameCodec.encode(big);
+    decoder.append(frame, 0, 1024);
+    assertEquals(Optional.empty(), decoder.next());
+    decoder.append(frame, 1024, frame.length - 1024);
+
+    assertArrayEquals(big, decoder.next().orElseThrow());
+  }
+
+  @Test
+  void honoursTheCapItWasGivenRatherThanAHardCodedOne() {
+    FrameDecoder decoder = new FrameDecoder(64);
+    decoder.append(lengthPrefix(65));
+
+    assertThrows(FrameTooLargeException.class, decoder::next);
+  }
+
+  @Test
   void rejectsADeclaredLengthOfZero() {
     FrameDecoder decoder = new FrameDecoder();
     decoder.append(lengthPrefix(0));
@@ -134,28 +162,26 @@ class FrameCodecTest {
   }
 
   @Test
-  void reportsAPartialFrameSoATruncatedStreamIsDetectableAtEndOfInput() throws Exception {
-    byte[] frame = FrameCodec.encode(payload("truncated"));
+  void holdsBackABodyThatStoppedShortRatherThanDeliveringIt() throws Exception {
+    byte[] request = payload("truncated");
+    byte[] frame = FrameCodec.encode(request);
 
     FrameDecoder decoder = new FrameDecoder();
-    assertFalse(decoder.hasPartialFrame());
-
     decoder.append(frame, 0, frame.length - 1);
-    assertEquals(Optional.empty(), decoder.next());
-    assertTrue(decoder.hasPartialFrame(), "a body that stopped short must be visible as partial");
+
+    assertEquals(Optional.empty(), decoder.next(), "a body one byte short is not a frame");
 
     decoder.append(frame, frame.length - 1, 1);
-    decoder.next().orElseThrow();
-    assertFalse(decoder.hasPartialFrame());
+
+    assertArrayEquals(request, decoder.next().orElseThrow());
   }
 
   @Test
-  void reportsAPartialFrameWhenEvenThePrefixIsIncomplete() throws Exception {
+  void holdsBackAFrameWhoseLengthPrefixIsItselfIncomplete() throws Exception {
     FrameDecoder decoder = new FrameDecoder();
     decoder.append(new byte[] {0, 0});
 
     assertEquals(Optional.empty(), decoder.next());
-    assertTrue(decoder.hasPartialFrame());
   }
 
   @Test

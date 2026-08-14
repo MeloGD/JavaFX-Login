@@ -10,16 +10,8 @@ public final class FrameTooLargeException extends MalformedFrameException {
 
   private static final long serialVersionUID = 1L;
 
-  private final int declaredLength;
-
-  public FrameTooLargeException(int declaredLength) {
-    super("Frame declares " + declaredLength + " bytes, above the "
-        + FrameCodec.MAX_FRAME_BYTES + " byte cap; its body was not read");
-    this.declaredLength = declaredLength;
-  }
-
-  /** The length the peer declared, for the audit trail. The body behind it was never read. */
-  public int declaredLength() {
-    return declaredLength;
+  public FrameTooLargeException(int declaredLength, int cap) {
+    super("Frame declares " + declaredLength + " bytes, above the " + cap
+        + " byte cap; its body was not read");
   }
 }

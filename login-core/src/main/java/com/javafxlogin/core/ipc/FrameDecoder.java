@@ -13,8 +13,10 @@ import java.util.Optional;
  * until it comes back empty.
  *
  * <p>Memory held is driven by bytes that actually arrived, never by the length a
- * peer declared. An over-cap declaration is refused the moment the prefix is
- * complete, so its body is neither read nor buffered.
+ * peer declared. An over-cap declaration is refused the moment its prefix is
+ * complete, so nothing is ever read <em>in order to</em> reach the body behind it —
+ * only whatever happened to arrive in the same read, bounded by the caller's read
+ * buffer, is held, and it is discarded with the connection.
  *
  * <p>Not thread-safe: one decoder belongs to one connection, read by one thread.
  */
@@ -87,7 +89,7 @@ public final class FrameDecoder {
           "Frame declares a length of " + declaredLength + ", which is not a frame");
     }
     if (declaredLength > maxFrameBytes) {
-      throw new FrameTooLargeException(declaredLength);
+      throw new FrameTooLargeException(declaredLength, maxFrameBytes);
     }
     if (held - FrameCodec.LENGTH_PREFIX_BYTES < declaredLength) {
       return Optional.empty();
@@ -104,14 +106,11 @@ public final class FrameDecoder {
   }
 
   /**
-   * Whether bytes of an incomplete frame are held. End of input here means the peer
-   * stopped mid-frame, which is a truncated frame rather than a clean goodbye.
+   * Bytes currently allocated.
+   *
+   * <p>Exists so a test can pin the memory a peer's declaration is allowed to cost.
+   * That is a resource promise rather than a detail of how decoding is arranged.
    */
-  public boolean hasPartialFrame() {
-    return end > start;
-  }
-
-  /** Bytes currently allocated. Exists so a test can prove no allocation follows a declaration. */
   int bufferCapacity() {
     return buffer.length;
   }
@@ -134,7 +133,9 @@ public final class FrameDecoder {
     } else {
       // Long arithmetic throughout: the caller is holding bytes a peer chose the
       // size of, and a doubling that silently wrapped would be a defect worth more
-      // than the two casts it costs to avoid.
+      // than the casts it costs to avoid. The copy is written out rather than done
+      // with copyOfRange, whose second index would be start + capacity — the one
+      // sum that could still overflow back into a negative index.
       long capacity = buffer.length;
       while (capacity < needed) {
         capacity *= 2;
@@ -143,7 +144,9 @@ public final class FrameDecoder {
         throw new IllegalStateException(
             "Refusing to buffer " + needed + " bytes; drain frames before appending more");
       }
-      buffer = Arrays.copyOfRange(buffer, start, start + (int) capacity);
+      byte[] grown = new byte[(int) capacity];
+      System.arraycopy(buffer, start, grown, 0, held);
+      buffer = grown;
     }
     start = 0;
     end = held;
