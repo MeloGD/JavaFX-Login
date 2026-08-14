@@ -178,7 +178,7 @@ about neither standards nor spec, and it is where the surprises are.
 | | |
 |---|---|
 | Branch | `worktree-issue-3-credential-store` (pushed to `origin`) |
-| Commits | `ae0697b` (implementation), `2579235` (review pass 1), `699ea41` + `a8edb22` (review pass 2) |
+| Commits | `ae0697b` (implementation), `2579235` (review pass 1), `699ea41` + `a8edb22` (review pass 2), `c63658a` (formatting) |
 | Base / fixed point | `5879e5c`, the tip of `worktree-design-docs` |
 | Diff to review | `git diff 5879e5c...HEAD` |
 | Packages | `core.account`, `core.auth`, `core.authentication`, `core.ipc`, `core.session`, `core.store` in `login-core` |
@@ -297,11 +297,29 @@ Reviewed twice by two independent agents each (standards axis, spec axis) agains
    its neighbours are package-private for exactly that reason; it is now
    package-private too, and the test reaches it unchanged.
 
+### Pass 3 — acted on in `c63658a`
+
+**Google Java Style was not followed, in any of the 28 files.** `CLAUDE.md` names
+the Google Java Style Guide as this repo's standard; the wire's code follows it —
+2-space indent, static imports first, then one unsplit ASCII-sorted block — and
+this branch used 4-space indent, non-static imports first, and blank lines
+splitting the import block.
+
+**Neither review pass could have found this**: `CLAUDE.md` does not exist at this
+branch's base (`5879e5c`), only on `dev-login`. It surfaced while writing §7 of
+this report, by comparing the two branches' sources directly. Fixed with
+google-java-format 1.22.0 rather than by hand; whitespace, wrapping and import
+order only, and the 35 tests pass unchanged.
+
+No formatter plugin was added to the build. Whether the standard should be
+mechanically enforced from now on is a project decision, not this ticket's, and
+it is worth taking: nothing currently stops the next branch from diverging the
+same way this one did.
+
 ### Deliberately not acted on — open for the next reviewer
 
 | Finding | Axis | Why it was left |
 |---|---|---|
-| **Google Java Style is not followed, in any of the 29 files.** `CLAUDE.md` documents it as *the* coding standard. The wire's code conforms — 2-space indent, static imports first, then one unsplit ASCII-sorted block. This branch uses 4-space indent, non-static imports first, and blank lines splitting the block. | Standards | **Neither review pass could see it**: `CLAUDE.md` does not exist at this branch's base. Mechanical but repo-wide, and it needs one decision rather than 29. Almost certainly the largest single item here |
 | **`Granted` carries a `Role`.** The spec asks only for "`Granted` with an opaque 128-bit `SessionToken`"; handing the client a capability set is #5's business. The `role` column on `Account` is needed for Bootstrap; returning it over the seam was not asked for | Spec (scope creep) | Genuinely useful and genuinely unrequested. Reviewer's call |
 | **`SessionTokenTest.isNeverWrittenToDisk` scans only for the raw 16 bytes.** A regression that persisted or logged the token hex- or Base64-encoded — the form anything would actually write — passes untouched | Spec | Real gap in a criterion the ticket states outright. The test does guard against vacuity (it asserts the file list is non-empty first), but it guards the wrong encoding |
 | **"Never logged" rests on two `toString()` assertions.** No logging framework is wired up, so nothing pins the property against a future logger | Spec | Arguably unassertable until #6 introduces logging. Worth an explicit decision |
@@ -328,15 +346,14 @@ than code. **It is scheduled work in another ticket, not a gap in #3.**
 
 ## 5. What a final reviewer should attack first
 
-1. **The style decision.** 29 files disagree with `CLAUDE.md` and with the only
-   other Java in the repo. It needs one ruling — reformat this branch, or record
-   that the standard is aspirational — before more code lands on either side.
-2. **The token-on-disk test.** The criterion is stated outright in the ticket and
+1. **The token-on-disk test.** The criterion is stated outright in the ticket and
    the test checks the one encoding nothing would ever use.
-3. **Whether `Granted` keeps its `Role`.** Cheap to remove now, load-bearing for
+2. **Whether `Granted` keeps its `Role`.** Cheap to remove now, load-bearing for
    #5 later, and it decides how much the client is trusted to know.
-4. **The `Bootstrap` race's error code**, if #2's transport is going to serve
+3. **The `Bootstrap` race's error code**, if #2's transport is going to serve
    concurrent connections against one service instance.
+4. **Whether the style standard gets mechanical enforcement.** This branch
+   diverged from it silently for four commits, and nothing yet stops the next one.
 
 ## 6. Honest limits on what the green build means
 
