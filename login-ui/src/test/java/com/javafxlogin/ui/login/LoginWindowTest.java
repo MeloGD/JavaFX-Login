@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.javafxlogin.core.session.Session;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,6 +37,7 @@ class LoginWindowTest extends ApplicationTest {
   private static final int PATIENCE_IN_SECONDS = 10;
 
   private final AtomicInteger featuresBuilt = new AtomicInteger();
+  private final List<Session> admittedOn = new CopyOnWriteArrayList<>();
 
   private FakeLoginGate gate;
   private Stage loginStage;
@@ -47,7 +50,8 @@ class LoginWindowTest extends ApplicationTest {
   }
 
   /** The host product's view, which the gate is handed and knows nothing else about. */
-  private Parent protectedFeature() {
+  private Parent protectedFeature(Session session) {
+    admittedOn.add(session);
     featuresBuilt.incrementAndGet();
     Label label = new Label("Has accedido a la funcionalidad detrás del sistema de login");
     label.setId("feature");
@@ -96,9 +100,7 @@ class LoginWindowTest extends ApplicationTest {
     String forAnUnknownAccount = awaitAMessage();
 
     assertEquals(forAWrongPassword, forAnUnknownAccount);
-    assertFalse(
-        forAWrongPassword.contains(OPERATOR),
-        () -> "named the Account: " + forAWrongPassword);
+    assertFalse(forAWrongPassword.contains(OPERATOR), () -> "named it: " + forAWrongPassword);
   }
 
   @Test
@@ -126,6 +128,20 @@ class LoginWindowTest extends ApplicationTest {
     assertNotEquals(refusal, unreachable);
     assertFalse(unreachable.isBlank(), "an unreachable service should still say something");
     assertEquals(0, featuresBuilt.get(), "nothing should have opened");
+  }
+
+  /**
+   * CONTEXT.md: the LoginGate is what a host product calls to <em>obtain a Session</em>. This one
+   * has no use for it yet, and it is still handed the Session that admitting the Operator produced
+   * rather than being told only that something happened.
+   */
+  @Test
+  void handsTheHostTheSessionThatAdmittingSomeoneProduced() {
+    attempt(OPERATOR, PASSWORD);
+
+    awaitTheProtectedFeature();
+    assertEquals(1, admittedOn.size(), "the host should have been handed one Session");
+    assertEquals(16, admittedOn.get(0).token().copyOfBytes().length);
   }
 
   @Test

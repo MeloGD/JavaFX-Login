@@ -27,9 +27,13 @@ public final class ProtectedFeatureApplication extends Application {
 
   private static final String SOCKET_PROPERTY = "javafxlogin.socket";
 
+  /**
+   * The Session is offered and this product has nothing to do with it yet. A product that later
+   * wants to log out, or to ask the SecretVault for a secret, takes it here.
+   */
   @Override
   public void start(Stage stage) {
-    LoginGate.toService(socketPath()).protect(stage, FeatureView::load);
+    LoginGate.toService(socketPath()).protect(stage, session -> FeatureView.load());
   }
 
   private static Path socketPath() {

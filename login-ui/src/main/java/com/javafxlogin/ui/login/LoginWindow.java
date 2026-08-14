@@ -1,10 +1,11 @@
 package com.javafxlogin.ui.login;
 
+import com.javafxlogin.core.session.Session;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URL;
 import java.util.Objects;
-import java.util.function.Supplier;
+import java.util.function.Function;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
@@ -30,7 +31,7 @@ final class LoginWindow {
 
   private LoginWindow() {}
 
-  static void show(LoginGate gate, Stage stage, Supplier<Parent> protectedFeature) {
+  static void show(LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature) {
     Objects.requireNonNull(gate, "gate");
     Objects.requireNonNull(stage, "stage");
     Objects.requireNonNull(protectedFeature, "protectedFeature");
@@ -38,17 +39,18 @@ final class LoginWindow {
     FXMLLoader loader = new FXMLLoader(resource(FXML));
     Parent root = load(loader);
     LoginController controller = loader.getController();
-    controller.admitWith(gate, session -> openProtectedFeature(stage, protectedFeature));
+    controller.admitWith(gate, session -> openProtectedFeature(stage, protectedFeature, session));
 
     stage.setTitle(LOGIN_TITLE);
     stage.setScene(dressed(root));
     stage.show();
   }
 
-  private static void openProtectedFeature(Stage loginStage, Supplier<Parent> protectedFeature) {
+  private static void openProtectedFeature(
+      Stage loginStage, Function<Session, Parent> protectedFeature, Session session) {
     Stage featureStage = new Stage();
     featureStage.setTitle(FEATURE_TITLE);
-    featureStage.setScene(new Scene(protectedFeature.get()));
+    featureStage.setScene(new Scene(protectedFeature.apply(session)));
     featureStage.show();
     loginStage.close();
   }

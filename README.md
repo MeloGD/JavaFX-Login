@@ -20,7 +20,7 @@ Everything runs headless: no display is needed, and no test needs privileges.
 A host product depends on `login-ui` and calls the `LoginGate`. That is the whole interface:
 
 ```java
-LoginGate.toService(socketPath).protect(stage, () -> myFeatureView());
+LoginGate.toService(socketPath).protect(stage, session -> myFeatureView());
 ```
 
 The gate shows the login window, closes it once an `Operator` is admitted, and opens the view it

@@ -72,7 +72,9 @@ public final class ServiceProcess implements AutoCloseable {
     }
     Path storeFile = Path.of(args[0]);
     ListeningChannelSource source =
-        args.length == 1 ? PlatformListeningChannelSource.forCurrentPlatform() : boundTo(args);
+        args.length == 1
+            ? PlatformListeningChannelSource.forCurrentPlatform()
+            : boundToTheSocketNamedIn(args);
 
     ServiceProcess process = start(source, storeFile);
     CountDownLatch stopped = new CountDownLatch(1);
@@ -87,7 +89,7 @@ public final class ServiceProcess implements AutoCloseable {
     stopped.await();
   }
 
-  private static ListeningChannelSource boundTo(String[] args) {
+  private static ListeningChannelSource boundToTheSocketNamedIn(String[] args) {
     if (!"--socket".equals(args[1])) {
       throw new IllegalArgumentException(USAGE);
     }

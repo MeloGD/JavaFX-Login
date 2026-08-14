@@ -22,6 +22,15 @@ import java.util.Optional;
  * authenticating here is refused, and refused over there — this class could not grant them access
  * if it wanted to, and a patched copy of it could not either.
  *
+ * <p>Be plain about how far that goes today. A patched client can ask to act as an Administrator,
+ * be granted a Session for it, and draw the feature's window anyway: nothing behind the gate yet
+ * asks what the Session is for. What the refusal buys now is that no Session for an Operator is
+ * ever issued to an Administrator's password, which is what the SecretVault will need — the
+ * DataKey is unwrapped by an Operator's own password and is never wrapped for an Administrator, so
+ * a window drawn without one shows a feature that cannot reach a single secret. Until that ticket
+ * lands, the exclusion is enforced where it will keep being enforced, and it is worth no more than
+ * this paragraph says.
+ *
  * <p>One connection is opened on the first attempt and kept, because a Session is bound to its
  * connection: the Session granted at the end of a run of attempts lives on the connection those
  * attempts were made over, and closing it is what ends the Session. A client that dies has the

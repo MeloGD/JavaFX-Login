@@ -109,7 +109,7 @@ class MessageCodecTest {
     assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
   }
 
-  /** ADR-0003 says JSON, and an Error is named Error there whatever the Java class is called. */
+  /** {@link ErrorResponse} promises it is {@code Error} on the wire, whatever Java calls it. */
   @Test
   void namesTheErrorResponseErrorOnTheWire() {
     String json = text(MessageCodec.encode(new ErrorResponse(ErrorCode.ADMINISTRATOR_EXISTS)));
@@ -117,7 +117,7 @@ class MessageCodecTest {
     assertTrue(json.contains("\"type\":\"Error\""), () -> "wrong type field: " + json);
   }
 
-  /** A frame is JSON per ADR-0003, and a reviewer should be able to read one in a trace. */
+  /** ADR-0003 chose JSON to be debuggable, so a reviewer must be able to read one in a trace. */
   @Test
   void writesTheTypeAndTheFieldsAsPlainJson() {
     String json =
@@ -217,9 +217,7 @@ class MessageCodecTest {
   void refusesAPolicyRefusalCarryingNoReason() {
     assertThrows(
         MalformedMessageException.class,
-        () ->
-            MessageCodec.decodeResponse(
-                bytes("{\"type\":\"PolicyRefused\",\"violations\":[]}")));
+        () -> MessageCodec.decodeResponse(bytes("{\"type\":\"PolicyRefused\",\"violations\":[]}")));
   }
 
   /** Two values in one frame is a peer asking to be read two ways. It is read neither way. */

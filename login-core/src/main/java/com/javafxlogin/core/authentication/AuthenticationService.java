@@ -150,7 +150,10 @@ public final class AuthenticationService implements AutoCloseable {
             .map(found -> authenticator.verify(request.password(), found.passwordHash()))
             .orElseGet(() -> authenticator.verifyAgainstAbsentAccount(request.password()));
 
-    if (!verified) {
+    // The Account is named rather than assumed present: nothing but the reference hash can verify
+    // when there is no Account, and a build that ever made that untrue should fail here as a
+    // refusal rather than reach the line below with nothing in hand.
+    if (!verified || account.isEmpty()) {
       return new Denied(DeniedReason.AUTH_FAILED);
     }
 
@@ -158,14 +161,15 @@ public final class AuthenticationService implements AutoCloseable {
     // and refused in the same words as a wrong password: telling the two apart would name the one
     // Account whose Role an attacker can guess. The check follows the verification rather than
     // replacing it, so the refusal costs what every other refusal costs.
-    if (account.orElseThrow().role() != request.requestedRole()) {
+    if (account.get().role() != request.requestedRole()) {
       return new Denied(DeniedReason.AUTH_FAILED);
     }
     return new Granted(SessionToken.generate(random));
   }
 
+  /** Synchronised with {@link #handle}, so that shutting down waits for the answer in flight. */
   @Override
-  public void close() {
+  public synchronized void close() {
     store.close();
   }
 }

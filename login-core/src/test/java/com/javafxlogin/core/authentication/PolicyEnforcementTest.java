@@ -5,8 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.account.PasswordStrength;
+import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Assess;
 import com.javafxlogin.core.ipc.Assessed;

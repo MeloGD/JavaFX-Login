@@ -19,7 +19,10 @@ import java.util.Base64;
 import java.util.List;
 
 /**
- * Turns the messages into the JSON ADR-0003 names, and back.
+ * Turns the messages into JSON, and back.
+ *
+ * <p>ADR-0003 chose the encoding and the cap; the catalogue is settled here, one message type at a
+ * time, and each type names itself the way its own record says it should.
  *
  * <p>Every message is an object with a {@code type} field naming which one it is, and that name is
  * matched against a closed set. Nothing here is polymorphic deserialisation: the tree is read as
@@ -48,7 +51,7 @@ public final class MessageCodec {
 
   private static final String TYPE = "type";
 
-  /** {@link ErrorResponse} is {@code Error} here; the Java name only avoids shadowing. */
+  /** As {@link ErrorResponse} promises: {@code Error} here, the Java name only avoids shadowing. */
   private static final String ERROR = "Error";
 
   private MessageCodec() {}

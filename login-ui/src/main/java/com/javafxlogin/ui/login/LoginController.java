@@ -32,6 +32,9 @@ public final class LoginController {
   private static final String UNREACHABLE =
       "No se ha podido contactar con el servicio de autenticación.";
 
+  private static final String INTERRUPTED =
+      "No se ha podido completar el intento. Vuelve a intentarlo.";
+
   @FXML private TextField accountName;
   @FXML private PasswordField password;
   @FXML private Button admit;
@@ -51,35 +54,39 @@ public final class LoginController {
     String name = accountName.getText();
     char[] secret = password.getText().toCharArray();
 
-    waiting(true);
+    showWaiting(true);
     Thread.ofVirtual()
         .name("login-attempt")
         .start(
             () -> {
               try {
                 Optional<Session> session = gate.admit(name, secret);
-                Platform.runLater(() -> finished(session));
+                Platform.runLater(() -> showOutcome(session));
               } catch (ServiceUnreachableException e) {
                 Platform.runLater(() -> failed(UNREACHABLE));
+              } catch (RuntimeException e) {
+                // A defect somewhere below rather than an answer. The window still has to come
+                // back: a person left facing dead controls cannot even try again.
+                Platform.runLater(() -> failed(INTERRUPTED));
               } finally {
                 Arrays.fill(secret, '\0');
               }
             });
   }
 
-  private void finished(Optional<Session> session) {
+  private void showOutcome(Optional<Session> session) {
     session.ifPresentOrElse(onAdmitted, () -> failed(REFUSED));
   }
 
   private void failed(String reason) {
     message.setText(reason);
     password.clear();
-    waiting(false);
+    showWaiting(false);
     password.requestFocus();
   }
 
   /** Refuses a second attempt while one is in flight, so that two answers cannot race. */
-  private void waiting(boolean inFlight) {
+  private void showWaiting(boolean inFlight) {
     admit.setDisable(inFlight);
     accountName.setDisable(inFlight);
     password.setDisable(inFlight);
