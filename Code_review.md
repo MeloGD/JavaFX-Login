@@ -433,3 +433,164 @@ To re-check that the timing test still has teeth, replace the absent-Account
 branch in `AuthenticationService.authenticate` with `.orElse(false)`, run
 `AbsentAccountCostsTheSameTest`, and confirm it fails by roughly two orders of
 magnitude before restoring it.
+
+---
+
+# Code review — the password policy and the Account naming rules (issue #4)
+
+Written for a final reviewing agent, in the shape the two sections above use:
+what was built, what the two-axis review found, what was acted on, and — more
+usefully — what was **not**.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commit | `e084430` (implementation and every review fix folded in) |
+| Base / fixed point | `1f4f705` |
+| Diff to review | `git diff 1f4f705..e084430` |
+| Package | `com.javafxlogin.core.policy` in `login-core` |
+| Build | `mvn -o test` → 144 tests, 0 failures, 1 skipped by the Windows OS guard |
+
+The review ran against the work while it was staged, so its findings are not a
+follow-up commit — they are inside `e084430`. Section 4 says which is which.
+
+## 2. What the ticket asked for
+
+Issue #4, "Password policy and Account naming rules". Blocked by #3, which is
+closed; the rules are enforced at the service boundary and tested through the
+Seam 1 harness that ticket established. The binding decision is ADR-0002, which
+already required the name blocklist and says why.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Shorter than 12 or longer than 64 refused | met | `PasswordPolicyTest.aPasswordShorterThanTwelveCharactersIsRefused`, `…LongerThanSixtyFour…`, `…aPasswordAtEitherBoundaryIsAccepted` (12 and 64 both accepted) |
+| No uppercase, number or special character refused (Passay) | met | `PasswordPolicyTest.aPasswordWithoutAnUppercaseLetterIsRefused`, `…ANumber…`, `…ASpecialCharacter…` |
+| Bundled breach list, no network lookup ever | met | `PasswordPolicyTest.aPasswordOnTheBundledBreachListIsRefused`, `…theBreachListSeesThroughCase`; the list is `policy/breached-passwords.txt` and nothing in `login-core/src/main` opens a socket for it |
+| Strength estimate returned, informative, never blocking (nbvcxz) | met | `PolicyEnforcementTest.assessReturnsAStrengthEstimateForDisplay`, `PasswordPolicyTest.aWeakEstimateDoesNotRefuseAPassword`, `…aRefusedPasswordIsStillEstimated` |
+| Only a coarse band stored | met | `PolicyEnforcementTest.onlyTheCoarseStrengthBandIsStored`, `CredentialStoreSchemaTest.theAccountsTableRecordsTheCoarseStrengthBand`; `V002` constrains the column to the three names |
+| No periodic expiry | met, weakly | `CredentialStoreSchemaTest.nothingInTheSchemaExpiresAPassword` — it guards the shape, not the behaviour |
+| The thirteen names and the product's own refused | met | `AccountNamePolicyTest.aPredictableNameIsRefused` (parameterised over all thirteen), `…theProductsOwnNameIsRefused` |
+| Case, separators, digit substitutions | met | `…matchingIsCaseInsensitive`, `…separatorsAreNormalisedAway`, `…digitForLetterSubstitutionsAreSeenThrough` |
+| Whole name, not substring | met | `…aNameThatMerelyContainsABlockedOneIsAccepted` (`rosalind.sanders`, `testa.mercer`) |
+| Blocklist extensible without a rebuild | met | `…aDeploymentExtendsTheBlocklistWithAFile`, `PolicyEnforcementTest.aDeploymentBlocklistBesideTheStoreIsEnforced` |
+| Every refusal carries a reason | met | `PolicyEnforcementTest.aRefusalCarriesEveryReasonAtOnce`; `PolicyRefused` refuses to exist with an empty list |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **`Assess` is a new request the ticket did not ask for.** The estimate has to
+  reach the person typing, and `Bootstrap` answers `Ok`. The alternative was a
+  client-side copy of the rules, which would drift from the ones that decide.
+  It reads no Account, so it is not an oracle for which names are taken.
+- **The canonical fold goes towards the digits, not away.** There is no answer
+  to whether `1` is `i` or `l`, so both letters and the digit become `1` and the
+  blocklist entries are folded the same way. Consequences, both accepted: the
+  literal name `54` is refused because `sa` folds onto it, and `6` folds to `9`
+  so `6uest` is refused too.
+- **40 and 60 bits are this project's thresholds, not nbvcxz's.** nbvcxz's own
+  top score starts at 35 bits, which is a floor for a login answering over a
+  network and not for a store an attacker holds a copy of.
+- **`V002` rather than an edit to `V001`.** No installation exists to migrate,
+  so amending `V001` was available and was refused: it would have left any store
+  already at version 1 stranded, and it is the second migration that first
+  proves `applyTo` loops at all.
+- **The band is not a score.** `strengthOf` reads bits and returns one of three
+  names; nothing keeps the number.
+
+## 4. Two-axis review: what was found and what was done
+
+### Acted on, inside `e084430`
+
+- Two test lines at 101 columns. Fixed by running `google-java-format 1.36.1`
+  over every changed file — the same treatment `c63658a` gave the repo. It also
+  rewrapped four hunks this work had wrapped by hand.
+- `ipc.Assessed` was a field-for-field copy of `policy.Assessment`. `Assessed`
+  now carries the `Assessment`, and `AuthenticationService.assess` stopped
+  unpacking it.
+- `AccountPolicy.bundled()` was public and used only by tests → package-private.
+  `PasswordRules.MINIMUM_LENGTH` / `MAXIMUM_LENGTH` were package-private and
+  used only inside the class → private.
+- `PolicyResource.linesOf` did not say where it read from → `linesOfBundledList`.
+- The field `PasswordValidator validator` used a name `CONTEXT.md` lists under
+  _Avoid_ → `characterAndLengthRules`.
+- `6uest` was accepted, because `g` folded to `9` and `6` folded to nothing.
+  `6` now folds too, with a case in the parameterised test.
+- `breached-passwords.txt` claimed a deployment could replace it — which needs a
+  rebuild, unlike the name blocklist. The header now says so.
+- `PolicyResource.linesOfFileIfPresent` catching only `NoSuchFileException` was
+  an accident; it is now a documented decision. A deployment list that exists
+  and cannot be read stops the service rather than quietly applying a weaker
+  policy than the one configured.
+- The schema test concatenated an Account name into SQL → bound parameter.
+
+### Deliberately not acted on — open for the next reviewer
+
+- **No ADR was written.** The offline breach list is the ticket's constraint
+  rather than a decision this work made, and the thresholds are argued at the
+  constants. A reviewer who thinks 40/60 deserves `docs/adr/0008-…` is not
+  wrong; it was left because the choice is one line to change and lives beside
+  its reasoning.
+- **`ACCEPTABLE_ENTROPY_BITS` and `STRONG_ENTROPY_BITS` say "entropy"**, which
+  `CONTEXT.md` lists under `PasswordStrength`'s _Avoid_. Kept: they name the
+  estimator's own quantity, not the band. Overturnable.
+- **A space is not a special character.** `EnglishCharacterData.Special` is
+  Passay's set and excludes `0x20`, so `Aa1 zzzzzzzz` is refused while
+  `Aa1£zzzzzzzz` passes. Passphrases are penalised. Kept because the criterion
+  names Passay, and the deployment's stated policy is the one in the ticket.
+- **Three rules are wider than the ticket asked.** `ACCOUNT_NAME_BLANK` (no
+  criterion asks for it, and without it an Account could be named `""`); the
+  fold covers `@ $ ! | +` as well as digits; breach matching ignores case.
+- **The breach list is a seed of 76 entries**, not a corpus. Every entry recurs
+  across public breach lists, and most are refused by the length rule first.
+- **Nothing in `login-ui` consumes any of this.** No band is displayed and no
+  refusal is worded; that is a later ticket, and the estimate currently reaches
+  a seam and stops.
+
+## 5. What a final reviewer should attack first
+
+1. **The band mapping.** 40 and 60 bits are invented, and every Account's stored
+   band depends on them. `Correct-Horse-1` estimates 34.5 bits and is therefore
+   `WEAK` — check whether that is the message the wizard should send.
+2. **The one password copy that cannot be zeroed.** `nbvcxz.estimate` takes a
+   `String`. Everything else in this package works on `char[]` or a `CharBuffer`
+   over it; that one `new String(password)` is the exception, and it is per
+   keystroke if a UI calls `Assess` as the person types.
+3. **`V002`'s `NOT NULL DEFAULT 'WEAK'`.** A row written before the column
+   existed gets a band nobody estimated. The alternative was a nullable column
+   and an `Optional` on `Account`; the conservative lie was chosen.
+4. **Whether `Assess` belongs in the protocol.** It is the largest thing here
+   the ticket did not ask for.
+5. **The fold's collisions**, in both directions — a legitimate name that folds
+   onto an entry is refused with no way to appeal.
+
+## 6. Honest limits on what the green build means
+
+- Every policy test provisions with the harness's cheap Argon2id parameters. The
+  policy never touches hashing, so this is orthogonal — but it means no test
+  here runs at production cost.
+- The deployment blocklist is read once, at start-up. `…BesideTheStoreIsEnforced`
+  proves it by restarting the harness; nothing proves what an edit does to a
+  running service, because the answer is "nothing until it restarts".
+- Nothing tests `Assess` under concurrency, though `TransportServer` serves
+  connections on virtual threads. `Nbvcxz` is constructed per estimate over an
+  immutable `Configuration`, and the Passay rules are stateless — that is
+  reasoning, not evidence.
+- `mvn -o` is offline by flag, which is not the same as proving no code path
+  would reach the network. The claim rests on reading the two libraries' use,
+  not on a sandbox that would have caught a call.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o test                                            # whole reactor, 144 tests
+mvn -o -pl login-core test -Dtest=PolicyEnforcementTest # Seam 1, the rules as enforced
+mvn -o -pl login-core test -Dtest='*PolicyTest'         # the rules as units
+```
+
+To check the naming test still has teeth, delete the `case 'i', 'l', …` arm of
+`AccountNameRules.folded` and confirm `digitForLetterSubstitutionsAreSeenThrough`
+fails on `Adm1n` before restoring it.
