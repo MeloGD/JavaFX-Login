@@ -19,7 +19,8 @@ import java.util.List;
  */
 public final class SchemaMigrations {
 
-  private static final List<String> MIGRATIONS = List.of("db/migration/V001__initial_schema.sql");
+  private static final List<String> MIGRATIONS =
+      List.of("db/migration/V001__initial_schema.sql", "db/migration/V002__password_strength.sql");
 
   private SchemaMigrations() {}
 

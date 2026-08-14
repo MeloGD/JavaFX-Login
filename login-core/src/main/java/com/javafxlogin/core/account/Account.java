@@ -11,18 +11,28 @@ import java.util.Objects;
  * @param name the name typed at the login prompt, matched exactly
  * @param role the capability set attached to this Account
  * @param passwordHash the Argon2id hash as a PHC string, carrying its own salt and parameters
+ * @param passwordStrength the coarse band estimated when the password was chosen, kept so that an
+ *     Administrator can see which Accounts are worth nudging
  */
-public record Account(String name, Role role, String passwordHash) {
+public record Account(
+    String name, Role role, String passwordHash, PasswordStrength passwordStrength) {
 
   public Account {
     Objects.requireNonNull(name, "name");
     Objects.requireNonNull(role, "role");
     Objects.requireNonNull(passwordHash, "passwordHash");
+    Objects.requireNonNull(passwordStrength, "passwordStrength");
   }
 
   /** Redacts the hash: an Account may be printed, its password material may not. */
   @Override
   public String toString() {
-    return "Account[name=" + name + ", role=" + role + ", passwordHash=redacted]";
+    return "Account[name="
+        + name
+        + ", role="
+        + role
+        + ", passwordHash=redacted, passwordStrength="
+        + passwordStrength
+        + "]";
   }
 }

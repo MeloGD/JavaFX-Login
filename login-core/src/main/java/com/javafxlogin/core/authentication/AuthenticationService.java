@@ -4,6 +4,8 @@ import com.javafxlogin.core.account.Account;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
+import com.javafxlogin.core.ipc.Assess;
+import com.javafxlogin.core.ipc.Assessed;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.Denied;
@@ -12,8 +14,11 @@ import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Ok;
+import com.javafxlogin.core.ipc.PolicyRefused;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.policy.AccountPolicy;
+import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.session.SessionToken;
 import com.javafxlogin.core.store.CredentialStore;
 import com.javafxlogin.core.store.CredentialStoreException;
@@ -37,13 +42,23 @@ import java.util.Optional;
  */
 public final class AuthenticationService implements AutoCloseable {
 
+  /**
+   * The file a deployment writes beside its store to refuse names of its own — the product's name
+   * under another brand, the names of the systems it talks to. It need not exist. Living beside the
+   * store puts it where only the account this service runs as can write it.
+   */
+  private static final String DEPLOYMENT_BLOCKED_NAMES = "blocked-account-names.txt";
+
   private final CredentialStore store;
   private final Authenticator authenticator;
+  private final AccountPolicy policy;
   private final SecureRandom random;
 
-  private AuthenticationService(CredentialStore store, Authenticator authenticator) {
+  private AuthenticationService(
+      CredentialStore store, Authenticator authenticator, AccountPolicy policy) {
     this.store = store;
     this.authenticator = authenticator;
+    this.policy = policy;
     this.random = new SecureRandom();
   }
 
@@ -70,7 +85,10 @@ public final class AuthenticationService implements AutoCloseable {
 
     CredentialStore store = CredentialStore.openOrCreate(storeFile);
     try {
-      return new AuthenticationService(store, new Authenticator(parameters));
+      return new AuthenticationService(
+          store,
+          new Authenticator(parameters),
+          AccountPolicy.bundledExtendedBy(storeFile.resolveSibling(DEPLOYMENT_BLOCKED_NAMES)));
     } catch (RuntimeException e) {
       store.close();
       throw e;
@@ -88,6 +106,7 @@ public final class AuthenticationService implements AutoCloseable {
       return switch (request) {
         case Bootstrap bootstrap -> bootstrap(bootstrap);
         case Authenticate authenticate -> authenticate(authenticate);
+        case Assess assess -> assess(assess);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -98,9 +117,22 @@ public final class AuthenticationService implements AutoCloseable {
     if (store.hasAdministrator()) {
       return new ErrorResponse(ErrorCode.ADMINISTRATOR_EXISTS);
     }
+    Assessment assessment = policy.assess(request.administratorName(), request.password());
+    if (!assessment.violations().isEmpty()) {
+      return new PolicyRefused(assessment.violations());
+    }
     String hash = authenticator.hash(request.password());
-    store.insert(new Account(request.administratorName(), Role.ADMINISTRATOR, hash));
+    store.insert(
+        new Account(request.administratorName(), Role.ADMINISTRATOR, hash, assessment.strength()));
     return new Ok();
+  }
+
+  /**
+   * Answers what the policy makes of a proposed name and password, and does nothing else. It reads
+   * no Account and creates none, so the answer is the same whether or not the name is taken.
+   */
+  private Response assess(Assess request) {
+    return new Assessed(policy.assess(request.accountName(), request.password()));
   }
 
   private Response authenticate(Authenticate request) {

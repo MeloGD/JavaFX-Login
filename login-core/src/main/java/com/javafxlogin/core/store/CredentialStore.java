@@ -1,6 +1,7 @@
 package com.javafxlogin.core.store;
 
 import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -85,7 +86,7 @@ public final class CredentialStore implements AutoCloseable {
     Objects.requireNonNull(name, "name");
     try (PreparedStatement statement =
         connection.prepareStatement(
-            "SELECT name, role, password_hash FROM accounts WHERE name = ?")) {
+            "SELECT name, role, password_hash, password_strength FROM accounts WHERE name = ?")) {
       statement.setString(1, name);
       try (ResultSet results = statement.executeQuery()) {
         if (!results.next()) {
@@ -95,7 +96,8 @@ public final class CredentialStore implements AutoCloseable {
             new Account(
                 results.getString("name"),
                 Role.valueOf(results.getString("role")),
-                results.getString("password_hash")));
+                results.getString("password_hash"),
+                PasswordStrength.valueOf(results.getString("password_strength"))));
       }
     } catch (SQLException e) {
       throw new CredentialStoreException("could not look up an Account in " + file, e);
@@ -111,11 +113,13 @@ public final class CredentialStore implements AutoCloseable {
     Objects.requireNonNull(account, "account");
     try (PreparedStatement statement =
         connection.prepareStatement(
-            "INSERT INTO accounts (name, role, password_hash, created_at) VALUES (?, ?, ?, ?)")) {
+            "INSERT INTO accounts (name, role, password_hash, password_strength, created_at)"
+                + " VALUES (?, ?, ?, ?, ?)")) {
       statement.setString(1, account.name());
       statement.setString(2, account.role().name());
       statement.setString(3, account.passwordHash());
-      statement.setString(4, ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+      statement.setString(4, account.passwordStrength().name());
+      statement.setString(5, ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
       statement.executeUpdate();
     } catch (SQLException e) {
       throw new CredentialStoreException("could not record an Account in " + file, e);

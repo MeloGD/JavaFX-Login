@@ -39,6 +39,19 @@ A coarse estimate — weak, acceptable or strong — of how resistant an Account
 password is to guessing. Only the coarse band is ever recorded.
 _Avoid_: score, entropy, complexity rating
 
+**AccountPolicy**:
+The rules about what an Account name and a password are allowed to be, applied
+inside the AuthenticationService so that a patched client cannot skip them. It
+refuses or accepts; the PasswordStrength it reports alongside is for a person to
+read and never a refusal.
+_Avoid_: validation rules, password validator, complexity policy
+
+**PolicyViolation**:
+One rule an Account name or a password breaks, named rather than worded, so that
+the client turns it into a sentence in the language the person reads. Every
+refusal by the AccountPolicy carries every violation it found.
+_Avoid_: validation error, error message
+
 ### Access and sessions
 
 **AuthenticationService**:

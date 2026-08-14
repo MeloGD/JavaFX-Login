@@ -8,9 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.authentication.AuthenticationService;
 import com.javafxlogin.core.harness.ServiceHarness;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -79,6 +83,97 @@ class CredentialStoreSchemaTest {
     assertTrue(
         columnsOf(ServiceHarness.storeFileIn(directory), "accounts").contains("second_factor"),
         "accounts has no reserved second_factor column");
+  }
+
+  /**
+   * The band is recorded per Account. Nothing records the estimate it was made from: a store that
+   * leaked with scores in it would name which Account is cheapest to attack.
+   */
+  @Test
+  void theAccountsTableRecordsTheCoarseStrengthBand() {
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+
+    assertTrue(
+        columnsOf(ServiceHarness.storeFileIn(directory), "accounts").contains("password_strength"),
+        "accounts does not record a PasswordStrength band");
+  }
+
+  /**
+   * The upgrade path, on a store that already holds an Account. A migration that only ever ran
+   * against an empty file would be untested in the one case that matters — the installed one — and
+   * an Account it dropped or refused to read is an Administrator locked out of their own product.
+   */
+  @Test
+  void aStoreAtAnEarlierSchemaIsUpgradedWithItsAccountsIntact() {
+    Path storeFile = ServiceHarness.storeFileIn(directory);
+    createStoreAtTheInitialSchema(storeFile);
+
+    try (AuthenticationService service =
+        AuthenticationService.open(storeFile, ServiceHarness.CHEAP)) {
+      assertEquals(SchemaMigrations.latestVersion(), userVersionOf(storeFile));
+    }
+
+    assertEquals("WEAK", strengthRecordedFor("wren.holloway", storeFile));
+  }
+
+  /**
+   * Builds a store the way the first release of this schema did: the initial migration, its version
+   * stamp, and an Account recorded before a band was ever estimated.
+   */
+  private static void createStoreAtTheInitialSchema(Path storeFile) {
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate(read(SchemaMigrations.resourceNames().get(0)));
+      statement.execute("PRAGMA user_version = 1");
+      statement.executeUpdate(
+          "INSERT INTO accounts (name, role, password_hash, created_at)"
+              + " VALUES ('wren.holloway', 'ADMINISTRATOR', 'not-verified-here', '2026-01-01')");
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static String read(String resource) {
+    try (InputStream stream =
+        CredentialStoreSchemaTest.class.getClassLoader().getResourceAsStream(resource)) {
+      assertNotNull(stream, () -> resource + " is not on the classpath");
+      return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static String strengthRecordedFor(String accountName, Path storeFile) {
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+        PreparedStatement statement =
+            connection.prepareStatement("SELECT password_strength FROM accounts WHERE name = ?")) {
+      statement.setString(1, accountName);
+      try (ResultSet results = statement.executeQuery()) {
+        assertTrue(results.next(), () -> "the Account named " + accountName + " did not survive");
+        return results.getString(1);
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /**
+   * There is no periodic password expiry, per current OWASP guidance. This guards the shape rather
+   * than the behaviour: a rotation that nothing stores a due date for cannot be enforced.
+   */
+  @Test
+  void nothingInTheSchemaExpiresAPassword() {
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+
+    List<String> columns = columnsOf(ServiceHarness.storeFileIn(directory), "accounts");
+
+    assertTrue(
+        columns.stream().noneMatch(column -> column.contains("expir")),
+        () -> "something in " + columns + " expires a password");
   }
 
   /** A downgrade must fail loudly rather than write into a schema it does not understand. */

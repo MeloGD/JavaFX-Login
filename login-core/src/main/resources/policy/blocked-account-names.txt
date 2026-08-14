@@ -1,0 +1,35 @@
+# Account names no deployment may use.
+#
+# ADR-0002 makes the account list something an unprivileged attacker cannot read, so a predictable
+# name donates one entry of it back for free. Every name below is refused for every Account, not
+# only for the Administrator.
+#
+# Entries are written the way a person would type them. Matching normalises both sides the same
+# way — case, the separators . _ - and space, and digit-for-letter substitutions — and compares
+# whole names, so "Adm1n", "admin_" and "r00t" are refused while "rosalind.sanders" is not.
+#
+# A deployment extends this list without a rebuild by writing its own file, one name per line, in
+# the directory that holds the CredentialStore:
+#
+#     blocked-account-names.txt
+#
+# That file is read at start-up, and the service is started on demand, so an edit takes effect the
+# next time it runs. Only the account the service runs as can write it.
+
+admin
+administrator
+root
+sa
+sysadmin
+superuser
+supervisor
+operator
+user
+owner
+test
+guest
+default
+
+# The product's own name. A deployment that renames the product adds the new name to its own file
+# above; a host product adds its own name there too.
+JavaFX Login

@@ -6,4 +6,5 @@ package com.javafxlogin.core.ipc;
  * <p>Every response carries the outcome and nothing more than the caller needs. In particular a
  * failed authentication distinguishes nothing about why it failed.
  */
-public sealed interface Response permits Granted, Denied, Ok, ErrorResponse {}
+public sealed interface Response
+    permits Granted, Denied, Ok, Assessed, PolicyRefused, ErrorResponse {}
