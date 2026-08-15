@@ -1,14 +1,17 @@
 package com.javafxlogin.core.authentication;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
+import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.BoundListeningChannelSource;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorCode;
@@ -18,6 +21,7 @@ import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.ipc.TransportClient;
+import com.javafxlogin.core.machine.MachineAdministrators;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -42,6 +46,16 @@ class ServiceOverTheSocketTest {
   private static final String OPERATOR = "finch.mercer";
   private static final String OPERATOR_PASSWORD = "Another-Horse-2";
 
+  /**
+   * The machine's answer, decided here rather than read from the developer's group memberships —
+   * and decided on the name the kernel attached to the connection, so that what these tests admit
+   * is exactly what {@code SO_PEERCRED} reported about this very process.
+   */
+  private static final MachineAdministrators THE_ACCOUNT_RUNNING_THIS_SUITE =
+      peer -> System.getProperty("user.name").equals(peer.userName());
+
+  private static final MachineAdministrators NOBODY = peer -> false;
+
   @TempDir Path runtimeDirectory;
 
   private Path socketPath;
@@ -52,11 +66,15 @@ class ServiceOverTheSocketTest {
     socketPath = runtimeDirectory.resolve("authentication.sock");
     ServiceHarness.provisionOperatorIn(
         runtimeDirectory, ServiceHarness.CHEAP, OPERATOR, OPERATOR_PASSWORD);
-    process =
-        ServiceProcess.start(
-            new BoundListeningChannelSource(socketPath),
-            ServiceHarness.storeFileIn(runtimeDirectory),
-            ServiceHarness.CHEAP);
+    process = start(THE_ACCOUNT_RUNNING_THIS_SUITE);
+  }
+
+  private ServiceProcess start(MachineAdministrators administrators) throws IOException {
+    return ServiceProcess.start(
+        new BoundListeningChannelSource(socketPath),
+        ServiceHarness.storeFileIn(runtimeDirectory),
+        ServiceHarness.CHEAP,
+        administrators);
   }
 
   @AfterEach
@@ -82,6 +100,37 @@ class ServiceOverTheSocketTest {
 
       ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
       assertEquals(ErrorCode.ADMINISTRATOR_EXISTS, error.code());
+    }
+  }
+
+  /**
+   * The join this ticket adds: the name the kernel attached to the socket reaches the service, and
+   * a peer it does not admit is refused across the wire. Nothing the client sent took part in it —
+   * the same request was accepted a test ago, over the same socket, by the same code.
+   */
+  @Test
+  void refusesToCreateTheAdministratorForAPeerTheMachineDoesNotAdminister() throws IOException {
+    process.close();
+    process = start(NOBODY);
+
+    try (ServiceClient client = ServiceClient.connect(socketPath)) {
+      Response response = client.send(new Bootstrap(ADMINISTRATOR, chars(ADMINISTRATOR_PASSWORD)));
+
+      ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
+      assertEquals(ErrorCode.NOT_MACHINE_ADMINISTRATOR, error.code());
+    }
+  }
+
+  @Test
+  void tellsAClientWhetherTheFirstRunWizardIsNeededOverTheSocket() throws IOException {
+    try (ServiceClient client = ServiceClient.connect(socketPath)) {
+      assertTrue(
+          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded())).needed());
+
+      client.send(new Bootstrap(ADMINISTRATOR, chars(ADMINISTRATOR_PASSWORD)));
+
+      assertFalse(
+          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded())).needed());
     }
   }
 

@@ -1,6 +1,8 @@
 package com.javafxlogin.ui.login;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,9 +12,13 @@ import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.authentication.ServiceProcess;
-import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.BoundListeningChannelSource;
+import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
+import com.javafxlogin.core.machine.MachineAdministrators;
+import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.Session;
 import com.javafxlogin.core.store.CredentialStore;
 import java.io.IOException;
@@ -38,6 +44,16 @@ class ServiceLoginGateTest {
 
   /** Deliberately cheap: this suite is about who is admitted, not about what a hash costs. */
   private static final Argon2Parameters CHEAP = new Argon2Parameters(256, 1, 1, 32);
+
+  /**
+   * Who this machine's operating system administers it, decided here rather than read from the
+   * developer's group memberships — and decided on the name the kernel attached to the connection,
+   * so that what is admitted is exactly what the socket reported about this very process.
+   */
+  private static final MachineAdministrators THE_ACCOUNT_RUNNING_THIS_SUITE =
+      peer -> System.getProperty("user.name").equals(peer.userName());
+
+  private static final MachineAdministrators NOBODY = peer -> false;
 
   private static final String OPERATOR = "finch.mercer";
   private static final String OPERATOR_PASSWORD = "Another-Horse-2";
@@ -91,7 +107,7 @@ class ServiceLoginGateTest {
    * correct password — a client patched to ignore the answer would still hold no Session.
    */
   @Test
-  void refusesTheAdministratorEvenWithTheRightPassword() throws IOException {
+  void refusesTheAdministratorEvenWithTheRightPassword() {
     createTheAdministrator();
 
     Optional<Session> session = gate().admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
@@ -135,7 +151,12 @@ class ServiceLoginGateTest {
   }
 
   private ServiceProcess start() throws IOException {
-    return ServiceProcess.start(new BoundListeningChannelSource(socketPath), storeFile, CHEAP);
+    return start(THE_ACCOUNT_RUNNING_THIS_SUITE);
+  }
+
+  private ServiceProcess start(MachineAdministrators administrators) throws IOException {
+    return ServiceProcess.start(
+        new BoundListeningChannelSource(socketPath), storeFile, CHEAP, administrators);
   }
 
   /** Nothing creates an Operator yet — enrolment is its own ticket — so the store is written to. */
@@ -146,10 +167,106 @@ class ServiceLoginGateTest {
     }
   }
 
-  /** Over the wire, as the first-run wizard will: this test has no privileges the client lacks. */
-  private void createTheAdministrator() throws IOException {
+  /** Over the wire, the way the first-run wizard does it: no privilege this client lacks. */
+  private void createTheAdministrator() {
+    assertInstanceOf(
+        AdministratorCreated.class,
+        gate().createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+  }
+
+  // --- the first run ---------------------------------------------------------------------
+
+  @Test
+  void saysTheBootstrapIsNeededUntilTheAdministratorExists() {
+    LoginGate gate = gate();
+    assertTrue(gate.bootstrapNeeded(), "a store with no Administrator needs the wizard");
+
+    gate.createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
+
+    assertFalse(gate.bootstrapNeeded(), "the wizard is over once the Administrator exists");
+  }
+
+  /**
+   * The whole of the ticket's last criterion, end to end: what the wizard creates is an Account the
+   * AuthenticationService authenticates. It is asked for as an Administrator rather than through
+   * this gate, which admits Operators — the administration screen that will ask is its own ticket.
+   */
+  @Test
+  void theAdministratorTheWizardCreatesCanAuthenticate() throws IOException {
+    createTheAdministrator();
+
     try (ServiceClient client = ServiceClient.connect(socketPath)) {
-      client.send(new Bootstrap(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+      Response response =
+          client.send(
+              new Authenticate(
+                  ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray(), Role.ADMINISTRATOR));
+
+      assertInstanceOf(Granted.class, response);
     }
+  }
+
+  /** The guard that keeps a normal user from claiming the Administrator on a fresh install. */
+  @Test
+  void refusesTheWizardToAPeerThatDoesNotAdministerTheMachine() throws IOException {
+    process.close();
+    process = start(NOBODY);
+
+    FirstRunOutcome outcome =
+        gate().createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
+
+    assertEquals(new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR), outcome);
+  }
+
+  /** A peer refused the wizard is still told which window to open. */
+  @Test
+  void stillSaysWhetherTheBootstrapIsNeededToAPeerThatMayNotRunIt() throws IOException {
+    process.close();
+    process = start(NOBODY);
+
+    assertTrue(gate().bootstrapNeeded());
+  }
+
+  @Test
+  void refusesASecondAdministrator() {
+    createTheAdministrator();
+
+    FirstRunOutcome outcome =
+        gate().createAdministrator("finch.upton", "Another-Horse-3".toCharArray());
+
+    assertEquals(new WizardRefused(WizardRefusedReason.ADMINISTRATOR_EXISTS), outcome);
+  }
+
+  /**
+   * The policy is enforced in the privileged process, so a wizard patched to skip it gets the same
+   * answer. What comes back names every rule broken, which is what the window turns into sentences.
+   */
+  @Test
+  void carriesBackEveryRuleThePolicyRefusedTheNameAndPasswordFor() {
+    FirstRunOutcome outcome = gate().createAdministrator("admin", "short".toCharArray());
+
+    PolicyRefusal refusal = assertInstanceOf(PolicyRefusal.class, outcome);
+    assertTrue(
+        refusal.violations().contains(PolicyViolation.ACCOUNT_NAME_BLOCKED),
+        () -> "the blocked name was allowed through: " + refusal.violations());
+    assertTrue(
+        refusal.violations().contains(PolicyViolation.PASSWORD_TOO_SHORT),
+        () -> "the short password was allowed through: " + refusal.violations());
+  }
+
+  @Test
+  void createsNoAdministratorWhenThePolicyRefused() {
+    gate().createAdministrator("admin", "short".toCharArray());
+
+    assertTrue(gate().bootstrapNeeded(), "a refused attempt created an Administrator anyway");
+  }
+
+  @Test
+  void saysSoWhenThereIsNoServiceToAskAboutTheFirstRun() {
+    LoginGate gate = LoginGate.toService(runtimeDirectory.resolve("nothing-listens-here.sock"));
+
+    assertThrows(ServiceUnreachableException.class, gate::bootstrapNeeded);
+    assertThrows(
+        ServiceUnreachableException.class,
+        () -> gate.createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
   }
 }

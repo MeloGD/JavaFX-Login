@@ -28,3 +28,18 @@
   -fx-text-fill: #a01818;
   -fx-padding: 8 0 0 0;
 }
+
+.login .explanation {
+  -fx-font-size: 12px;
+  -fx-text-fill: #4a4a55;
+}
+
+/* The password cannot be recovered. Whatever a host product does to this stylesheet, that has to
+   stay legible: it is the one thing on the screen that cannot be undone afterwards. */
+.login .warning {
+  -fx-font-size: 12px;
+  -fx-text-fill: #7a3d00;
+  -fx-background-color: #fdf3e3;
+  -fx-border-color: #e0b980;
+  -fx-padding: 10;
+}

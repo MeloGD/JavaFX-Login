@@ -5,6 +5,7 @@ import com.javafxlogin.core.ipc.BoundListeningChannelSource;
 import com.javafxlogin.core.ipc.ListeningChannelSource;
 import com.javafxlogin.core.ipc.PlatformListeningChannelSource;
 import com.javafxlogin.core.ipc.TransportServer;
+import com.javafxlogin.core.machine.MachineAdministrators;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -45,8 +46,23 @@ public final class ServiceProcess implements AutoCloseable {
   public static ServiceProcess start(
       ListeningChannelSource source, Path storeFile, Argon2Parameters parameters)
       throws IOException {
+    return start(source, storeFile, parameters, MachineAdministrators.forCurrentPlatform());
+  }
+
+  /**
+   * As {@link #start(ListeningChannelSource, Path, Argon2Parameters)}, with the machine's
+   * administrators named explicitly, so that a test driving a real socket can decide whether the
+   * account it runs as may create the Administrator instead of inheriting the developer's groups.
+   */
+  public static ServiceProcess start(
+      ListeningChannelSource source,
+      Path storeFile,
+      Argon2Parameters parameters,
+      MachineAdministrators administrators)
+      throws IOException {
     Objects.requireNonNull(source, "source");
-    AuthenticationService service = AuthenticationService.open(storeFile, parameters);
+    AuthenticationService service =
+        AuthenticationService.open(storeFile, parameters, administrators);
     try {
       TransportServer server = TransportServer.start(source, new ServiceEndpoint(service));
       return new ServiceProcess(service, server);

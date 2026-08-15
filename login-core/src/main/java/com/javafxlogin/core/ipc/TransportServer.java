@@ -14,6 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import jdk.net.ExtendedSocketOptions;
+import jdk.net.UnixDomainPrincipal;
 
 /**
  * Accepts connections on the listening channel and serves framed requests over them.
@@ -127,6 +129,7 @@ public final class TransportServer implements AutoCloseable {
   private final class Connection implements ConnectionHandle {
 
     private final SocketChannel channel;
+    private final Optional<Peer> peer;
     private final FrameDecoder decoder = new FrameDecoder();
     private final List<Runnable> closeListeners = new ArrayList<>();
 
@@ -134,11 +137,35 @@ public final class TransportServer implements AutoCloseable {
 
     private Connection(SocketChannel channel) {
       this.channel = channel;
+      this.peer = credentialsOf(channel);
     }
 
     @Override
     public boolean isOpen() {
       return open;
+    }
+
+    @Override
+    public Optional<Peer> peer() {
+      return peer;
+    }
+
+    /**
+     * Asked once, while the connection is certainly still up, because the credentials
+     * are fixed at {@code connect()} and a handle asked later would answer nothing
+     * about a peer that has since gone.
+     */
+    private static Optional<Peer> credentialsOf(SocketChannel channel) {
+      try {
+        UnixDomainPrincipal credentials = channel.getOption(ExtendedSocketOptions.SO_PEERCRED);
+        return Optional.of(
+            new Peer(credentials.user().getName(), credentials.group().getName()));
+      } catch (IOException | UnsupportedOperationException e) {
+        // Windows has no SO_PEERCRED, and a peer that died between being accepted and
+        // being asked leaves nothing to ask about. Neither is an answer, and nothing
+        // above may read the absence of one as permission.
+        return Optional.empty();
+      }
     }
 
     @Override

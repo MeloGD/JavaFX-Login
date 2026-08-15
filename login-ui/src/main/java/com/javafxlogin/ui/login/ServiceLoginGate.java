@@ -1,10 +1,17 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.Authenticate;
+import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.Denied;
+import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.MalformedMessageException;
+import com.javafxlogin.core.ipc.Ok;
+import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.session.Session;
@@ -52,28 +59,72 @@ final class ServiceLoginGate implements LoginGate {
   public Optional<Session> admit(String accountName, char[] password) {
     Objects.requireNonNull(accountName, "accountName");
     Objects.requireNonNull(password, "password");
-    Response response;
-    try {
-      response = connection().send(new Authenticate(accountName, password, Role.OPERATOR));
-    } catch (IOException | MalformedMessageException e) {
-      // Whether the socket broke or the answer could not be read, this connection is no longer
-      // one anything may be believed over. The next attempt opens a fresh one.
-      drop();
-      throw new ServiceUnreachableException(
-          "Could not reach the AuthenticationService at " + socketPath, e);
-    }
-
+    Response response = ask(new Authenticate(accountName, password, Role.OPERATOR));
     return switch (response) {
       case Granted granted -> Optional.of(new Session(granted.token()));
       case Denied ignored -> Optional.empty();
       // A readable answer that does not answer this question — a store the service cannot open,
       // say. It is not a refusal, and showing it as one would send the person to retype a
       // password that was never the problem.
-      default ->
-          throw new ServiceUnreachableException(
-              "The AuthenticationService answered an authentication attempt with a "
-                  + response.getClass().getSimpleName());
+      default -> throw unexpected("an authentication attempt", response);
     };
+  }
+
+  @Override
+  public boolean bootstrapNeeded() {
+    Response response = ask(new AskIfBootstrapNeeded());
+    if (response instanceof BootstrapNeeded needed) {
+      return needed.needed();
+    }
+    throw unexpected("a question about the first run", response);
+  }
+
+  @Override
+  public FirstRunOutcome createAdministrator(String administratorName, char[] password) {
+    Objects.requireNonNull(administratorName, "administratorName");
+    Objects.requireNonNull(password, "password");
+
+    Response response = ask(new Bootstrap(administratorName, password));
+    return switch (response) {
+      case Ok ignored -> new AdministratorCreated();
+      case PolicyRefused refused -> new PolicyRefusal(refused.violations());
+      case ErrorResponse error -> refusalOf(error);
+      // A Session for a wizard that was never asked to admit anyone, or an assessment nobody
+      // asked for. Neither is an outcome, and showing one as a refusal would send the person to
+      // retype a name that was never the problem.
+      default -> throw unexpected("an attempt to create the Administrator", response);
+    };
+  }
+
+  private FirstRunOutcome refusalOf(ErrorResponse error) {
+    return switch (error.code()) {
+      case ADMINISTRATOR_EXISTS -> new WizardRefused(WizardRefusedReason.ADMINISTRATOR_EXISTS);
+      case NOT_MACHINE_ADMINISTRATOR ->
+          new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR);
+      // The service could not read its own store. Nothing was decided about this person, and the
+      // remedy is not theirs — it is the same nothing-to-be-done as an unreachable service.
+      case STORE_UNAVAILABLE ->
+          throw new ServiceUnreachableException(
+              "The AuthenticationService could not reach its CredentialStore");
+    };
+  }
+
+  private Response ask(Request request) {
+    try {
+      return connection().send(request);
+    } catch (IOException | MalformedMessageException e) {
+      drop();
+      throw new ServiceUnreachableException(
+          "Could not reach the AuthenticationService at " + socketPath, e);
+    }
+  }
+
+  private static ServiceUnreachableException unexpected(String asked, Response response) {
+    return new ServiceUnreachableException(
+        "The AuthenticationService answered "
+            + asked
+            + " with a "
+            + response.getClass().getSimpleName());
   }
 
   private ServiceClient connection() throws IOException {

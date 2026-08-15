@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.authentication.AuthenticationService;
+import com.javafxlogin.core.harness.StubConnection;
 import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.Peer;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -104,12 +106,18 @@ class ProductionHashingTest {
    * The criterion is about what the service stores, not about what a constant says. Opening the
    * service the way production opens it must put a PHC string carrying the OWASP parameters into
    * the store — and must not put the password there in any form.
+   *
+   * <p>Opened the production way, the service also asks the real machine who administers it. The
+   * peer is therefore {@code root}, whom every Unix-like machine's answer includes whatever its
+   * group database says — the alternative would be an assertion about the developer's groups.
    */
   @Test
   void openingTheServiceAsProductionDoesStoresAnOwaspGradePhcHash(@TempDir Path directory) {
     try (AuthenticationService service =
         AuthenticationService.open(directory.resolve("credentials.db"))) {
-      service.handle(new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()));
+      service.handle(
+          new Bootstrap("wren.holloway", "Correct-Horse-1".toCharArray()),
+          StubConnection.from(new Peer("root", "root")));
     }
 
     String stored = storedHashOf(directory.resolve("credentials.db"), "wren.holloway");

@@ -274,6 +274,36 @@ class TransportTest {
     }
   }
 
+  /**
+   * The first-run wizard is offered only to a MachineAdministrator, so the privileged process has
+   * to be able to name who is at the other end. The kernel answers that when the connection is
+   * accepted; nothing the peer sends takes part in it.
+   */
+  @Test
+  void namesTheOperatingSystemAccountTheKernelSaysIsAtTheOtherEnd() throws Exception {
+    try (TransportClient client = TransportClient.connect(socketPath)) {
+      client.request(bytes("hello"));
+
+      Peer peer = handler.connections().get(0).peer().orElseThrow();
+      assertEquals(System.getProperty("user.name"), peer.userName());
+      assertFalse(peer.primaryGroupName().isBlank(), "the peer should have a primary group");
+    }
+  }
+
+  /** The answer is fixed when the connection is accepted, so it survives the peer going away. */
+  @Test
+  void keepsNamingThePeerOfAConnectionThatHasSinceClosed() throws Exception {
+    TransportClient client = TransportClient.connect(socketPath);
+    client.request(bytes("hello"));
+    ConnectionHandle connection = handler.connections().get(0);
+
+    client.close();
+    await(() -> !connection.isOpen());
+
+    assertEquals(
+        System.getProperty("user.name"), connection.peer().orElseThrow().userName());
+  }
+
   @Test
   void signalsTheHandleWhenTheClientDisappearsSoASessionCanBeEnded() throws Exception {
     CountDownLatch closed = new CountDownLatch(1);

@@ -7,6 +7,7 @@ import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.authentication.AuthenticationService;
 import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.Peer;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.store.CredentialStore;
@@ -32,6 +33,19 @@ public final class ServiceHarness implements AutoCloseable {
    */
   public static final Argon2Parameters CHEAP = new Argon2Parameters(256, 1, 1, 32);
 
+  /**
+   * Seam 1's stand-in for the machine's group database: a peer whose primary group is this one
+   * administers the machine, and nobody else does. Which groups a real machine calls
+   * administrative is {@code PosixMachineAdministrators}' business and is tested there.
+   */
+  private static final String ADMINISTRATIVE_GROUP = "sudo";
+
+  /** The peer requests arrive from unless a test says otherwise: the person installing. */
+  public static final Peer INSTALLING_PEER = new Peer("juno.vale", ADMINISTRATIVE_GROUP);
+
+  /** Someone with an account on the machine and no business administering it. */
+  public static final Peer ORDINARY_PEER = new Peer("mallory.quill", "mallory.quill");
+
   private final Path directory;
   private final Argon2Parameters parameters;
   private AuthenticationService service;
@@ -39,7 +53,7 @@ public final class ServiceHarness implements AutoCloseable {
   private ServiceHarness(Path directory, Argon2Parameters parameters) {
     this.directory = directory;
     this.parameters = parameters;
-    this.service = AuthenticationService.open(storeFile(), parameters);
+    this.service = openService();
   }
 
   /** A harness with cheap hashing parameters — the default for everything but the pinning tests. */
@@ -52,8 +66,22 @@ public final class ServiceHarness implements AutoCloseable {
     return new ServiceHarness(directory, parameters);
   }
 
+  /** Sends a request as the person installing, which is who almost every test is. */
   public Response send(Request request) {
-    return service.handle(request);
+    return sendFrom(INSTALLING_PEER, request);
+  }
+
+  /** Sends a request as a named peer, for the tests about who may create the Administrator. */
+  public Response sendFrom(Peer peer, Request request) {
+    return service.handle(request, StubConnection.from(peer));
+  }
+
+  /**
+   * Sends a request over a connection whose peer the operating system will not name, which is what
+   * a platform without peer credentials looks like from in here.
+   */
+  public Response sendFromAnUnnamedPeer(Request request) {
+    return service.handle(request, StubConnection.fromAnUnnamedPeer());
   }
 
   /** Creates the single Administrator, which almost every test needs before it can do anything. */
@@ -86,7 +114,14 @@ public final class ServiceHarness implements AutoCloseable {
   /** Closes and reopens the service against the same files, as a service restart would. */
   public void restart() {
     service.close();
-    service = AuthenticationService.open(storeFile(), parameters);
+    service = openService();
+  }
+
+  private AuthenticationService openService() {
+    return AuthenticationService.open(
+        storeFile(),
+        parameters,
+        peer -> ADMINISTRATIVE_GROUP.equals(peer.primaryGroupName()));
   }
 
   private Path storeFile() {

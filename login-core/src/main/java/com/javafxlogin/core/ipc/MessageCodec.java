@@ -73,6 +73,7 @@ public final class MessageCodec {
               message("Assess")
                   .put("accountName", assess.accountName())
                   .put("password", new String(assess.password()));
+          case AskIfBootstrapNeeded ignored -> message("AskIfBootstrapNeeded");
         };
     return write(message);
   }
@@ -87,6 +88,7 @@ public final class MessageCodec {
           case Denied denied -> message("Denied").put("reason", denied.reason().name());
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
+          case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
           case PolicyRefused refused -> carrying("PolicyRefused", refused.violations());
           case ErrorResponse error -> message(ERROR).put("code", error.code().name());
         };
@@ -110,6 +112,7 @@ public final class MessageCodec {
               chars(message, "password"),
               constant(Role.class, message, "requestedRole"));
       case "Assess" -> new Assess(text(message, "accountName"), chars(message, "password"));
+      case "AskIfBootstrapNeeded" -> new AskIfBootstrapNeeded();
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -130,6 +133,7 @@ public final class MessageCodec {
           new Assessed(
               new Assessment(
                   violationsOf(message), constant(PasswordStrength.class, message, "strength")));
+      case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
       case "PolicyRefused" -> policyRefused(message);
       case ERROR -> new ErrorResponse(constant(ErrorCode.class, message, "code"));
       default -> throw new MalformedMessageException("Not a response this build reads: " + type);
@@ -210,6 +214,15 @@ public final class MessageCodec {
       throw new MalformedMessageException("The " + field + " field is missing or is not text");
     }
     return value.textValue();
+  }
+
+  /** Strictly boolean: a {@code "true"} or a {@code 1} is a peer this codec does not read. */
+  private static boolean flag(ObjectNode message, String field) {
+    JsonNode value = message.get(field);
+    if (value == null || !value.isBoolean()) {
+      throw new MalformedMessageException("The " + field + " field is missing or is not a flag");
+    }
+    return value.booleanValue();
   }
 
   private static char[] chars(ObjectNode message, String field) {

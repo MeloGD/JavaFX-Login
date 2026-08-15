@@ -53,8 +53,14 @@ that is already restricted. On Linux in production none of this applies — the 
 socket-activated, systemd owns the socket and its mode is declarative, which is what the absence of
 `--socket` selects. Packaging that is its own ticket, as is the Windows service.
 
-**There is nobody to log in as yet.** A fresh store holds no `Account`, the first-run wizard that
-creates the `Administrator` and the enrolment that creates `Operator`s are both still to be built,
-and this project deliberately refuses to ship a default credential or a recovery key. Until those
-land, what the pair does when run by hand is refuse every attempt — correctly. What an admitted
-`Operator` sees is proven by the test suite instead.
+A fresh store holds no `Account`, so what the application shows first is the first-run wizard,
+where the single `Administrator` is created. It is accepted only while no `Administrator` exists
+**and** the account running the application administers the machine — see ADR-0008 — so on a
+machine where you are not `root` and not in `sudo`, `wheel` or `admin`, the wizard will refuse you
+and say so.
+
+**There is still nobody to reach the feature with.** Enrolment, which is how an `Administrator`
+creates `Operator`s, is still to be built, and the login screen admits `Operator`s only. Until that
+lands the pair refuses every login attempt — correctly, and including the `Administrator` you just
+created. This project ships no default credential and issues no recovery key, and it never will.
+What an admitted `Operator` sees is proven by the test suite instead.

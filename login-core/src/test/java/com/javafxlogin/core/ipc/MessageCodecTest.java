@@ -52,6 +52,39 @@ class MessageCodecTest {
   }
 
   @Test
+  void carriesAnAskIfBootstrapNeededUnchanged() {
+    assertEquals(
+        new AskIfBootstrapNeeded(),
+        MessageCodec.decodeRequest(MessageCodec.encode(new AskIfBootstrapNeeded())));
+  }
+
+  @Test
+  void carriesABootstrapNeededUnchangedInBothAnswers() {
+    assertEquals(
+        new BootstrapNeeded(true),
+        MessageCodec.decodeResponse(MessageCodec.encode(new BootstrapNeeded(true))));
+    assertEquals(
+        new BootstrapNeeded(false),
+        MessageCodec.decodeResponse(MessageCodec.encode(new BootstrapNeeded(false))));
+  }
+
+  /**
+   * A flag is a JSON boolean and nothing else. Reading {@code "false"} as a boolean would have this
+   * codec guess, and a guess here is a client told the wrong window to open.
+   */
+  @Test
+  void refusesABootstrapNeededWhoseAnswerIsNotABoolean() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"BootstrapNeeded\",\"needed\":\"false\"}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(bytes("{\"type\":\"BootstrapNeeded\"}")));
+  }
+
+  @Test
   void carriesAGrantedTokenByteForByte() {
     Granted sent = new Granted(SessionToken.generate(new SecureRandom()));
 

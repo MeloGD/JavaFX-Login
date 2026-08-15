@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  The first-run wizard: the only way the single Administrator ever comes into existence.
+
+  Nothing is prefilled and nothing is suggested, not even as a prompt. ADR-0002 keeps the account
+  list unreadable, so a predictable name hands an entry of it back for free, and a placeholder
+  reading "admin" would be this application suggesting the one name an attacker guesses first.
+
+  The warning about the password sits above the fields rather than beside the button: there is no
+  recovery key and there never will be, so it has to be read while there is still a choice to make.
+
+  Every string here moves to a ResourceBundle when the interface learns a second language.
+-->
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.PasswordField?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.javafxlogin.ui.login.FirstRunController"
+      styleClass="login" spacing="8.0" prefWidth="420.0">
+
+  <padding>
+    <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
+  </padding>
+
+  <Label text="Primer arranque" styleClass="title"/>
+
+  <Label styleClass="explanation" wrapText="true" text="Esta aplicación no trae ninguna cuenta creada. Crea aquí la cuenta de administración: es la única que podrá crear después las cuentas de operación."/>
+
+  <Label fx:id="recoveryWarning" styleClass="warning" wrapText="true" text="Esta contraseña no se puede recuperar. No hay clave de recuperación, ni código de respaldo, ni forma de restablecerla, y nunca la habrá: si la pierdes, pierdes el acceso a esta instalación. Guárdala en un gestor de contraseñas antes de continuar."/>
+
+  <Label text="Nombre de cuenta" styleClass="field-label"/>
+  <TextField fx:id="administratorName"/>
+
+  <Label text="Contraseña" styleClass="field-label"/>
+  <PasswordField fx:id="administratorPassword"/>
+
+  <Button fx:id="create" text="Crear la cuenta de administración" onAction="#onCreate"
+          defaultButton="true" maxWidth="Infinity"/>
+
+  <Label fx:id="firstRunMessage" styleClass="message" wrapText="true"/>
+</VBox>

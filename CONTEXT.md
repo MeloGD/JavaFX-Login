@@ -23,6 +23,22 @@ An Account allowed to reach the ProtectedFeature. A deployment holds one or more
 Operators.
 _Avoid_: user, regular user, standard account
 
+**MachineAdministrator**:
+An operating-system account that administers the machine this product is
+installed on: root, or a member of a group the operating system treats as
+administrative. It is not an Account of this system, holds no Role, and can
+authenticate against nothing here. It matters exactly once — the FirstRunWizard
+is refused unless the connecting peer runs as one.
+_Avoid_: root, sudoer, elevated user, local admin
+
+**FirstRunWizard**:
+The screen a person sees the very first time the product runs, and the only way
+the single Administrator ever comes into existence. It is offered while no
+Administrator exists, and accepted only when the peer is also a
+MachineAdministrator. It prefills and suggests nothing, and it issues no recovery
+key.
+_Avoid_: setup screen, onboarding, installer, registration
+
 **Role**:
 The single capability set attached to an Account: either Administrator or
 Operator. Roles are mutually exclusive and an Account never holds both.

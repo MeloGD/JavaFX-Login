@@ -28,12 +28,12 @@ public final class ServiceEndpoint implements RequestHandler {
   }
 
   /**
-   * The connection is not used yet. A Session is bound to it and ends when it closes, which is the
-   * Session lifecycle ticket's work; the handle arrives here already so that the join it is the
-   * seam for does not have to be re-cut then.
+   * The connection is handed on whole rather than read here. The service asks it who the operating
+   * system says the peer is, which is what the first-run wizard's second guard rests on, and will
+   * later bind a Session to it and end that Session when it closes.
    */
   @Override
   public byte[] handle(byte[] request, ConnectionHandle connection) {
-    return MessageCodec.encode(service.handle(MessageCodec.decodeRequest(request)));
+    return MessageCodec.encode(service.handle(MessageCodec.decodeRequest(request), connection));
   }
 }

@@ -13,6 +13,13 @@ public enum ErrorCode {
   ADMINISTRATOR_EXISTS,
 
   /**
+   * Bootstrap was attempted by a peer the operating system does not treat as an administrator of
+   * this machine, or by one it would not name at all. The person is told which of their two
+   * identities was refused, because otherwise they would go looking for a wrong password.
+   */
+  NOT_MACHINE_ADMINISTRATOR,
+
+  /**
    * The CredentialStore could not be read or written. Says nothing about why: the caller can only
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.

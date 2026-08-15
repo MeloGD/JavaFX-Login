@@ -1,8 +1,11 @@
 package com.javafxlogin.core.ipc;
 
+import java.util.Optional;
+
 /**
  * The connection a request arrived on, as much of it as the AuthenticationService
- * needs to see: whether it is still there, and a way to be told when it is not.
+ * needs to see: whether it is still there, a way to be told when it is not, and who
+ * the operating system says is at the other end.
  *
  * <p>A Session is bound to its connection. When the client dies the kernel closes
  * the socket and the Session ends immediately — no heartbeats, and no Operator
@@ -14,6 +17,17 @@ public interface ConnectionHandle {
 
   /** Whether the client is still connected. */
   boolean isOpen();
+
+  /**
+   * Who the operating system says is running the process at the other end, or empty
+   * where it will not say.
+   *
+   * <p>Empty is not "nobody" and must never be read as "anybody": a platform that
+   * cannot name its peer is one where an authorisation resting on the answer has to
+   * be refused. The answer is fixed when the connection is accepted and does not
+   * change afterwards, so it outlives the peer.
+   */
+  Optional<Peer> peer();
 
   /**
    * Runs {@code listener} when the connection closes, or immediately if it already has.
