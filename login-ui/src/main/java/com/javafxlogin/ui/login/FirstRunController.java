@@ -1,8 +1,6 @@
 package com.javafxlogin.ui.login;
 
-import java.util.Arrays;
 import java.util.Objects;
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -13,8 +11,8 @@ import javafx.scene.control.TextField;
  * What the first-run wizard does when someone types into it.
  *
  * <p>It decides nothing about who may create the Administrator, and nothing about whether a name or
- * a password is allowed. Both are the AuthenticationService's, which is what makes a patched copy of
- * this class worth nothing: it can send whatever it likes and be refused all the same.
+ * a password is allowed. Both are the AuthenticationService's, which is what makes a patched copy
+ * of this class worth nothing: it can send whatever it likes and be refused all the same.
  *
  * <p>What it does own is the wording. The service names a broken rule; this turns it into a
  * sentence, and it says every one of them at once so that a person fixes the whole thing rather
@@ -32,12 +30,6 @@ public final class FirstRunController {
   private static final String NOT_MACHINE_ADMINISTRATOR =
       "Solo puede crear esta cuenta quien administre el equipo. Cierra la aplicación y vuelve a"
           + " abrirla desde una cuenta del sistema con permisos de administración.";
-
-  private static final String UNREACHABLE =
-      "No se ha podido contactar con el servicio de autenticación.";
-
-  private static final String INTERRUPTED =
-      "No se ha podido completar la creación. Vuelve a intentarlo.";
 
   @FXML private TextField administratorName;
   @FXML private PasswordField administratorPassword;
@@ -59,30 +51,19 @@ public final class FirstRunController {
     char[] secret = administratorPassword.getText().toCharArray();
 
     showWaiting(true);
-    Thread.ofVirtual()
-        .name("first-run-attempt")
-        .start(
-            () -> {
-              try {
-                FirstRunOutcome outcome = gate.createAdministrator(name, secret);
-                Platform.runLater(() -> showOutcome(outcome));
-              } catch (ServiceUnreachableException e) {
-                Platform.runLater(() -> refused(UNREACHABLE));
-              } catch (RuntimeException e) {
-                // A defect somewhere below rather than an answer. The window still has to come
-                // back: a person left facing dead controls cannot even try again.
-                Platform.runLater(() -> refused(INTERRUPTED));
-              } finally {
-                Arrays.fill(secret, '\0');
-              }
-            });
+    GateAttempt.make(
+        "first-run-attempt",
+        secret,
+        () -> gate.createAdministrator(name, secret),
+        this::showOutcome,
+        this::refused);
   }
 
   private void showOutcome(FirstRunOutcome outcome) {
     switch (outcome) {
       case AdministratorCreated ignored -> created();
       case PolicyRefusal refusal -> refused(PolicyViolationText.paragraphFor(refusal.violations()));
-      case WizardRefused refused ->
+      case FirstRunRefused refused ->
           refused(
               switch (refused.reason()) {
                 case ADMINISTRATOR_EXISTS -> ADMINISTRATOR_EXISTS;

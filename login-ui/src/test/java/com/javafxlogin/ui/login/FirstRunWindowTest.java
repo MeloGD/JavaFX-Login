@@ -144,7 +144,7 @@ class FirstRunWindowTest extends ApplicationTest {
     assertTrue(lookup("#create").tryQuery().isPresent(), "the wizard should still be there");
   }
 
-  /** The name was refused, not the password. Making someone retype a good password is gratuitous. */
+  /** The name was refused, not the password. Making someone retype a good one is gratuitous. */
   @Test
   void aRefusalLeavesWhatWasTypedWhereItIs() {
     gate.answerTheWizardWith(new PolicyRefusal(List.of(PolicyViolation.ACCOUNT_NAME_BLOCKED)));
@@ -162,7 +162,7 @@ class FirstRunWindowTest extends ApplicationTest {
    */
   @Test
   void saysWhoMayRunTheWizardWhenTheMachineRefusesThePeer() {
-    gate.answerTheWizardWith(new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR));
+    gate.answerTheWizardWith(new FirstRunRefused(FirstRunRefusedReason.NOT_MACHINE_ADMINISTRATOR));
 
     create(ADMINISTRATOR, PASSWORD);
 
@@ -173,11 +173,11 @@ class FirstRunWindowTest extends ApplicationTest {
 
   @Test
   void saysSomethingElseWhenTheAdministratorAlreadyExists() {
-    gate.answerTheWizardWith(new WizardRefused(WizardRefusedReason.ADMINISTRATOR_EXISTS));
+    gate.answerTheWizardWith(new FirstRunRefused(FirstRunRefusedReason.ADMINISTRATOR_EXISTS));
     create(ADMINISTRATOR, PASSWORD);
     String existing = awaitAMessage();
 
-    gate.answerTheWizardWith(new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR));
+    gate.answerTheWizardWith(new FirstRunRefused(FirstRunRefusedReason.NOT_MACHINE_ADMINISTRATOR));
     create(ADMINISTRATOR, PASSWORD);
     String refused = awaitAMessage(existing);
 

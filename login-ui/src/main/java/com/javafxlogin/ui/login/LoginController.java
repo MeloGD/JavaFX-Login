@@ -1,11 +1,9 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.session.Session;
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -29,12 +27,6 @@ public final class LoginController {
   private static final String REFUSED =
       "No se ha podido iniciar sesión. Revisa el nombre de cuenta y la contraseña.";
 
-  private static final String UNREACHABLE =
-      "No se ha podido contactar con el servicio de autenticación.";
-
-  private static final String INTERRUPTED =
-      "No se ha podido completar el intento. Vuelve a intentarlo.";
-
   @FXML private TextField accountName;
   @FXML private PasswordField password;
   @FXML private Button admit;
@@ -55,23 +47,8 @@ public final class LoginController {
     char[] secret = password.getText().toCharArray();
 
     showWaiting(true);
-    Thread.ofVirtual()
-        .name("login-attempt")
-        .start(
-            () -> {
-              try {
-                Optional<Session> session = gate.admit(name, secret);
-                Platform.runLater(() -> showOutcome(session));
-              } catch (ServiceUnreachableException e) {
-                Platform.runLater(() -> failed(UNREACHABLE));
-              } catch (RuntimeException e) {
-                // A defect somewhere below rather than an answer. The window still has to come
-                // back: a person left facing dead controls cannot even try again.
-                Platform.runLater(() -> failed(INTERRUPTED));
-              } finally {
-                Arrays.fill(secret, '\0');
-              }
-            });
+    GateAttempt.make(
+        "login-attempt", secret, () -> gate.admit(name, secret), this::showOutcome, this::failed);
   }
 
   private void showOutcome(Optional<Session> session) {

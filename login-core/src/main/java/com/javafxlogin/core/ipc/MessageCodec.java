@@ -216,7 +216,7 @@ public final class MessageCodec {
     return value.textValue();
   }
 
-  /** Strictly boolean: a {@code "true"} or a {@code 1} is a peer this codec does not read. */
+  /** Strictly boolean: a {@code "true"} or a {@code 1} is not a message this codec reads. */
   private static boolean flag(ObjectNode message, String field) {
     JsonNode value = message.get(field);
     if (value == null || !value.isBoolean()) {

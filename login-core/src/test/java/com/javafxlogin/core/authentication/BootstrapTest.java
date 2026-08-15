@@ -50,6 +50,18 @@ class BootstrapTest {
     assertInstanceOf(Ok.class, response);
   }
 
+  /**
+   * No recovery key, no backup code, no enrolment token, no backdoor. The success answer is empty
+   * and equal to every other one, which is the assertion: a later ticket that put anything into it
+   * to hand back to the person would fail here rather than ship.
+   */
+  @Test
+  void issuesNothingAlongsideTheAdministratorItCreated() {
+    Response response = harness.bootstrap("wren.holloway", "Correct-Horse-1");
+
+    assertEquals(new Ok(), response);
+  }
+
   @Test
   void theAdministratorItCreatedCanAuthenticate() {
     harness.bootstrap("wren.holloway", "Correct-Horse-1");
@@ -159,7 +171,8 @@ class BootstrapTest {
   @Test
   void aRefusedPeerIsToldNothingAboutThePolicy() {
     Response response =
-        harness.sendFrom(ServiceHarness.ORDINARY_PEER, new Bootstrap("root", "short".toCharArray()));
+        harness.sendFrom(
+            ServiceHarness.ORDINARY_PEER, new Bootstrap("root", "short".toCharArray()));
 
     ErrorResponse error = assertInstanceOf(ErrorResponse.class, response);
     assertEquals(ErrorCode.NOT_MACHINE_ADMINISTRATOR, error.code());

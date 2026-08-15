@@ -65,15 +65,15 @@ public interface LoginGate {
    *
    * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
    */
-  boolean bootstrapNeeded();
+  boolean firstRunNeeded();
 
   /**
    * Offers a name and a password for the single Administrator.
    *
-   * <p>Being told the bootstrap is needed is not being allowed to run it: the service accepts this
+   * <p>Being told the first run is needed is not being allowed to run it: the service accepts this
    * only from a peer that administers the machine, and only while no Administrator exists. Both
-   * refusals come back as a {@link WizardRefused} rather than being decided here, because a client
-   * that decided them could be patched into deciding otherwise.
+   * refusals come back as a {@link FirstRunRefused} rather than being decided here, because a
+   * client that decided them could be patched into deciding otherwise.
    *
    * <p>Blocks: the password is hashed on the other side, which is deliberately slow, so this must
    * not be called on the JavaFX application thread.
@@ -95,7 +95,7 @@ public interface LoginGate {
    * here rather than off the thread: there is no window yet to freeze.
    */
   default void protect(Stage stage, Function<Session, Parent> protectedFeature) {
-    if (firstRunIsNeeded()) {
+    if (theWizardIsNeeded()) {
       FirstRunWindow.show(this, stage, () -> LoginWindow.show(this, stage, protectedFeature));
       return;
     }
@@ -107,9 +107,9 @@ public interface LoginGate {
    * could not be reached. Guessing the other way would put a wizard in front of someone on a
    * machine that may well have an Administrator already.
    */
-  private boolean firstRunIsNeeded() {
+  private boolean theWizardIsNeeded() {
     try {
-      return bootstrapNeeded();
+      return firstRunNeeded();
     } catch (ServiceUnreachableException e) {
       return false;
     }

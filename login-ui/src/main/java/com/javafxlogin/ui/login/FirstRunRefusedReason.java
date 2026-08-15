@@ -1,7 +1,7 @@
 package com.javafxlogin.ui.login;
 
 /** Why the first-run wizard was not allowed to run. */
-public enum WizardRefusedReason {
+public enum FirstRunRefusedReason {
 
   /**
    * The single Administrator already exists. Somebody got there first, on this machine, and there

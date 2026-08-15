@@ -13,4 +13,4 @@ package com.javafxlogin.ui.login;
  * retype anything.
  */
 public sealed interface FirstRunOutcome
-    permits AdministratorCreated, PolicyRefusal, WizardRefused {}
+    permits AdministratorCreated, PolicyRefusal, FirstRunRefused {}

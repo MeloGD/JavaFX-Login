@@ -28,7 +28,7 @@ final class FakeLoginGate implements LoginGate {
   private final List<String> creations = new CopyOnWriteArrayList<>();
 
   private volatile boolean reachable = true;
-  private volatile boolean bootstrapNeeded;
+  private volatile boolean firstRunNeeded;
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
 
   /** Whoever is added here is admitted with this password, and refused with any other. */
@@ -39,7 +39,7 @@ final class FakeLoginGate implements LoginGate {
 
   /** A machine with no Administrator, which is what puts the wizard on the screen. */
   FakeLoginGate needingItsAdministrator() {
-    bootstrapNeeded = true;
+    firstRunNeeded = true;
     return this;
   }
 
@@ -78,11 +78,11 @@ final class FakeLoginGate implements LoginGate {
   }
 
   @Override
-  public boolean bootstrapNeeded() {
+  public boolean firstRunNeeded() {
     if (!reachable) {
       throw new ServiceUnreachableException("There is no AuthenticationService in this test");
     }
-    return bootstrapNeeded;
+    return firstRunNeeded;
   }
 
   @Override
@@ -97,7 +97,7 @@ final class FakeLoginGate implements LoginGate {
       // As the real service does: from here on this installation has its Administrator and the
       // wizard is over. The Account is deliberately not made admissible — the login screen asks
       // to act as an Operator, and the service refuses the Administrator there.
-      bootstrapNeeded = false;
+      firstRunNeeded = false;
     }
     return nextOutcome;
   }

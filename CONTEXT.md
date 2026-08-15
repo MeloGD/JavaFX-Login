@@ -23,6 +23,12 @@ An Account allowed to reach the ProtectedFeature. A deployment holds one or more
 Operators.
 _Avoid_: user, regular user, standard account
 
+**Peer**:
+The process at the other end of a connection to the AuthenticationService, as the
+operating system names it — never as it describes itself. The kernel attaches the
+name when the connection is accepted, so nothing a client sends takes part in it.
+_Avoid_: client, caller, connecting user
+
 **MachineAdministrator**:
 An operating-system account that administers the machine this product is
 installed on: root, or a member of a group the operating system treats as

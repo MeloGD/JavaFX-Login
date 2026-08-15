@@ -125,12 +125,14 @@ class ServiceOverTheSocketTest {
   void tellsAClientWhetherTheFirstRunWizardIsNeededOverTheSocket() throws IOException {
     try (ServiceClient client = ServiceClient.connect(socketPath)) {
       assertTrue(
-          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded())).needed());
+          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded()))
+              .needed());
 
       client.send(new Bootstrap(ADMINISTRATOR, chars(ADMINISTRATOR_PASSWORD)));
 
       assertFalse(
-          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded())).needed());
+          assertInstanceOf(BootstrapNeeded.class, client.send(new AskIfBootstrapNeeded()))
+              .needed());
     }
   }
 

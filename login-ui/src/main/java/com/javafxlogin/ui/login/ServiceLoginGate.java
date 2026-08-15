@@ -71,7 +71,7 @@ final class ServiceLoginGate implements LoginGate {
   }
 
   @Override
-  public boolean bootstrapNeeded() {
+  public boolean firstRunNeeded() {
     Response response = ask(new AskIfBootstrapNeeded());
     if (response instanceof BootstrapNeeded needed) {
       return needed.needed();
@@ -98,9 +98,9 @@ final class ServiceLoginGate implements LoginGate {
 
   private FirstRunOutcome refusalOf(ErrorResponse error) {
     return switch (error.code()) {
-      case ADMINISTRATOR_EXISTS -> new WizardRefused(WizardRefusedReason.ADMINISTRATOR_EXISTS);
+      case ADMINISTRATOR_EXISTS -> new FirstRunRefused(FirstRunRefusedReason.ADMINISTRATOR_EXISTS);
       case NOT_MACHINE_ADMINISTRATOR ->
-          new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR);
+          new FirstRunRefused(FirstRunRefusedReason.NOT_MACHINE_ADMINISTRATOR);
       // The service could not read its own store. Nothing was decided about this person, and the
       // remedy is not theirs — it is the same nothing-to-be-done as an unreachable service.
       case STORE_UNAVAILABLE ->

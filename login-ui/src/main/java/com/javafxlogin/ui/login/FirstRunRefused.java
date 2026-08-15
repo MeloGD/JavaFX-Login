@@ -10,9 +10,9 @@ import java.util.Objects;
  * in common: one is over and done with, and the other needs the application started by somebody
  * else.
  */
-public record WizardRefused(WizardRefusedReason reason) implements FirstRunOutcome {
+public record FirstRunRefused(FirstRunRefusedReason reason) implements FirstRunOutcome {
 
-  public WizardRefused {
+  public FirstRunRefused {
     Objects.requireNonNull(reason, "reason");
   }
 }

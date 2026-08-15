@@ -179,11 +179,11 @@ class ServiceLoginGateTest {
   @Test
   void saysTheBootstrapIsNeededUntilTheAdministratorExists() {
     LoginGate gate = gate();
-    assertTrue(gate.bootstrapNeeded(), "a store with no Administrator needs the wizard");
+    assertTrue(gate.firstRunNeeded(), "a store with no Administrator needs the wizard");
 
     gate.createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
 
-    assertFalse(gate.bootstrapNeeded(), "the wizard is over once the Administrator exists");
+    assertFalse(gate.firstRunNeeded(), "the wizard is over once the Administrator exists");
   }
 
   /**
@@ -205,6 +205,19 @@ class ServiceLoginGateTest {
     }
   }
 
+  /**
+   * Nothing is handed back for the person to keep: no recovery key, no backup code, no backdoor.
+   * The outcome is empty and equal to every other one, so a later ticket that put something in it
+   * would fail here rather than ship.
+   */
+  @Test
+  void issuesNothingAlongsideTheAdministratorItCreated() {
+    FirstRunOutcome outcome =
+        gate().createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
+
+    assertEquals(new AdministratorCreated(), outcome);
+  }
+
   /** The guard that keeps a normal user from claiming the Administrator on a fresh install. */
   @Test
   void refusesTheWizardToAPeerThatDoesNotAdministerTheMachine() throws IOException {
@@ -214,7 +227,7 @@ class ServiceLoginGateTest {
     FirstRunOutcome outcome =
         gate().createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
 
-    assertEquals(new WizardRefused(WizardRefusedReason.NOT_MACHINE_ADMINISTRATOR), outcome);
+    assertEquals(new FirstRunRefused(FirstRunRefusedReason.NOT_MACHINE_ADMINISTRATOR), outcome);
   }
 
   /** A peer refused the wizard is still told which window to open. */
@@ -223,7 +236,7 @@ class ServiceLoginGateTest {
     process.close();
     process = start(NOBODY);
 
-    assertTrue(gate().bootstrapNeeded());
+    assertTrue(gate().firstRunNeeded());
   }
 
   @Test
@@ -233,7 +246,7 @@ class ServiceLoginGateTest {
     FirstRunOutcome outcome =
         gate().createAdministrator("finch.upton", "Another-Horse-3".toCharArray());
 
-    assertEquals(new WizardRefused(WizardRefusedReason.ADMINISTRATOR_EXISTS), outcome);
+    assertEquals(new FirstRunRefused(FirstRunRefusedReason.ADMINISTRATOR_EXISTS), outcome);
   }
 
   /**
@@ -257,14 +270,14 @@ class ServiceLoginGateTest {
   void createsNoAdministratorWhenThePolicyRefused() {
     gate().createAdministrator("admin", "short".toCharArray());
 
-    assertTrue(gate().bootstrapNeeded(), "a refused attempt created an Administrator anyway");
+    assertTrue(gate().firstRunNeeded(), "a refused attempt created an Administrator anyway");
   }
 
   @Test
   void saysSoWhenThereIsNoServiceToAskAboutTheFirstRun() {
     LoginGate gate = LoginGate.toService(runtimeDirectory.resolve("nothing-listens-here.sock"));
 
-    assertThrows(ServiceUnreachableException.class, gate::bootstrapNeeded);
+    assertThrows(ServiceUnreachableException.class, gate::firstRunNeeded);
     assertThrows(
         ServiceUnreachableException.class,
         () -> gate.createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
