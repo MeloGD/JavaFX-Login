@@ -14,5 +14,6 @@ public sealed interface Request
         Authenticate,
         Bootstrap,
         ChangeInactivityPeriod,
+        ClearLockout,
         Logout,
         ReportActivity {}

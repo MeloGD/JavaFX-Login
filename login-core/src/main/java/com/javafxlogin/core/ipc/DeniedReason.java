@@ -4,7 +4,7 @@ package com.javafxlogin.core.ipc;
  * Why authentication was refused, as far as the client is told.
  *
  * <p>The set grows only when a ticket adds a refusal the client must act on differently — a locked
- * Account and an Account awaiting enrolment both will, because each sends the person somewhere
+ * Account has, and an Account awaiting enrolment will, because each sends the person somewhere
  * other than the wrong-password message. Everything else stays {@link #AUTH_FAILED}, because a
  * reason the client can read is a reason an attacker can read.
  */
@@ -22,5 +22,15 @@ public enum DeniedReason {
    * refusal, so it is an oracle for nothing — a Session being open is already visible to anyone who
    * can see the screen it is open on.
    */
-  SESSION_ALREADY_LIVE
+  SESSION_ALREADY_LIVE,
+
+  /**
+   * The Account has failed authentication often enough to be in Lockout, and is refused whatever
+   * password came with this attempt. The one refusal that says something about an Account: after
+   * enough wrong guesses, this answer tells an attacker the name they were guessing at is a real
+   * one. Story 43 asks for it anyway, and ADR-0010 records what it costs and why the trade is worth
+   * making — an attacker who buys that answer pays for it in Argon2id verifications, locks the
+   * Account they were after, and leaves an AuthenticationEvent behind saying so.
+   */
+  LOCKED_OUT
 }

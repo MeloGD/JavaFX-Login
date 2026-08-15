@@ -16,6 +16,7 @@ import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
+import com.javafxlogin.core.ipc.ClearLockout;
 import com.javafxlogin.core.ipc.ConnectionHandle;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
@@ -42,9 +43,11 @@ import com.javafxlogin.core.store.CredentialStoreException;
 import com.javafxlogin.core.store.SchemaTooNewException;
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The privileged process: it owns the CredentialStore and is the only party that can verify a
@@ -78,6 +81,7 @@ public final class AuthenticationService implements AutoCloseable {
   private final AccountPolicy policy;
   private final MachineAdministrators administrators;
   private final Sessions sessions;
+  private final Lockouts lockouts;
   private final SessionClock clock;
   private final AuthenticationEventLog events;
   private final SecureRandom random;
@@ -94,6 +98,7 @@ public final class AuthenticationService implements AutoCloseable {
     this.policy = policy;
     this.administrators = administrators;
     this.sessions = new Sessions(clock);
+    this.lockouts = new Lockouts(store, clock);
     this.clock = clock;
     this.events = events;
     this.random = new SecureRandom();
@@ -191,6 +196,7 @@ public final class AuthenticationService implements AutoCloseable {
         case AskIfSessionIsLive ask -> askIfSessionIsLive(ask, connection);
         case Logout logout -> logOut(logout, connection);
         case ChangeInactivityPeriod change -> changeInactivityPeriod(change, connection);
+        case ClearLockout clear -> clearLockout(clear, connection);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -245,7 +251,7 @@ public final class AuthenticationService implements AutoCloseable {
     // visible to anyone who can see the screen it is open on. The live one is kept, so a second
     // person typing a password cannot throw out the person working.
     if (theMachineIsBusy()) {
-      return new Denied(DeniedReason.SESSION_ALREADY_LIVE);
+      return Denied.because(DeniedReason.SESSION_ALREADY_LIVE);
     }
 
     Optional<Account> account = store.findByName(request.accountName());
@@ -257,24 +263,57 @@ public final class AuthenticationService implements AutoCloseable {
             .map(found -> authenticator.verify(request.password(), found.passwordHash()))
             .orElseGet(() -> authenticator.verifyAgainstAbsentAccount(request.password()));
 
+    // A Lockout is applied after the verification rather than instead of it, so that a refused
+    // attempt costs the same whether the Account is locked, wrong or absent. Skipping the work
+    // would save this service nothing it can bank anyway: every attempt costs one verification,
+    // whatever name it names, which is what the absent branch above is for.
+    Optional<Duration> refusedFor = account.flatMap(found -> lockouts.refusalOf(found.name()));
+    if (refusedFor.isPresent()) {
+      return Denied.lockedFor(refusedFor.get());
+    }
+
     // The Account is named rather than assumed present: nothing but the reference hash can verify
     // when there is no Account, and a build that ever made that untrue should fail here as a
     // refusal rather than reach the line below with nothing in hand.
     if (!verified || account.isEmpty()) {
-      return new Denied(DeniedReason.AUTH_FAILED);
+      return refuse(account);
     }
 
     // An Administrator asking to act as an Operator is refused here, in the privileged process,
     // and refused in the same words as a wrong password: telling the two apart would name the one
     // Account whose Role an attacker can guess. The check follows the verification rather than
-    // replacing it, so the refusal costs what every other refusal costs.
+    // replacing it, so the refusal costs what every other refusal costs — and it is counted
+    // against the Account like any other failure, because an Account that could never be locked
+    // out would be one an attacker could tell from every other Account by failing at it all day.
     if (account.get().role() != request.requestedRole()) {
-      return new Denied(DeniedReason.AUTH_FAILED);
+      return refuse(account);
     }
 
+    lockouts.succeeded(account.get().name());
     SessionToken token = SessionToken.generate(random);
     sessions.open(token, account.get().name(), account.get().role(), connection);
     return new Granted(token);
+  }
+
+  /**
+   * Refuses an attempt and remembers that it happened, where there was an Account for it to happen
+   * to.
+   *
+   * <p>The failure that reaches the configured number is answered as the Lockout it has just
+   * caused rather than as one more wrong password: someone told only that it failed keeps guessing
+   * at an Account that has stopped listening, which is the whole of story 43.
+   */
+  private Response refuse(Optional<Account> account) {
+    if (account.isEmpty()) {
+      return Denied.because(DeniedReason.AUTH_FAILED);
+    }
+    String accountName = account.get().name();
+    Optional<Duration> lockedFor = lockouts.failed(accountName);
+    if (lockedFor.isEmpty()) {
+      return Denied.because(DeniedReason.AUTH_FAILED);
+    }
+    record(AuthenticationEventType.ACCOUNT_LOCKED_OUT, accountName);
+    return Denied.lockedFor(lockedFor.get());
   }
 
   /** Whether a Session is live, once one that has run out has been ended. */
@@ -320,7 +359,48 @@ public final class AuthenticationService implements AutoCloseable {
   private Response changeInactivityPeriod(
       ChangeInactivityPeriod request, ConnectionHandle connection) {
     return onTheSessionNamedBy(
-        request.token(), connection, live -> changeFor(live, request.period()));
+        request.token(),
+        connection,
+        live -> onlyAnAdministrator(live, () -> changeFor(live, request.period())));
+  }
+
+  /**
+   * Forgets what an Account has failed, which is how the Administrator releases a colleague who
+   * fat-fingered their password.
+   *
+   * <p>A name no Account holds is said plainly rather than answered with a cheerful {@link Ok}: an
+   * Administrator who mistyped it would otherwise walk away believing the colleague is free, and
+   * the colleague would stay locked out. Nothing is revealed by saying so — the Session asking is
+   * one the service granted in the Role that manages Accounts.
+   */
+  private Response clearLockout(ClearLockout request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> onlyAnAdministrator(live, () -> clearFor(request.accountName())));
+  }
+
+  private Response clearFor(String accountName) {
+    if (!lockouts.clear(accountName)) {
+      return new ErrorResponse(ErrorCode.NO_SUCH_ACCOUNT);
+    }
+    record(AuthenticationEventType.LOCKOUT_CLEARED, accountName);
+    return new Ok();
+  }
+
+  /**
+   * Answers a request only an Administrator may make, or refuses it.
+   *
+   * <p>The Role checked is the one the Session was granted in, which the service decided when it
+   * verified a password. A client asking on behalf of a Session that is not an Administrator's is
+   * refused here, in the privileged process, and a patched one is refused identically.
+   */
+  private static Response onlyAnAdministrator(
+      SessionOutcome.Live live, Supplier<Response> whenItIsTheAdministrators) {
+    if (live.role() != Role.ADMINISTRATOR) {
+      return new ErrorResponse(ErrorCode.NOT_ADMINISTRATOR);
+    }
+    return whenItIsTheAdministrators.get();
   }
 
   /**
@@ -339,9 +419,6 @@ public final class AuthenticationService implements AutoCloseable {
   }
 
   private Response changeFor(SessionOutcome.Live live, InactivityPeriod period) {
-    if (live.role() != Role.ADMINISTRATOR) {
-      return new ErrorResponse(ErrorCode.NOT_ADMINISTRATOR);
-    }
     store.setInactivityPeriod(period);
     record(AuthenticationEventType.CONFIGURATION_CHANGED, live.accountName());
     return new Ok();

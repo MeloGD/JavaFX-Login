@@ -16,6 +16,7 @@ import com.javafxlogin.core.session.SessionToken;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -186,9 +187,55 @@ class MessageCodecTest {
 
   @Test
   void carriesADeniedUnchanged() {
-    Denied sent = new Denied(DeniedReason.AUTH_FAILED);
+    Denied sent = Denied.because(DeniedReason.AUTH_FAILED);
 
     assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  /** The one refusal that carries anything: a person is owed the wait as well as the word. */
+  @Test
+  void carriesALockoutWithWhatIsLeftOfIt() {
+    Denied sent = Denied.lockedFor(Duration.ofMinutes(15));
+
+    assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  /**
+   * The reason and the time left are one fact, and a message that pairs them any other way is not a
+   * message this build reads. Guessing — dropping the number, or inventing one — would be the
+   * privileged process's answer being retold by whoever sent it.
+   */
+  @Test
+  void refusesARefusalWhoseReasonAndWaitDoNotAgree() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes(
+                    "{\"type\":\"Denied\",\"reason\":\"AUTH_FAILED\","
+                        + "\"lockedForMillis\":900000}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes(
+                    "{\"type\":\"Denied\",\"reason\":\"LOCKED_OUT\","
+                        + "\"lockedForMillis\":null}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"Denied\",\"reason\":\"LOCKED_OUT\"}")));
+  }
+
+  @Test
+  void carriesAClearLockoutUnchanged() {
+    ClearLockout sent = new ClearLockout(SessionToken.generate(new SecureRandom()), "finch.mercer");
+
+    ClearLockout received = (ClearLockout) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.accountName(), received.accountName());
   }
 
   @Test
@@ -383,6 +430,20 @@ class MessageCodecTest {
     assertTrue(printed.contains("redacted"), () -> "not redacted: " + printed);
     assertFalse(printed.contains("Correct-Horse-1"), () -> "leaked the password: " + printed);
     assertFalse(printed.contains("wren.holloway"), () -> "leaked the Account name: " + printed);
+  }
+
+  /** An Account name is part of what the CredentialStore keeps secret, token or no token. */
+  @Test
+  void printingAClearLockoutPrintsNeitherTheTokenNorTheAccount() {
+    SessionToken token = SessionToken.generate(new SecureRandom());
+
+    String printed = new ClearLockout(token, "finch.mercer").toString();
+
+    assertTrue(printed.contains("redacted"), () -> "not redacted: " + printed);
+    assertFalse(printed.contains("finch.mercer"), () -> "leaked the Account name: " + printed);
+    assertFalse(
+        printed.contains(Base64.getEncoder().encodeToString(token.copyOfBytes())),
+        () -> "leaked the token: " + printed);
   }
 
   private static byte[] bytes(String json) {

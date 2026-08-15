@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.session.Session;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -146,6 +147,26 @@ class LoginWindowTest extends ApplicationTest {
 
     assertNotEquals(refusal, alreadyLive);
     assertFalse(alreadyLive.contains(OPERATOR), () -> "named it: " + alreadyLive);
+    assertEquals(0, featuresBuilt.get(), "nothing should have opened");
+  }
+
+  /**
+   * Story 43 as a person meets it: an Account in Lockout is told so, and told how long, so that
+   * nobody stands at the screen guessing at an Account that has stopped listening. It still names
+   * no Account — the sentence says what happened to the attempt, not who was attempted.
+   */
+  @Test
+  void aLockedAccountIsToldHowLongItHasToWait() {
+    attempt(OPERATOR, "Wrong-Horse-9");
+    String refusal = awaitAMessage();
+
+    gate.withAnAccountLockedFor(Duration.ofMinutes(14).plusSeconds(30));
+    attempt(OPERATOR, PASSWORD);
+    String locked = awaitAMessage(refusal);
+
+    assertNotEquals(refusal, locked);
+    assertTrue(locked.contains("15 minutos"), () -> "no wait to read in: " + locked);
+    assertFalse(locked.contains(OPERATOR), () -> "named it: " + locked);
     assertEquals(0, featuresBuilt.get(), "nothing should have opened");
   }
 

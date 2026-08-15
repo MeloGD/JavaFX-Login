@@ -1,6 +1,7 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.session.Session;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.fxml.FXML;
@@ -32,6 +33,15 @@ public final class LoginController {
    */
   private static final String SESSION_ALREADY_LIVE =
       "Ya hay una sesión abierta en este equipo. Ciérrala antes de iniciar otra.";
+
+  /**
+   * Said with the time left in it, because a person who is not told how long simply keeps trying.
+   * It names no Account and offers no way out: the wait is the point, and an Administrator is who
+   * shortens it.
+   */
+  private static final String LOCKED_OUT =
+      "La cuenta está bloqueada temporalmente tras varios intentos fallidos."
+          + " Vuelve a intentarlo dentro de %s.";
 
   @FXML private TextField accountName;
   @FXML private PasswordField password;
@@ -66,13 +76,27 @@ public final class LoginController {
   private void showOutcome(Admission admission) {
     switch (admission) {
       case Admitted admitted -> onAdmitted.accept(admitted.session());
-      case NotAdmitted notAdmitted ->
-          failed(
-              switch (notAdmitted.reason()) {
-                case AUTH_FAILED -> REFUSED;
-                case SESSION_ALREADY_LIVE -> SESSION_ALREADY_LIVE;
-              });
+      case NotAdmitted notAdmitted -> failed(sentenceFor(notAdmitted));
     }
+  }
+
+  private static String sentenceFor(NotAdmitted notAdmitted) {
+    return switch (notAdmitted.reason()) {
+      case AUTH_FAILED -> REFUSED;
+      case SESSION_ALREADY_LIVE -> SESSION_ALREADY_LIVE;
+      // Present because the refusal is a Lockout, which is the record's own rule.
+      case LOCKED_OUT -> LOCKED_OUT.formatted(waitOf(notAdmitted.lockedFor().orElseThrow()));
+    };
+  }
+
+  /**
+   * The wait, in whole minutes and never in none: rounded up so that a screen saying "one minute"
+   * is never a screen someone is refused after, and floored at one so that the shortest wait is
+   * still a wait rather than a zero to argue with.
+   */
+  private static String waitOf(Duration remaining) {
+    long minutes = Math.max(1, (remaining.toSeconds() + 59) / 60);
+    return minutes == 1 ? "1 minuto" : minutes + " minutos";
   }
 
   private void failed(String reason) {

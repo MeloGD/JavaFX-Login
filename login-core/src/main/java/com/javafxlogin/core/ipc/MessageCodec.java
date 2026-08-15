@@ -84,6 +84,8 @@ public final class MessageCodec {
           case ChangeInactivityPeriod change ->
               carrying("ChangeInactivityPeriod", change.token())
                   .put("period", change.period().text());
+          case ClearLockout clear ->
+              carrying("ClearLockout", clear.token()).put("accountName", clear.accountName());
         };
     return write(message);
   }
@@ -93,7 +95,7 @@ public final class MessageCodec {
     ObjectNode message =
         switch (response) {
           case Granted granted -> carrying("Granted", granted.token());
-          case Denied denied -> message("Denied").put("reason", denied.reason().name());
+          case Denied denied -> denied(denied);
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
           case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
@@ -127,6 +129,7 @@ public final class MessageCodec {
       case "AskIfSessionIsLive" -> new AskIfSessionIsLive(token(message));
       case "Logout" -> new Logout(token(message));
       case "ChangeInactivityPeriod" -> new ChangeInactivityPeriod(token(message), period(message));
+      case "ClearLockout" -> new ClearLockout(token(message), text(message, "accountName"));
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -141,7 +144,7 @@ public final class MessageCodec {
     String type = text(message, TYPE);
     return switch (type) {
       case "Granted" -> new Granted(token(message));
-      case "Denied" -> new Denied(constant(DeniedReason.class, message, "reason"));
+      case "Denied" -> denied(message);
       case "Ok" -> new Ok();
       case "Assessed" ->
           new Assessed(
@@ -149,7 +152,7 @@ public final class MessageCodec {
                   violationsOf(message), constant(PasswordStrength.class, message, "strength")));
       case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
       case "PolicyRefused" -> policyRefused(message);
-      case "SessionLive" -> new SessionLive(expiresIn(message));
+      case "SessionLive" -> new SessionLive(millis(message, "expiresInMillis"));
       case "SessionEnded" ->
           new SessionEnded(constant(SessionEndedReason.class, message, "reason"));
       case ERROR -> new ErrorResponse(constant(ErrorCode.class, message, "code"));
@@ -180,19 +183,43 @@ public final class MessageCodec {
    * "there is no expiry" is one it does.
    */
   private static ObjectNode sessionLive(SessionLive live) {
-    ObjectNode message = message("SessionLive");
-    live.expiresIn()
-        .ifPresentOrElse(
-            expiresIn -> message.put("expiresInMillis", expiresIn.toMillis()),
-            () -> message.putNull("expiresInMillis"));
+    return millis(message("SessionLive"), "expiresInMillis", live.expiresIn());
+  }
+
+  /** As {@link #sessionLive}: a refusal that is no Lockout says so rather than staying silent. */
+  private static ObjectNode denied(Denied denied) {
+    return millis(
+        message("Denied").put("reason", denied.reason().name()),
+        "lockedForMillis",
+        denied.lockedFor());
+  }
+
+  /**
+   * Reads a refusal, and refuses one that says how long it lasts without being a Lockout — or that
+   * is a Lockout and does not. The pairing is the record's own rule, and a message that breaks it
+   * is not one this build reads.
+   */
+  private static Response denied(ObjectNode message) {
+    DeniedReason reason = constant(DeniedReason.class, message, "reason");
+    Optional<Duration> lockedFor = millis(message, "lockedForMillis");
+    try {
+      return new Denied(reason, lockedFor);
+    } catch (IllegalArgumentException e) {
+      throw new MalformedMessageException("Not a refusal this build reads: " + reason, e);
+    }
+  }
+
+  private static ObjectNode millis(ObjectNode message, String field, Optional<Duration> duration) {
+    duration.ifPresentOrElse(
+        present -> message.put(field, present.toMillis()), () -> message.putNull(field));
     return message;
   }
 
-  private static Optional<Duration> expiresIn(ObjectNode message) {
-    JsonNode value = message.get("expiresInMillis");
+  private static Optional<Duration> millis(ObjectNode message, String field) {
+    JsonNode value = message.get(field);
     if (value == null || !(value.isNull() || value.isIntegralNumber())) {
       throw new MalformedMessageException(
-          "The expiresInMillis field is missing or is neither a whole number nor null");
+          "The " + field + " field is missing or is neither a whole number nor null");
     }
     return value.isNull() ? Optional.empty() : Optional.of(Duration.ofMillis(value.longValue()));
   }

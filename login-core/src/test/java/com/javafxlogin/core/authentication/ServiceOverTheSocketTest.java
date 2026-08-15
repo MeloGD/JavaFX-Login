@@ -220,7 +220,7 @@ class ServiceOverTheSocketTest {
 
       Response refused = authenticate(second, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR);
 
-      assertEquals(new Denied(DeniedReason.SESSION_ALREADY_LIVE), refused);
+      assertEquals(Denied.because(DeniedReason.SESSION_ALREADY_LIVE), refused);
       assertInstanceOf(SessionLive.class, first.send(new AskIfSessionIsLive(granted.token())));
     }
   }

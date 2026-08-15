@@ -3,6 +3,7 @@ package com.javafxlogin.core.store;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.javafxlogin.core.account.LockoutPolicy;
 import com.javafxlogin.core.session.InactivityPeriod;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -23,6 +24,33 @@ class ConfigurationTest {
   void aFreshStoreExpiresSessionsAfterTheDefaultPeriod() {
     try (CredentialStore store = openStore()) {
       assertEquals(InactivityPeriod.DEFAULT, store.inactivityPeriod());
+    }
+  }
+
+  /** The values V004 writes, and the numbers this project says a deployment gets. */
+  @Test
+  void aFreshStoreLocksAnAccountOutAfterFiveFailuresForAQuarterOfAnHour() {
+    try (CredentialStore store = openStore()) {
+      assertEquals(new LockoutPolicy(5, Duration.ofMinutes(15)), store.lockoutPolicy());
+    }
+  }
+
+  /** A store somebody edited by hand is refused rather than read as "never locks anyone out". */
+  @Test
+  void aLockoutPolicyThatIsNotOneIsNotGuessedAt() {
+    try (CredentialStore store = openStore()) {
+      execute("UPDATE configuration SET value = 'a few' WHERE name = 'lockout.failures_that_lock'");
+
+      assertThrows(CredentialStoreException.class, store::lockoutPolicy);
+    }
+  }
+
+  @Test
+  void aLockoutThatLastsNoTimeIsNotAPolicyEither() {
+    try (CredentialStore store = openStore()) {
+      execute("UPDATE configuration SET value = 'PT0S' WHERE name = 'lockout.lasts_for'");
+
+      assertThrows(CredentialStoreException.class, store::lockoutPolicy);
     }
   }
 

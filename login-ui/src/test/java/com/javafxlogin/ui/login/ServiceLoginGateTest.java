@@ -58,6 +58,9 @@ class ServiceLoginGateTest {
 
   private static final MachineAdministrators NOBODY = peer -> false;
 
+  /** What V004 writes, which is what a store this suite creates is configured with. */
+  private static final int FAILURES_THAT_LOCK = 5;
+
   private static final String OPERATOR = "finch.mercer";
   private static final String OPERATOR_PASSWORD = "Another-Horse-2";
   private static final String ADMINISTRATOR = "wren.holloway";
@@ -94,14 +97,14 @@ class ServiceLoginGateTest {
   void refusesAWrongPassword() {
     Admission admission = gate().admit(OPERATOR, "Wrong-Horse-9".toCharArray());
 
-    assertEquals(new NotAdmitted(DeniedReason.AUTH_FAILED), admission);
+    assertEquals(NotAdmitted.because(DeniedReason.AUTH_FAILED), admission);
   }
 
   @Test
   void refusesAnAccountThatDoesNotExist() {
     Admission admission = gate().admit("nobody.here", OPERATOR_PASSWORD.toCharArray());
 
-    assertEquals(new NotAdmitted(DeniedReason.AUTH_FAILED), admission);
+    assertEquals(NotAdmitted.because(DeniedReason.AUTH_FAILED), admission);
   }
 
   /**
@@ -127,6 +130,25 @@ class ServiceLoginGateTest {
         new SessionOver(SessionEndedReason.NO_SUCH_SESSION), gate.stillLive(session));
   }
 
+  /**
+   * Stories 40 and 43 across the socket: the refusal that locks an Account comes back saying so,
+   * and saying how long — the number the window puts in front of a person is the service's own.
+   */
+  @Test
+  void carriesALockoutBackWithTheWaitTheServiceDecided() {
+    LoginGate gate = gate();
+    for (int attempt = 1; attempt < FAILURES_THAT_LOCK; attempt++) {
+      assertEquals(
+          NotAdmitted.because(DeniedReason.AUTH_FAILED),
+          gate.admit(OPERATOR, "Wrong-Horse-9".toCharArray()),
+          "attempt " + attempt + " should have been an ordinary refusal");
+    }
+
+    Admission admission = gate.admit(OPERATOR, "Wrong-Horse-9".toCharArray());
+
+    assertEquals(NotAdmitted.lockedFor(Duration.ofMinutes(15)), admission);
+  }
+
   /** Story 54, through the gate a shipped product runs behind: the machine holds one Session. */
   @Test
   void refusesASecondSessionAndSaysWhichRefusalItIs() {
@@ -134,7 +156,7 @@ class ServiceLoginGateTest {
 
     Admission admission = gate().admit(OPERATOR, OPERATOR_PASSWORD.toCharArray());
 
-    assertEquals(new NotAdmitted(DeniedReason.SESSION_ALREADY_LIVE), admission);
+    assertEquals(NotAdmitted.because(DeniedReason.SESSION_ALREADY_LIVE), admission);
   }
 
   /**
@@ -149,7 +171,7 @@ class ServiceLoginGateTest {
     Admission admission = gate().admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
 
     assertEquals(
-        new NotAdmitted(DeniedReason.AUTH_FAILED),
+        NotAdmitted.because(DeniedReason.AUTH_FAILED),
         admission,
         "the Administrator should not reach the ProtectedFeature");
   }

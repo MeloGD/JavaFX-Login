@@ -68,7 +68,7 @@ final class ServiceLoginGate implements LoginGate {
     Response response = ask(new Authenticate(accountName, password, Role.OPERATOR));
     return switch (response) {
       case Granted granted -> new Admitted(new Session(granted.token()));
-      case Denied denied -> new NotAdmitted(denied.reason());
+      case Denied denied -> new NotAdmitted(denied.reason(), denied.lockedFor());
       // A readable answer that does not answer this question — a store the service cannot open,
       // say. It is not a refusal, and showing it as one would send the person to retype a
       // password that was never the problem.
@@ -144,10 +144,12 @@ final class ServiceLoginGate implements LoginGate {
       case STORE_UNAVAILABLE ->
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach its CredentialStore");
-      // Answered to a request made from an Administrator's Session, which the first run is not:
-      // it carries no Session at all, being what creates the Account that can hold one. Reaching
-      // here means the service answered a question nobody asked.
-      case NOT_ADMINISTRATOR -> throw unexpected("an attempt to create the Administrator", error);
+      // Both are answered to a request made from an Administrator's Session about an Account that
+      // already exists, which the first run is neither: it carries no Session at all, being what
+      // creates the Account that can hold one, and it names no Account but the one it is making.
+      // Reaching here means the service answered a question nobody asked.
+      case NOT_ADMINISTRATOR, NO_SUCH_ACCOUNT ->
+          throw unexpected("an attempt to create the Administrator", error);
     };
   }
 

@@ -38,6 +38,7 @@ final class FakeLoginGate implements LoginGate {
   private volatile boolean reachable = true;
   private volatile boolean firstRunNeeded;
   private volatile boolean aSessionIsAlreadyLive;
+  private volatile Duration lockedFor;
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
 
   /** What the service says about a Session from now on, until a test says otherwise. */
@@ -63,6 +64,12 @@ final class FakeLoginGate implements LoginGate {
   /** A machine someone else is already working on, which is the one refusal that says so. */
   FakeLoginGate withASessionAlreadyLive() {
     aSessionIsAlreadyLive = true;
+    return this;
+  }
+
+  /** An Account the service says has failed too often, and how long it has left to wait. */
+  FakeLoginGate withAnAccountLockedFor(Duration remaining) {
+    lockedFor = remaining;
     return this;
   }
 
@@ -120,10 +127,13 @@ final class FakeLoginGate implements LoginGate {
       throw new ServiceUnreachableException("There is no AuthenticationService in this test");
     }
     if (aSessionIsAlreadyLive) {
-      return new NotAdmitted(DeniedReason.SESSION_ALREADY_LIVE);
+      return NotAdmitted.because(DeniedReason.SESSION_ALREADY_LIVE);
+    }
+    if (lockedFor != null) {
+      return NotAdmitted.lockedFor(lockedFor);
     }
     if (!Objects.equals(admissible.get(accountName), offered)) {
-      return new NotAdmitted(DeniedReason.AUTH_FAILED);
+      return NotAdmitted.because(DeniedReason.AUTH_FAILED);
     }
     return new Admitted(new Session(SessionToken.generate(new SecureRandom())));
   }

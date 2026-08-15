@@ -26,6 +26,14 @@ public enum ErrorCode {
   NOT_ADMINISTRATOR,
 
   /**
+   * A request named an Account that does not exist. Answered plainly, and only to an Administrator
+   * whose Session the service granted: an Administrator who has just cleared a Lockout for a
+   * mistyped name would otherwise be told it worked, and the colleague they were trying to release
+   * would stay locked out.
+   */
+  NO_SUCH_ACCOUNT,
+
+  /**
    * The CredentialStore could not be read or written. Says nothing about why: the caller can only
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.

@@ -189,7 +189,7 @@ class SessionLifecycleTest {
             harness.anotherConnection(),
             new Authenticate(OPERATOR, OPERATOR_PASSWORD.toCharArray(), Role.OPERATOR));
 
-    assertEquals(new Denied(DeniedReason.SESSION_ALREADY_LIVE), response);
+    assertEquals(Denied.because(DeniedReason.SESSION_ALREADY_LIVE), response);
   }
 
   /**

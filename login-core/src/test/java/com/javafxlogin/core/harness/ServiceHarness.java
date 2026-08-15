@@ -13,6 +13,11 @@ import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.store.CredentialStore;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -114,6 +119,34 @@ public final class ServiceHarness implements AutoCloseable {
   public void inactivityPeriodIs(InactivityPeriod period) {
     try (CredentialStore store = CredentialStore.openOrCreate(storeFile())) {
       store.setInactivityPeriod(period);
+    }
+  }
+
+  /**
+   * Configures the LockoutPolicy, by writing the settings where the migration wrote their defaults.
+   *
+   * <p>It goes round the store's own API because nothing in this build changes these two: the
+   * migration writes what a deployment gets, and the screen an Administrator would raise or lower
+   * them from is the administration panel's ticket. A test that needs another value therefore edits
+   * the store the way that ticket eventually will, and the service reads them again on every
+   * decision, so this takes effect without a restart.
+   */
+  public void lockoutPolicyIs(int failuresThatLock, Duration lastsFor) {
+    configure("lockout.failures_that_lock", Integer.toString(failuresThatLock));
+    configure("lockout.lasts_for", lastsFor.toString());
+  }
+
+  private void configure(String setting, String value) {
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile());
+        PreparedStatement statement =
+            connection.prepareStatement("UPDATE configuration SET value = ? WHERE name = ?")) {
+      statement.setString(1, value);
+      statement.setString(2, setting);
+      if (statement.executeUpdate() != 1) {
+        throw new IllegalStateException("there is no setting named " + setting + " to configure");
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
     }
   }
 

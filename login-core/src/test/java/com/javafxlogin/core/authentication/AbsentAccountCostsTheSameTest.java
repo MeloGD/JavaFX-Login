@@ -8,6 +8,7 @@ import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +48,13 @@ class AbsentAccountCostsTheSameTest {
   void openServiceWithAnAdministrator() {
     harness = ServiceHarness.with(directory, MEASURABLE);
     harness.send(new Bootstrap(NAME, PASSWORD.toCharArray()));
+
+    // Out of the way of the measurement, rather than switched off — a Lockout is a refusal made
+    // before the Account has spent all its guesses, and this test is about what the branch before
+    // that costs. Left at five, the real Account would be locked halfway through the warm-up and
+    // every sample after it would be timing a refusal the absent name can never receive.
+    harness.lockoutPolicyIs(
+        WARMUP_ATTEMPTS + MEASURED_ATTEMPTS + 1, Duration.ofMinutes(15));
   }
 
   @AfterEach

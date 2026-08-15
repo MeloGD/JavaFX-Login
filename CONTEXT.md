@@ -159,5 +159,15 @@ _Avoid_: log line, audit entry, log record
 
 **Lockout**:
 The state of an Account that has failed authentication often enough to be
-temporarily refused. Lockout survives restarts of the AuthenticationService.
+temporarily refused. It is held in the CredentialStore rather than in memory, so
+it survives restarts of the AuthenticationService and cannot be cleared by
+waiting for one; only an Administrator, or the passing of its own time, ends it
+early. It slows someone guessing at the login screen and does nothing about a
+stolen hash, which is Argon2id's business.
 _Avoid_: ban, throttle, block
+
+**LockoutPolicy**:
+How many failed authentications in a row make a Lockout, and how long that
+Lockout lasts. Configuration, held beside the Accounts in the CredentialStore
+and read again on every decision, so that changing it changes what happens next.
+_Avoid_: retry limit, throttle settings, rate limit

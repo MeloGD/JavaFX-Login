@@ -23,7 +23,8 @@ public final class SchemaMigrations {
       List.of(
           "db/migration/V001__initial_schema.sql",
           "db/migration/V002__password_strength.sql",
-          "db/migration/V003__configuration.sql");
+          "db/migration/V003__configuration.sql",
+          "db/migration/V004__lockout.sql");
 
   private SchemaMigrations() {}
 
