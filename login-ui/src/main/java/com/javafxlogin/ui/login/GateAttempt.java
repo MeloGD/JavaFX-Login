@@ -9,10 +9,10 @@ import javafx.application.Platform;
  * One question put to the {@link LoginGate}, asked off the JavaFX application thread and answered
  * back on it.
  *
- * <p>Both of the gate's windows ask exactly one question and wait for exactly one answer, and both
- * wait on an Argon2id hash to be computed at the other end. A window frozen for that long looks
- * broken, so neither controller may ask on the thread that draws it — and having both of them
- * arrange that separately is how one of them ends up not doing it.
+ * <p>The gate's windows ask exactly one question and wait for exactly one answer, and the two that
+ * carry a password wait on an Argon2id hash to be computed at the other end. A window frozen for
+ * that long looks broken, so no controller may ask on the thread that draws it — and having each
+ * of them arrange that separately is how one of them ends up not doing it.
  *
  * <p>What is not an answer is worded here too, for the same reason: a service that cannot be
  * reached, and a defect below that produced no answer at all, mean the same thing to a person
@@ -30,10 +30,8 @@ final class GateAttempt {
   private GateAttempt() {}
 
   /**
-   * Asks {@code question} on a thread of its own and hands what comes back to {@code answered}, or
-   * a sentence to {@code unanswered}, on the JavaFX application thread.
+   * As {@link #make(String, Supplier, Consumer, Consumer)}, for a question carrying a password.
    *
-   * @param threadName what the attempt is called in a stack trace
    * @param password blanked once the attempt is over, however it ended
    */
   static <A> void make(
@@ -42,6 +40,27 @@ final class GateAttempt {
       Supplier<A> question,
       Consumer<A> answered,
       Consumer<String> unanswered) {
+    make(
+        threadName,
+        () -> {
+          try {
+            return question.get();
+          } finally {
+            Arrays.fill(password, '\0');
+          }
+        },
+        answered,
+        unanswered);
+  }
+
+  /**
+   * Asks {@code question} on a thread of its own and hands what comes back to {@code answered}, or
+   * a sentence to {@code unanswered}, on the JavaFX application thread.
+   *
+   * @param threadName what the attempt is called in a stack trace
+   */
+  static <A> void make(
+      String threadName, Supplier<A> question, Consumer<A> answered, Consumer<String> unanswered) {
     Thread.ofVirtual()
         .name(threadName)
         .start(
@@ -55,8 +74,6 @@ final class GateAttempt {
                 // A defect somewhere below rather than an answer. The window still has to come
                 // back: a person left facing dead controls cannot even try again.
                 Platform.runLater(() -> unanswered.accept(UNANSWERED));
-              } finally {
-                Arrays.fill(password, '\0');
               }
             });
   }

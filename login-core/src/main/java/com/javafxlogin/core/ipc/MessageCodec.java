@@ -12,11 +12,15 @@ import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
+import com.javafxlogin.core.session.InactivityPeriod;
+import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Turns the messages into JSON, and back.
@@ -74,6 +78,12 @@ public final class MessageCodec {
                   .put("accountName", assess.accountName())
                   .put("password", new String(assess.password()));
           case AskIfBootstrapNeeded ignored -> message("AskIfBootstrapNeeded");
+          case ReportActivity report -> carrying("ReportActivity", report.token());
+          case AskIfSessionIsLive ask -> carrying("AskIfSessionIsLive", ask.token());
+          case Logout logout -> carrying("Logout", logout.token());
+          case ChangeInactivityPeriod change ->
+              carrying("ChangeInactivityPeriod", change.token())
+                  .put("period", change.period().text());
         };
     return write(message);
   }
@@ -82,14 +92,14 @@ public final class MessageCodec {
   public static byte[] encode(Response response) {
     ObjectNode message =
         switch (response) {
-          case Granted granted ->
-              message("Granted")
-                  .put("token", Base64.getEncoder().encodeToString(granted.token().copyOfBytes()));
+          case Granted granted -> carrying("Granted", granted.token());
           case Denied denied -> message("Denied").put("reason", denied.reason().name());
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
           case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
           case PolicyRefused refused -> carrying("PolicyRefused", refused.violations());
+          case SessionLive live -> sessionLive(live);
+          case SessionEnded ended -> message("SessionEnded").put("reason", ended.reason().name());
           case ErrorResponse error -> message(ERROR).put("code", error.code().name());
         };
     return write(message);
@@ -113,6 +123,10 @@ public final class MessageCodec {
               constant(Role.class, message, "requestedRole"));
       case "Assess" -> new Assess(text(message, "accountName"), chars(message, "password"));
       case "AskIfBootstrapNeeded" -> new AskIfBootstrapNeeded();
+      case "ReportActivity" -> new ReportActivity(token(message));
+      case "AskIfSessionIsLive" -> new AskIfSessionIsLive(token(message));
+      case "Logout" -> new Logout(token(message));
+      case "ChangeInactivityPeriod" -> new ChangeInactivityPeriod(token(message), period(message));
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -135,6 +149,9 @@ public final class MessageCodec {
                   violationsOf(message), constant(PasswordStrength.class, message, "strength")));
       case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
       case "PolicyRefused" -> policyRefused(message);
+      case "SessionLive" -> new SessionLive(expiresIn(message));
+      case "SessionEnded" ->
+          new SessionEnded(constant(SessionEndedReason.class, message, "reason"));
       case ERROR -> new ErrorResponse(constant(ErrorCode.class, message, "code"));
       default -> throw new MalformedMessageException("Not a response this build reads: " + type);
     };
@@ -150,6 +167,42 @@ public final class MessageCodec {
     ObjectNode message = message(type);
     message.set("violations", violations(violations));
     return message;
+  }
+
+  /** Base64 rather than an array of numbers: a token is opaque, and stays one line of a frame. */
+  private static ObjectNode carrying(String type, SessionToken token) {
+    return message(type).put("token", Base64.getEncoder().encodeToString(token.copyOfBytes()));
+  }
+
+  /**
+   * Expiry switched off is written as an explicit {@code null} rather than by leaving the field
+   * out. A missing field is a message this codec does not read; a field that is present and says
+   * "there is no expiry" is one it does.
+   */
+  private static ObjectNode sessionLive(SessionLive live) {
+    ObjectNode message = message("SessionLive");
+    live.expiresIn()
+        .ifPresentOrElse(
+            expiresIn -> message.put("expiresInMillis", expiresIn.toMillis()),
+            () -> message.putNull("expiresInMillis"));
+    return message;
+  }
+
+  private static Optional<Duration> expiresIn(ObjectNode message) {
+    JsonNode value = message.get("expiresInMillis");
+    if (value == null || !(value.isNull() || value.isIntegralNumber())) {
+      throw new MalformedMessageException(
+          "The expiresInMillis field is missing or is neither a whole number nor null");
+    }
+    return value.isNull() ? Optional.empty() : Optional.of(Duration.ofMillis(value.longValue()));
+  }
+
+  private static InactivityPeriod period(ObjectNode message) {
+    try {
+      return InactivityPeriod.parse(text(message, "period"));
+    } catch (IllegalArgumentException e) {
+      throw new MalformedMessageException("Not an inactivity period this build reads", e);
+    }
   }
 
   private static Response policyRefused(ObjectNode message) {

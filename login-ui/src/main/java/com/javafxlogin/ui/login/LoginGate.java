@@ -2,7 +2,6 @@ package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.session.Session;
 import java.nio.file.Path;
-import java.util.Optional;
 import java.util.function.Function;
 import javafx.scene.Parent;
 import javafx.stage.Stage;
@@ -48,13 +47,49 @@ public interface LoginGate {
    * <p>Blocks: verifying a password is deliberately slow, so this must not be called on the
    * JavaFX application thread.
    *
-   * @return the Session, or empty if access was refused. The refusal carries no reason, because
-   *     the service does not give one — a reason a client could read is a reason an attacker could
-   *     read.
+   * @return the Session, or the refusal the service made. A refused authentication says only that
+   *     it failed — a reason a client could read is a reason an attacker could read — and the one
+   *     refusal that says more says nothing about any Account.
    * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all,
    *     which is not a refusal and must not be shown as one
    */
-  Optional<Session> admit(String accountName, char[] password);
+  Admission admit(String accountName, char[] password);
+
+  /**
+   * Reports that the Operator did something, which is what starts the Session's countdown again.
+   *
+   * <p>This is the SessionGuard's whole job. It reports; it does not decide, and the answer that
+   * comes back may well be that the Session was over before the report arrived.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  SessionStatus reportActivity(Session session);
+
+  /**
+   * Asks whether a Session is still live, and how long it has left.
+   *
+   * <p>Asking is not activity: this is how the guard finds out that the Session it is watching has
+   * run out, and it must not be what keeps it alive.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  SessionStatus stillLive(Session session);
+
+  /**
+   * Ends a Session because the Operator asked to.
+   *
+   * <p>A Session that had already ended is not an error here: either way it is over, which is all
+   * the caller wanted.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  void logOut(Session session);
 
   /**
    * Whether this installation is still waiting for its single Administrator, which is what decides
@@ -86,6 +121,11 @@ public interface LoginGate {
    * Opens whichever window this installation needs on {@code stage} — the first-run wizard while
    * there is no Administrator, the login screen once there is — and, once an Operator is admitted,
    * closes it and opens the view {@code protectedFeature} builds on a stage of its own.
+   *
+   * <p>That stage is the gate's, not the host product's. It carries the view it was handed and one
+   * control of the gate's own above it, which is where an Operator logs out; and it closes, handing
+   * the person back to the login screen, when the AuthenticationService says the Session is over. A
+   * host product writes none of that and cannot forget to.
    *
    * <p>This is the whole of the flow, and it is the same whichever gate is behind it, which is why
    * it is given rather than left to each implementation to get right.

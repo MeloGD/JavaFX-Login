@@ -91,14 +91,24 @@ _Avoid_: password checker, credential validator, auth helper
 
 **Session**:
 The period during which an authenticated Operator may reach the ProtectedFeature.
-A Session ends on logout, on inactivity, or when the client that owns it
-disappears.
+A Session ends on logout, on inactivity, when the machine's clock stops agreeing
+with the clock that cannot be moved, or when the client that owns it disappears.
+A machine holds at most one at a time: a second authentication while one is live
+is refused, and the live one is kept.
 _Avoid_: login, connection, sign-in
 
 **SessionToken**:
 The opaque value that identifies a Session to the AuthenticationService. It never
 outlives the process that issued it.
 _Avoid_: session id, ticket, cookie
+
+**InactivityPeriod**:
+How long a Session may go without Operator activity before the
+AuthenticationService ends it, or that expiry is switched off — which is what a
+kiosk deployment is. It is configuration, owned by the Administrator and held in
+the CredentialStore, and it is read again on every decision rather than
+remembered, so changing it changes what happens next.
+_Avoid_: timeout, idle timeout, session length
 
 **LoginGate**:
 The entry point a host product calls to obtain a Session. It is the only part of
@@ -143,8 +153,8 @@ _Avoid_: host key, system key
 
 **AuthenticationEvent**:
 A recorded fact about access: an authentication attempt, a lockout, an Account
-change, a configuration change, or an export. Events are written and never read
-back by the application.
+change, a configuration change, an export, or a Session ended because the
+machine's clock moved. Events are written and never read back by the application.
 _Avoid_: log line, audit entry, log record
 
 **Lockout**:

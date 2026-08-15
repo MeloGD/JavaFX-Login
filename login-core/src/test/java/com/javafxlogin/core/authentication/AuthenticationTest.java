@@ -14,6 +14,7 @@ import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Response;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -62,9 +63,15 @@ class AuthenticationTest {
     assertEquals(16, granted.token().copyOfBytes().length);
   }
 
+  /**
+   * The logout is what makes the second attempt possible at all: the machine holds one Session, and
+   * a second authentication while one is live is refused. Ending it is how a suite gets to ask this
+   * question, and what happens when it does not is {@link SessionLifecycleTest}'s subject.
+   */
   @Test
   void everyAuthenticationIssuesAFreshToken() {
     Granted first = (Granted) authenticate(NAME, PASSWORD);
+    harness.send(new Logout(first.token()));
     Granted second = (Granted) authenticate(NAME, PASSWORD);
 
     assertFalse(Arrays.equals(first.token().copyOfBytes(), second.token().copyOfBytes()));

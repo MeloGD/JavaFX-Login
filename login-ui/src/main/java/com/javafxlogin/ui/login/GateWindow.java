@@ -13,8 +13,9 @@ import javafx.stage.Stage;
  *
  * <p>Loading and showing are two steps rather than one so that a window is wired to whatever
  * answers for it before a person can click anything in it. There is only ever one of these on a
- * stage at a time: the wizard is replaced by the login screen, and the login screen is replaced by
- * nothing — the ProtectedFeature opens on a stage of its own.
+ * stage at a time: the wizard is replaced by the login screen on the stage they share, and the
+ * window an admitted Operator works in takes a stage of its own — which is what lets the login
+ * screen be put back on the first one when their Session ends.
  */
 final class GateWindow {
 

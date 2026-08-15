@@ -34,6 +34,16 @@
   -fx-text-fill: #4a4a55;
 }
 
+/*
+ * The bar the gate puts above the ProtectedFeature. Every rule in this file is scoped, so that the
+ * stylesheet the gate's own windows need cannot restyle the view a host product handed over.
+ */
+.session-bar {
+  -fx-background-color: #f1f1f5;
+  -fx-border-color: transparent transparent #dcdce4 transparent;
+  -fx-font-family: "sans-serif";
+}
+
 /* The password cannot be recovered. Whatever a host product does to this stylesheet, that has to
    stay legible: it is the one thing on the screen that cannot be undone afterwards. */
 .login .warning {

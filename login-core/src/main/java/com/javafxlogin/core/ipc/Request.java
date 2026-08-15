@@ -7,4 +7,12 @@ package com.javafxlogin.core.ipc;
  * has not agreed to answer. Requests carry their password material as {@code char[]} so that it
  * never becomes an interned String, and every implementation redacts itself when printed.
  */
-public sealed interface Request permits Assess, AskIfBootstrapNeeded, Authenticate, Bootstrap {}
+public sealed interface Request
+    permits Assess,
+        AskIfBootstrapNeeded,
+        AskIfSessionIsLive,
+        Authenticate,
+        Bootstrap,
+        ChangeInactivityPeriod,
+        Logout,
+        ReportActivity {}

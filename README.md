@@ -28,6 +28,13 @@ was handed on a stage of its own. It never learns what that view is. The `protec
 module is a working example of exactly this, and nothing more — including the launcher class that
 starting a JavaFX application from the classpath requires.
 
+That stage belongs to the gate. Above the view it was handed it puts one control of its own, where
+an `Operator` logs out, and it closes and returns the person to the login screen when the
+`AuthenticationService` says the `Session` is over — after a period without activity, or because
+the machine's clock moved. A host product writes none of that: the view it hands over is untouched,
+and the stylesheet the gate's own windows use is scoped so that it cannot restyle it. See
+ADR-0009 for how expiry is decided, and `CONTEXT.md` for what an `InactivityPeriod` is.
+
 ## Running the pair by hand
 
 The service and the application are two processes that agree on a socket path:

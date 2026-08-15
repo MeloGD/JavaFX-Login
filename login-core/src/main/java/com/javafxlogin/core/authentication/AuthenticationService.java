@@ -2,27 +2,40 @@ package com.javafxlogin.core.authentication;
 
 import com.javafxlogin.core.account.Account;
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.audit.AuthenticationEvent;
+import com.javafxlogin.core.audit.AuthenticationEventLog;
+import com.javafxlogin.core.audit.AuthenticationEventType;
+import com.javafxlogin.core.audit.FileAuthenticationEventLog;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
+import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Assess;
 import com.javafxlogin.core.ipc.Assessed;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
+import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
 import com.javafxlogin.core.ipc.ConnectionHandle;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.ipc.SessionEnded;
+import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.machine.MachineAdministrators;
 import com.javafxlogin.core.policy.AccountPolicy;
 import com.javafxlogin.core.policy.Assessment;
+import com.javafxlogin.core.session.InactivityPeriod;
+import com.javafxlogin.core.session.SessionClock;
+import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import com.javafxlogin.core.store.CredentialStore;
 import com.javafxlogin.core.store.CredentialStoreException;
@@ -31,6 +44,7 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * The privileged process: it owns the CredentialStore and is the only party that can verify a
@@ -53,21 +67,35 @@ public final class AuthenticationService implements AutoCloseable {
    */
   private static final String DEPLOYMENT_BLOCKED_NAMES = "blocked-account-names.txt";
 
+  /**
+   * Where AuthenticationEvents are written, beside the store for the same reason: only the account
+   * this service runs as may write in that directory.
+   */
+  private static final String EVENT_LOG = "authentication-events.csv";
+
   private final CredentialStore store;
   private final Authenticator authenticator;
   private final AccountPolicy policy;
   private final MachineAdministrators administrators;
+  private final Sessions sessions;
+  private final SessionClock clock;
+  private final AuthenticationEventLog events;
   private final SecureRandom random;
 
   private AuthenticationService(
       CredentialStore store,
       Authenticator authenticator,
       AccountPolicy policy,
-      MachineAdministrators administrators) {
+      MachineAdministrators administrators,
+      SessionClock clock,
+      AuthenticationEventLog events) {
     this.store = store;
     this.authenticator = authenticator;
     this.policy = policy;
     this.administrators = administrators;
+    this.sessions = new Sessions(clock);
+    this.clock = clock;
+    this.events = events;
     this.random = new SecureRandom();
   }
 
@@ -101,9 +129,26 @@ public final class AuthenticationService implements AutoCloseable {
    */
   public static AuthenticationService open(
       Path storeFile, Argon2Parameters parameters, MachineAdministrators administrators) {
+    return open(storeFile, parameters, administrators, SessionClock.system());
+  }
+
+  /**
+   * As {@link #open(Path, Argon2Parameters, MachineAdministrators)}, with the clocks a Session is
+   * timed against named explicitly.
+   *
+   * <p>A suite cannot wait out an inactivity period, move the machine's clock, or suspend the
+   * machine, and one that tried would be testing the operating system rather than these rules.
+   * Naming the clocks here is what lets every one of them be asserted in milliseconds.
+   */
+  public static AuthenticationService open(
+      Path storeFile,
+      Argon2Parameters parameters,
+      MachineAdministrators administrators,
+      SessionClock clock) {
     Objects.requireNonNull(storeFile, "storeFile");
     Objects.requireNonNull(parameters, "parameters");
     Objects.requireNonNull(administrators, "administrators");
+    Objects.requireNonNull(clock, "clock");
 
     CredentialStore store = CredentialStore.openOrCreate(storeFile);
     try {
@@ -111,7 +156,9 @@ public final class AuthenticationService implements AutoCloseable {
           store,
           new Authenticator(parameters),
           AccountPolicy.bundledExtendedBy(storeFile.resolveSibling(DEPLOYMENT_BLOCKED_NAMES)),
-          administrators);
+          administrators,
+          clock,
+          new FileAuthenticationEventLog(storeFile.resolveSibling(EVENT_LOG)));
     } catch (RuntimeException e) {
       store.close();
       throw e;
@@ -138,8 +185,12 @@ public final class AuthenticationService implements AutoCloseable {
       return switch (request) {
         case Bootstrap bootstrap -> bootstrap(bootstrap, connection);
         case AskIfBootstrapNeeded ignored -> new BootstrapNeeded(!store.hasAdministrator());
-        case Authenticate authenticate -> authenticate(authenticate);
+        case Authenticate authenticate -> authenticate(authenticate, connection);
         case Assess assess -> assess(assess);
+        case ReportActivity report -> reportActivity(report, connection);
+        case AskIfSessionIsLive ask -> askIfSessionIsLive(ask, connection);
+        case Logout logout -> logOut(logout, connection);
+        case ChangeInactivityPeriod change -> changeInactivityPeriod(change, connection);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -188,7 +239,15 @@ public final class AuthenticationService implements AutoCloseable {
     return new Assessed(policy.assess(request.accountName(), request.password()));
   }
 
-  private Response authenticate(Authenticate request) {
+  private Response authenticate(Authenticate request, ConnectionHandle connection) {
+    // The machine already has someone on it. Refused before any Account is looked at, so this
+    // costs no Argon2id work and reveals nothing about any Account: a live Session is already
+    // visible to anyone who can see the screen it is open on. The live one is kept, so a second
+    // person typing a password cannot throw out the person working.
+    if (theMachineIsBusy()) {
+      return new Denied(DeniedReason.SESSION_ALREADY_LIVE);
+    }
+
     Optional<Account> account = store.findByName(request.accountName());
 
     // The absent branch spends the same Argon2id work as the present one, so a stopwatch at the
@@ -212,7 +271,124 @@ public final class AuthenticationService implements AutoCloseable {
     if (account.get().role() != request.requestedRole()) {
       return new Denied(DeniedReason.AUTH_FAILED);
     }
-    return new Granted(SessionToken.generate(random));
+
+    SessionToken token = SessionToken.generate(random);
+    sessions.open(token, account.get().name(), account.get().role(), connection);
+    return new Granted(token);
+  }
+
+  /** Whether a Session is live, once one that has run out has been ended. */
+  private boolean theMachineIsBusy() {
+    expireAnySessionThatIsDue(store.inactivityPeriod());
+    return sessions.anyLive();
+  }
+
+  /** The Operator did something: the countdown starts again. */
+  private Response reportActivity(ReportActivity request, ConnectionHandle connection) {
+    InactivityPeriod period = theConfiguredPeriod();
+    return answerFor(sessions.reportActivity(request.token(), connection, period));
+  }
+
+  /** Asking is not activity: the countdown is read and left where it was. */
+  private Response askIfSessionIsLive(AskIfSessionIsLive request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(), connection, live -> new SessionLive(live.expiresIn()));
+  }
+
+  /**
+   * Ends a Session because the Operator said so. A Session that had already ended is reported as
+   * such rather than answered with a cheerful {@link Ok}: the person is owed the difference between
+   * having logged out and having been logged out.
+   */
+  private Response logOut(Logout request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> {
+          sessions.end(request.token(), connection);
+          return new Ok();
+        });
+  }
+
+  /**
+   * Changes how long a Session may idle, for this deployment and from now on.
+   *
+   * <p>The Role checked is the one the Session was granted in, which the service decided when it
+   * verified a password. A client asking on behalf of a Session that is not an Administrator's is
+   * refused here, in the privileged process, and a patched one is refused identically.
+   */
+  private Response changeInactivityPeriod(
+      ChangeInactivityPeriod request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(), connection, live -> changeFor(live, request.period()));
+  }
+
+  /**
+   * Answers a request that only a live Session may make, or says why there is not one.
+   *
+   * <p>Every such request is the same three steps — expire whatever the clocks have finished with,
+   * look the token up, and refuse it if what comes back is not a Session — and only the fourth step
+   * differs. Asking is not activity, so none of them touches the countdown.
+   */
+  private Response onTheSessionNamedBy(
+      SessionToken token,
+      ConnectionHandle connection,
+      Function<SessionOutcome.Live, Response> then) {
+    InactivityPeriod period = theConfiguredPeriod();
+    return answerFor(sessions.statusOf(token, connection, period), then);
+  }
+
+  private Response changeFor(SessionOutcome.Live live, InactivityPeriod period) {
+    if (live.role() != Role.ADMINISTRATOR) {
+      return new ErrorResponse(ErrorCode.NOT_ADMINISTRATOR);
+    }
+    store.setInactivityPeriod(period);
+    record(AuthenticationEventType.CONFIGURATION_CHANGED, live.accountName());
+    return new Ok();
+  }
+
+  /**
+   * How long a Session may idle here, with any Session the clocks have finished with already ended.
+   *
+   * <p>Every request that touches a Session starts here, which is what makes expiry the service's
+   * decision rather than a client's. The period is read from the store each time rather than
+   * remembered, so that an Administrator changing it changes what happens next.
+   */
+  private InactivityPeriod theConfiguredPeriod() {
+    InactivityPeriod period = store.inactivityPeriod();
+    expireAnySessionThatIsDue(period);
+    return period;
+  }
+
+  private void expireAnySessionThatIsDue(InactivityPeriod period) {
+    sessions.expireIfDue(period).ifPresent(this::recordIfTheClockJumped);
+  }
+
+  /**
+   * A Session ending because someone walked away is ordinary and is not recorded. One ending
+   * because the machine's clock stopped agreeing with the clock that cannot be moved is not
+   * ordinary, and story 53 asks for it to be neither useful nor invisible.
+   */
+  private void recordIfTheClockJumped(ExpiredSession expired) {
+    if (expired.reason() == SessionEndedReason.CLOCK_JUMPED) {
+      record(AuthenticationEventType.SESSION_ENDED_BY_A_CLOCK_JUMP, expired.accountName());
+    }
+  }
+
+  private void record(AuthenticationEventType type, String subject) {
+    events.record(new AuthenticationEvent(clock.wallTime(), type, subject));
+  }
+
+  private static Response answerFor(SessionOutcome outcome) {
+    return answerFor(outcome, live -> new SessionLive(live.expiresIn()));
+  }
+
+  private static Response answerFor(
+      SessionOutcome outcome, Function<SessionOutcome.Live, Response> whenItIsLive) {
+    return switch (outcome) {
+      case SessionOutcome.Live live -> whenItIsLive.apply(live);
+      case SessionOutcome.Ended ended -> new SessionEnded(ended.reason());
+    };
   }
 
   /** Synchronised with {@link #handle}, so that shutting down waits for the answer in flight. */

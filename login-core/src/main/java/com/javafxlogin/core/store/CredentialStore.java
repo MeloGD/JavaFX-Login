@@ -3,12 +3,9 @@ package com.javafxlogin.core.store;
 import com.javafxlogin.core.account.Account;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.session.InactivityPeriod;
 import java.io.IOException;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermission;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -19,7 +16,6 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * The record of every Account, its password hash and the configuration of the application.
@@ -31,11 +27,8 @@ import java.util.Set;
  */
 public final class CredentialStore implements AutoCloseable {
 
-  private static final Set<PosixFilePermission> OWNER_ONLY =
-      PosixFilePermissions.fromString("rw-------");
-
-  private static final Set<PosixFilePermission> OWNER_ONLY_DIRECTORY =
-      PosixFilePermissions.fromString("rwx------");
+  /** The configured setting's name, as V003 writes it. */
+  private static final String INACTIVITY_PERIOD = "session.inactivity_period";
 
   private final Path file;
   private final Connection connection;
@@ -126,6 +119,48 @@ public final class CredentialStore implements AutoCloseable {
     }
   }
 
+  /**
+   * How long a Session may go without Operator activity, as this deployment has it configured.
+   *
+   * <p>Read rather than remembered, and read again every time it is needed, so that an
+   * Administrator changing it changes what happens next rather than what happens after a restart.
+   *
+   * @throws CredentialStoreException if the setting is missing or is not a period this build wrote
+   *     — a store edited by hand is not guessed at
+   */
+  public InactivityPeriod inactivityPeriod() {
+    try (PreparedStatement statement =
+        connection.prepareStatement("SELECT value FROM configuration WHERE name = ?")) {
+      statement.setString(1, INACTIVITY_PERIOD);
+      try (ResultSet results = statement.executeQuery()) {
+        if (!results.next()) {
+          throw new CredentialStoreException(
+              "there is no " + INACTIVITY_PERIOD + " in " + file, null);
+        }
+        return InactivityPeriod.parse(results.getString("value"));
+      }
+    } catch (SQLException | IllegalArgumentException e) {
+      throw new CredentialStoreException(
+          "could not read how long a Session may idle in " + file, e);
+    }
+  }
+
+  /** Records what an Administrator configured. */
+  public void setInactivityPeriod(InactivityPeriod period) {
+    Objects.requireNonNull(period, "period");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO configuration (name, value) VALUES (?, ?)"
+                + " ON CONFLICT (name) DO UPDATE SET value = excluded.value")) {
+      statement.setString(1, INACTIVITY_PERIOD);
+      statement.setString(2, period.text());
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException(
+          "could not record how long a Session may idle in " + file, e);
+    }
+  }
+
   @Override
   public void close() {
     try {
@@ -156,52 +191,11 @@ public final class CredentialStore implements AutoCloseable {
    * existing one. Creating it first matters: a file SQLite creates itself inherits the umask.
    */
   private static void createOwnerOnly(Path file) {
-    boolean posix = FileSystems.getDefault().supportedFileAttributeViews().contains("posix");
     try {
-      Path directory = file.toAbsolutePath().getParent();
-      if (directory != null && !Files.exists(directory)) {
-        if (posix) {
-          Files.createDirectories(
-              directory, PosixFilePermissions.asFileAttribute(OWNER_ONLY_DIRECTORY));
-        } else {
-          Files.createDirectories(directory);
-        }
-      }
-      if (!Files.exists(file)) {
-        if (posix) {
-          Files.createFile(file, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
-        } else {
-          Files.createFile(file);
-        }
-      }
-      if (posix) {
-        Files.setPosixFilePermissions(file, OWNER_ONLY);
-      } else {
-        restrictWithoutPosix(file);
-      }
+      OwnerOnlyFiles.createOrReassert(file);
     } catch (IOException e) {
       throw new CredentialStoreException("could not create the CredentialStore at " + file, e);
     }
-  }
-
-  /**
-   * Best-effort narrowing where POSIX modes do not exist.
-   *
-   * <p>It deliberately does not fail when the platform refuses these calls, because it is not what
-   * protects the store there: on Windows the store lives inside a directory the installer has
-   * already restricted by ACL, and {@code setReadable(false, false)} is documented to return false
-   * rather than take effect. Failing here would stop the service starting at all instead of
-   * starting it with a weaker mode.
-   *
-   * <p>Designed, unbuilt and unverified: no Windows machine exists for this project yet, and none
-   * of this may be reported as working on one.
-   */
-  private static void restrictWithoutPosix(Path file) {
-    java.io.File asFile = file.toFile();
-    asFile.setReadable(false, false);
-    asFile.setWritable(false, false);
-    asFile.setReadable(true, true);
-    asFile.setWritable(true, true);
   }
 
   /**

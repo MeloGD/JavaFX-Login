@@ -131,6 +131,25 @@ class LoginWindowTest extends ApplicationTest {
   }
 
   /**
+   * Story 54 as a person meets it: the machine holds one Session, and being told to retype a
+   * password would send someone to fix something that was never wrong. The refusal says nothing
+   * about any Account — a Session being open is already visible to whoever can see the screen.
+   */
+  @Test
+  void aSessionAlreadyOpenIsNotShownAsAWrongPassword() {
+    attempt(OPERATOR, "Wrong-Horse-9");
+    String refusal = awaitAMessage();
+
+    gate.withASessionAlreadyLive();
+    attempt(OPERATOR, PASSWORD);
+    String alreadyLive = awaitAMessage(refusal);
+
+    assertNotEquals(refusal, alreadyLive);
+    assertFalse(alreadyLive.contains(OPERATOR), () -> "named it: " + alreadyLive);
+    assertEquals(0, featuresBuilt.get(), "nothing should have opened");
+  }
+
+  /**
    * CONTEXT.md: the LoginGate is what a host product calls to <em>obtain a Session</em>. This one
    * has no use for it yet, and it is still handed the Session that admitting the Operator produced
    * rather than being told only that something happened.

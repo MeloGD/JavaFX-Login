@@ -2,23 +2,27 @@ package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
+import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.MalformedMessageException;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
+import com.javafxlogin.core.ipc.SessionEnded;
+import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.session.Session;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * The gate a shipped product runs behind: it asks the AuthenticationService and believes nothing
@@ -43,7 +47,9 @@ import java.util.Optional;
  * attempts were made over, and closing it is what ends the Session. A client that dies has the
  * kernel do that for it.
  *
- * <p>Not thread-safe: the window makes one attempt at a time.
+ * <p>Synchronised, because two things now talk to the service at once: the window, and the
+ * SessionGuard watching the Session the window produced. One request at a time is what the
+ * connection under this promises, and taking the lock here is what keeps that promise.
  */
 final class ServiceLoginGate implements LoginGate {
 
@@ -56,13 +62,13 @@ final class ServiceLoginGate implements LoginGate {
   }
 
   @Override
-  public Optional<Session> admit(String accountName, char[] password) {
+  public synchronized Admission admit(String accountName, char[] password) {
     Objects.requireNonNull(accountName, "accountName");
     Objects.requireNonNull(password, "password");
     Response response = ask(new Authenticate(accountName, password, Role.OPERATOR));
     return switch (response) {
-      case Granted granted -> Optional.of(new Session(granted.token()));
-      case Denied ignored -> Optional.empty();
+      case Granted granted -> new Admitted(new Session(granted.token()));
+      case Denied denied -> new NotAdmitted(denied.reason());
       // A readable answer that does not answer this question — a store the service cannot open,
       // say. It is not a refusal, and showing it as one would send the person to retype a
       // password that was never the problem.
@@ -71,7 +77,38 @@ final class ServiceLoginGate implements LoginGate {
   }
 
   @Override
-  public boolean firstRunNeeded() {
+  public synchronized SessionStatus reportActivity(Session session) {
+    Objects.requireNonNull(session, "session");
+    return statusOf("a report of activity", ask(new ReportActivity(session.token())));
+  }
+
+  @Override
+  public synchronized SessionStatus stillLive(Session session) {
+    Objects.requireNonNull(session, "session");
+    return statusOf("a question about a Session", ask(new AskIfSessionIsLive(session.token())));
+  }
+
+  @Override
+  public synchronized void logOut(Session session) {
+    Objects.requireNonNull(session, "session");
+    Response response = ask(new Logout(session.token()));
+    // A Session that had already ended is not a failure to end it: it is over, which is what was
+    // asked for. Anything else is an answer to a question nobody put.
+    if (!(response instanceof Ok || response instanceof SessionEnded)) {
+      throw unexpected("a logout", response);
+    }
+  }
+
+  private static SessionStatus statusOf(String asked, Response response) {
+    return switch (response) {
+      case SessionLive live -> new SessionContinues(live.expiresIn());
+      case SessionEnded ended -> new SessionOver(ended.reason());
+      default -> throw unexpected(asked, response);
+    };
+  }
+
+  @Override
+  public synchronized boolean firstRunNeeded() {
     Response response = ask(new AskIfBootstrapNeeded());
     if (response instanceof BootstrapNeeded needed) {
       return needed.needed();
@@ -80,7 +117,8 @@ final class ServiceLoginGate implements LoginGate {
   }
 
   @Override
-  public FirstRunOutcome createAdministrator(String administratorName, char[] password) {
+  public synchronized FirstRunOutcome createAdministrator(
+      String administratorName, char[] password) {
     Objects.requireNonNull(administratorName, "administratorName");
     Objects.requireNonNull(password, "password");
 
@@ -106,6 +144,10 @@ final class ServiceLoginGate implements LoginGate {
       case STORE_UNAVAILABLE ->
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach its CredentialStore");
+      // Answered to a request made from an Administrator's Session, which the first run is not:
+      // it carries no Session at all, being what creates the Account that can hold one. Reaching
+      // here means the service answered a question nobody asked.
+      case NOT_ADMINISTRATOR -> throw unexpected("an attempt to create the Administrator", error);
     };
   }
 

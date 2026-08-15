@@ -10,10 +10,14 @@ import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
+import com.javafxlogin.core.session.InactivityPeriod;
+import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /** What the messages look like on the wire, and what the parser refuses to read. */
@@ -82,6 +86,93 @@ class MessageCodecTest {
     assertThrows(
         MalformedMessageException.class,
         () -> MessageCodec.decodeResponse(bytes("{\"type\":\"BootstrapNeeded\"}")));
+  }
+
+  @Test
+  void carriesEverySessionRequestsTokenByteForByte() {
+    SessionToken token = SessionToken.generate(new SecureRandom());
+
+    assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new ReportActivity(token)));
+    assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new AskIfSessionIsLive(token)));
+    assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new Logout(token)));
+  }
+
+  @Test
+  void carriesAChangeOfTheInactivityPeriodUnchanged() {
+    ChangeInactivityPeriod sent =
+        new ChangeInactivityPeriod(
+            SessionToken.generate(new SecureRandom()), InactivityPeriod.of(Duration.ofMinutes(45)));
+
+    ChangeInactivityPeriod received =
+        (ChangeInactivityPeriod) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.period(), received.period());
+  }
+
+  @Test
+  void carriesExpirySwitchedOffAsSomethingRatherThanAsNothing() {
+    ChangeInactivityPeriod sent =
+        new ChangeInactivityPeriod(
+            SessionToken.generate(new SecureRandom()), InactivityPeriod.disabled());
+
+    ChangeInactivityPeriod received =
+        (ChangeInactivityPeriod) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertEquals(InactivityPeriod.disabled(), received.period());
+  }
+
+  @Test
+  void refusesAPeriodThatIsNotOne() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeRequest(
+                bytes(
+                    "{\"type\":\"ChangeInactivityPeriod\",\"token\":\"AAAAAAAAAAAAAAAAAAAAAA==\","
+                        + "\"period\":\"whenever\"}")));
+  }
+
+  @Test
+  void carriesHowLongASessionHasLeft() {
+    SessionLive sent = new SessionLive(Optional.of(Duration.ofMinutes(15)));
+
+    assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  /**
+   * A kiosk Session has no countdown, and that is written as a field saying so rather than as a
+   * field left out — the codec reads a missing field as a message it does not understand.
+   */
+  @Test
+  void carriesASessionThatWillNeverExpire() {
+    SessionLive sent = new SessionLive(Optional.empty());
+
+    String json = text(MessageCodec.encode(sent));
+
+    assertEquals("{\"type\":\"SessionLive\",\"expiresInMillis\":null}", json);
+    assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  @Test
+  void refusesASessionLiveWithoutAnAnswerAboutWhenItExpires() {
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(bytes("{\"type\":\"SessionLive\"}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"SessionLive\",\"expiresInMillis\":\"soon\"}")));
+  }
+
+  @Test
+  void carriesEveryReasonASessionEnded() {
+    for (SessionEndedReason reason : SessionEndedReason.values()) {
+      SessionEnded sent = new SessionEnded(reason);
+
+      assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+    }
   }
 
   @Test
@@ -160,6 +251,16 @@ class MessageCodecTest {
         "{\"type\":\"Authenticate\",\"accountName\":\"wren\",\"password\":\"Horse-1\","
             + "\"requestedRole\":\"OPERATOR\"}",
         json);
+  }
+
+  private static byte[] tokenOfRoundTripped(Request request) {
+    Request received = MessageCodec.decodeRequest(MessageCodec.encode(request));
+    return switch (received) {
+      case ReportActivity report -> report.token().copyOfBytes();
+      case AskIfSessionIsLive ask -> ask.token().copyOfBytes();
+      case Logout logout -> logout.token().copyOfBytes();
+      default -> throw new AssertionError("not a request about a Session: " + received);
+    };
   }
 
   @Test

@@ -16,12 +16,19 @@ import com.javafxlogin.core.ipc.BoundListeningChannelSource;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
+import com.javafxlogin.core.ipc.AskIfSessionIsLive;
+import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
+import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
+import com.javafxlogin.core.ipc.SessionEnded;
+import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.ipc.TransportClient;
 import com.javafxlogin.core.machine.MachineAdministrators;
+import com.javafxlogin.core.session.SessionEndedReason;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -186,6 +193,64 @@ class ServiceOverTheSocketTest {
 
       assertTrue(client.isOpen(), "the connection should still carry the Session");
     }
+  }
+
+  /** The whole of a Session, over the wire: activity reported, time left read, and a logout. */
+  @Test
+  void carriesEveryPartOfASessionOverTheSocket() throws IOException {
+    try (ServiceClient client = ServiceClient.connect(socketPath)) {
+      Granted granted =
+          (Granted) authenticate(client, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR);
+
+      assertInstanceOf(SessionLive.class, client.send(new ReportActivity(granted.token())));
+      assertInstanceOf(SessionLive.class, client.send(new AskIfSessionIsLive(granted.token())));
+      assertInstanceOf(Ok.class, client.send(new Logout(granted.token())));
+      assertEquals(
+          new SessionEnded(SessionEndedReason.NO_SUCH_SESSION),
+          client.send(new AskIfSessionIsLive(granted.token())));
+    }
+  }
+
+  /** Story 54, across two real connections: the machine holds one Session and keeps the first. */
+  @Test
+  void refusesASecondSessionOverTheSocket() throws IOException {
+    try (ServiceClient first = ServiceClient.connect(socketPath);
+        ServiceClient second = ServiceClient.connect(socketPath)) {
+      Granted granted = (Granted) authenticate(first, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR);
+
+      Response refused = authenticate(second, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR);
+
+      assertEquals(new Denied(DeniedReason.SESSION_ALREADY_LIVE), refused);
+      assertInstanceOf(SessionLive.class, first.send(new AskIfSessionIsLive(granted.token())));
+    }
+  }
+
+  /**
+   * Story 50, with a real socket doing the noticing: the client goes, the kernel closes the
+   * connection, and the Session goes with it. Nothing here sends a heartbeat or waits for one — the
+   * only thing this test waits for is the operating system telling the service what happened.
+   */
+  @Test
+  void endsTheSessionOfAClientThatDisappears() throws IOException, InterruptedException {
+    ServiceClient crashing = ServiceClient.connect(socketPath);
+    assertInstanceOf(
+        Granted.class, authenticate(crashing, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR));
+
+    crashing.close();
+
+    assertTrue(theMachineBecomesFree(), "the Session outlived the client that owned it");
+  }
+
+  private boolean theMachineBecomesFree() throws IOException, InterruptedException {
+    for (int attempt = 0; attempt < 100; attempt++) {
+      try (ServiceClient client = ServiceClient.connect(socketPath)) {
+        if (authenticate(client, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR) instanceof Granted) {
+          return true;
+        }
+      }
+      Thread.sleep(50);
+    }
+    return false;
   }
 
   /**

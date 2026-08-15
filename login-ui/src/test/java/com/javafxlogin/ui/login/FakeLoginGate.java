@@ -1,14 +1,18 @@
 package com.javafxlogin.ui.login;
 
+import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.session.Session;
+import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Seam 3's stand-in for the AuthenticationService: a gate that admits whoever it was told to, and
@@ -27,9 +31,17 @@ final class FakeLoginGate implements LoginGate {
   private final List<String> attempts = new CopyOnWriteArrayList<>();
   private final List<String> creations = new CopyOnWriteArrayList<>();
 
+  private final AtomicInteger activityReports = new AtomicInteger();
+  private final AtomicInteger questionsAboutTheSession = new AtomicInteger();
+  private final AtomicInteger logouts = new AtomicInteger();
+
   private volatile boolean reachable = true;
   private volatile boolean firstRunNeeded;
+  private volatile boolean aSessionIsAlreadyLive;
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
+
+  /** What the service says about a Session from now on, until a test says otherwise. */
+  private volatile SessionStatus status = new SessionContinues(Optional.of(Duration.ofMinutes(15)));
 
   /** Whoever is added here is admitted with this password, and refused with any other. */
   FakeLoginGate admitting(String accountName, String password) {
@@ -48,9 +60,45 @@ final class FakeLoginGate implements LoginGate {
     nextOutcome = outcome;
   }
 
+  /** A machine someone else is already working on, which is the one refusal that says so. */
+  FakeLoginGate withASessionAlreadyLive() {
+    aSessionIsAlreadyLive = true;
+    return this;
+  }
+
   /** Makes every later attempt fail the way an AuthenticationService that is not there fails. */
   void becomeUnreachable() {
     reachable = false;
+  }
+
+  /** How long the service says a Session has left, every time it is asked. */
+  void sessionsLastFor(Duration remaining) {
+    status = new SessionContinues(Optional.of(remaining));
+  }
+
+  /** A kiosk: the service says there is nothing to count down to. */
+  void sessionsNeverExpire() {
+    status = new SessionContinues(Optional.empty());
+  }
+
+  /** From the next question onwards, the service says the Session is over. */
+  void theSessionEnds(SessionEndedReason reason) {
+    status = new SessionOver(reason);
+  }
+
+  /** How many times the SessionGuard has said the Operator did something. */
+  int activityReports() {
+    return activityReports.get();
+  }
+
+  /** How many times the guard has asked whether the Session it watches is still there. */
+  int questionsAboutTheSession() {
+    return questionsAboutTheSession.get();
+  }
+
+  /** How many times a Session was ended deliberately. */
+  int logouts() {
+    return logouts.get();
   }
 
   /** What the window offered, as {@code name/password}, in the order it offered it. */
@@ -64,17 +112,51 @@ final class FakeLoginGate implements LoginGate {
   }
 
   @Override
-  public Optional<Session> admit(String accountName, char[] password) {
+  public Admission admit(String accountName, char[] password) {
     // Copied at once: the window blanks the array it handed over as soon as this returns.
     String offered = new String(password);
     attempts.add(accountName + "/" + offered);
     if (!reachable) {
       throw new ServiceUnreachableException("There is no AuthenticationService in this test");
     }
-    if (!Objects.equals(admissible.get(accountName), offered)) {
-      return Optional.empty();
+    if (aSessionIsAlreadyLive) {
+      return new NotAdmitted(DeniedReason.SESSION_ALREADY_LIVE);
     }
-    return Optional.of(new Session(SessionToken.generate(new SecureRandom())));
+    if (!Objects.equals(admissible.get(accountName), offered)) {
+      return new NotAdmitted(DeniedReason.AUTH_FAILED);
+    }
+    return new Admitted(new Session(SessionToken.generate(new SecureRandom())));
+  }
+
+  @Override
+  public SessionStatus reportActivity(Session session) {
+    Objects.requireNonNull(session, "session");
+    activityReports.incrementAndGet();
+    return answerAboutTheSession();
+  }
+
+  @Override
+  public SessionStatus stillLive(Session session) {
+    Objects.requireNonNull(session, "session");
+    questionsAboutTheSession.incrementAndGet();
+    return answerAboutTheSession();
+  }
+
+  @Override
+  public void logOut(Session session) {
+    Objects.requireNonNull(session, "session");
+    logouts.incrementAndGet();
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    status = new SessionOver(SessionEndedReason.NO_SUCH_SESSION);
+  }
+
+  private SessionStatus answerAboutTheSession() {
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    return status;
   }
 
   @Override

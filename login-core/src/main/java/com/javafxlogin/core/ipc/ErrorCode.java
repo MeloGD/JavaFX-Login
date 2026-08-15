@@ -20,6 +20,12 @@ public enum ErrorCode {
   NOT_MACHINE_ADMINISTRATOR,
 
   /**
+   * A request only an Administrator may make arrived from a Session granted in another Role. The
+   * caller authenticated, so they are told plainly which of the two they are.
+   */
+  NOT_ADMINISTRATOR,
+
+  /**
    * The CredentialStore could not be read or written. Says nothing about why: the caller can only
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.

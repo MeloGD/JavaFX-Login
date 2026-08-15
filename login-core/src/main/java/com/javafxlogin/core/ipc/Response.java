@@ -7,4 +7,12 @@ package com.javafxlogin.core.ipc;
  * failed authentication distinguishes nothing about why it failed.
  */
 public sealed interface Response
-    permits Granted, Denied, Ok, Assessed, BootstrapNeeded, PolicyRefused, ErrorResponse {}
+    permits Granted,
+        Denied,
+        Ok,
+        Assessed,
+        BootstrapNeeded,
+        PolicyRefused,
+        SessionLive,
+        SessionEnded,
+        ErrorResponse {}

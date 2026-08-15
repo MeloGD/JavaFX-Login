@@ -14,15 +14,18 @@ import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.authentication.ServiceProcess;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.BoundListeningChannelSource;
+import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.machine.MachineAdministrators;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.Session;
+import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.store.CredentialStore;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -81,24 +84,57 @@ class ServiceLoginGateTest {
 
   @Test
   void admitsAnOperatorWithTheirOwnPassword() {
-    Optional<Session> session = gate().admit(OPERATOR, OPERATOR_PASSWORD.toCharArray());
+    Admission admission = gate().admit(OPERATOR, OPERATOR_PASSWORD.toCharArray());
 
-    assertTrue(session.isPresent(), "an Operator should have been admitted");
-    assertEquals(16, session.orElseThrow().token().copyOfBytes().length);
+    Admitted admitted = assertInstanceOf(Admitted.class, admission);
+    assertEquals(16, admitted.session().token().copyOfBytes().length);
   }
 
   @Test
   void refusesAWrongPassword() {
-    Optional<Session> session = gate().admit(OPERATOR, "Wrong-Horse-9".toCharArray());
+    Admission admission = gate().admit(OPERATOR, "Wrong-Horse-9".toCharArray());
 
-    assertTrue(session.isEmpty(), "a wrong password should have been refused");
+    assertEquals(new NotAdmitted(DeniedReason.AUTH_FAILED), admission);
   }
 
   @Test
   void refusesAnAccountThatDoesNotExist() {
-    Optional<Session> session = gate().admit("nobody.here", OPERATOR_PASSWORD.toCharArray());
+    Admission admission = gate().admit("nobody.here", OPERATOR_PASSWORD.toCharArray());
 
-    assertTrue(session.isEmpty(), "an unknown Account should have been refused");
+    assertEquals(new NotAdmitted(DeniedReason.AUTH_FAILED), admission);
+  }
+
+  /**
+   * The whole of a Session as the gate sees it, against the real service: activity reported, time
+   * left read, and a logout that ends it. Seam 3's fake answers these; this is where what it stands
+   * in for is checked.
+   */
+  @Test
+  void carriesASessionThroughToTheService() {
+    LoginGate gate = gate();
+    Session session = assertInstanceOf(
+            Admitted.class, gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()))
+        .session();
+
+    SessionContinues afterActivity =
+        assertInstanceOf(SessionContinues.class, gate.reportActivity(session));
+    assertEquals(Optional.of(Duration.ofMinutes(15)), afterActivity.expiresIn());
+    assertInstanceOf(SessionContinues.class, gate.stillLive(session));
+
+    gate.logOut(session);
+
+    assertEquals(
+        new SessionOver(SessionEndedReason.NO_SUCH_SESSION), gate.stillLive(session));
+  }
+
+  /** Story 54, through the gate a shipped product runs behind: the machine holds one Session. */
+  @Test
+  void refusesASecondSessionAndSaysWhichRefusalItIs() {
+    assertInstanceOf(Admitted.class, gate().admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()));
+
+    Admission admission = gate().admit(OPERATOR, OPERATOR_PASSWORD.toCharArray());
+
+    assertEquals(new NotAdmitted(DeniedReason.SESSION_ALREADY_LIVE), admission);
   }
 
   /**
@@ -110,9 +146,12 @@ class ServiceLoginGateTest {
   void refusesTheAdministratorEvenWithTheRightPassword() {
     createTheAdministrator();
 
-    Optional<Session> session = gate().admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
+    Admission admission = gate().admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray());
 
-    assertTrue(session.isEmpty(), "the Administrator should not reach the ProtectedFeature");
+    assertEquals(
+        new NotAdmitted(DeniedReason.AUTH_FAILED),
+        admission,
+        "the Administrator should not reach the ProtectedFeature");
   }
 
   /** Not being able to ask is not a refusal, and the person must not be sent to retype anything. */
@@ -133,7 +172,7 @@ class ServiceLoginGateTest {
   @Test
   void reconnectsAfterTheServiceHasBeenRestarted() throws IOException {
     LoginGate gate = gate();
-    assertTrue(gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()).isPresent());
+    assertInstanceOf(Admitted.class, gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()));
 
     process.close();
     process = start();
@@ -141,8 +180,9 @@ class ServiceLoginGateTest {
     assertThrows(
         ServiceUnreachableException.class,
         () -> gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()));
-    assertTrue(
-        gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()).isPresent(),
+    assertInstanceOf(
+        Admitted.class,
+        gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()),
         "the next attempt should have connected again");
   }
 
