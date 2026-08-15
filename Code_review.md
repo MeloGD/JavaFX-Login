@@ -1,4 +1,4 @@
-# Code review — the first-run wizard (issue #6, Seams 1–3)
+# Code review — the Session lifecycle (issue #7, Seams 1–3)
 
 Written for a final reviewing agent. It records what was built, what a two-axis
 review found, what was acted on, and — more usefully — what was **not**, so the
@@ -10,136 +10,143 @@ ground.
 | | |
 |---|---|
 | Branch | `dev-login` |
-| Commits | `88e50b6` (implementation), `a422741` (review fixes) |
-| Base / fixed point | `0140a7e`, the tip after issue #5's review record |
-| Diff to review | `git diff 0140a7e...HEAD` |
-| Packages | `com.javafxlogin.core.ipc`, `com.javafxlogin.core.machine`, `com.javafxlogin.ui.login` |
-| Build | `mvn -o test` → 248 tests, 0 failures, 1 skipped by an OS guard |
-| New decision | ADR-0008 (`docs/adr/0008-first-run-is-authorised-by-peer-credentials.md`) |
+| Base / fixed point | `3db4193`, the tip after issue #6's review record |
+| Diff to review | `git diff 3db4193...HEAD` |
+| Packages | `com.javafxlogin.core.session`, `…core.authentication`, `…core.audit`, `…core.ipc`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o test` → 317 tests, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0009 (`docs/adr/0009-session-expiry-is-decided-when-someone-asks.md`) |
 
 ## 2. What the ticket asked for
 
-Issue #6, "First-run wizard: create the single Administrator" — the screen a
-person sees the very first time the product runs, and the two guards behind it.
-Parent spec is issue #1; it was blocked by #4 (the policy) and #5 (the walking
-skeleton), both of which had landed.
+Issue #7, "Session lifecycle: activity, expiry, logout and clock jumps" —
+everything that ends a `Session`. Parent spec is issue #1, stories 45–54; it was
+blocked by #5 (the walking skeleton), which had landed.
 
 ### Acceptance criteria against evidence
 
 | Criterion | Status | Proof |
 |---|---|---|
-| Wizard appears instead of the login screen where there is no `Administrator` | met | `FirstRunWindowTest.theWizardOpensInsteadOfTheLoginScreenWhereThereIsNoAdministrator`; the choice is `LoginGate.protect` on `firstRunNeeded()` |
-| Refused if an `Administrator` already exists | met | `BootstrapTest.isRefusedOnceAnAdministratorExists`, `…theRefusalSurvivesAServiceRestart`, `ServiceLoginGateTest.refusesASecondAdministrator` |
-| Refused if the peer is not an operating-system administrator | met | `BootstrapTest.isRefusedWhenThePeerDoesNotAdministerTheMachine`, `…WhenTheOperatingSystemWillNotNameThePeer`, and over a real socket in `ServiceOverTheSocketTest.refusesToCreateTheAdministratorForAPeerTheMachineDoesNotAdminister` |
-| Name field empty, nothing prefilled, placed or suggested | met | `FirstRunWindowTest.theAccountNameFieldIsEmptyAndSuggestsNothing` (asserts `promptText` too), `…thePasswordFieldIsEmpty…` |
-| The rules from #4 applied; a refusal explains itself | met | `ServiceLoginGateTest.carriesBackEveryRuleThePolicyRefusedTheNameAndPasswordFor`, `FirstRunWindowTest.aPolicyRefusalNamesEveryRuleThatWasBrokenInWordsAPersonReads` (asserts no constant reaches the screen) |
-| Warned the password cannot be recovered, with a password manager suggested | met | `FirstRunWindowTest.warnsThatThePasswordCannotBeRecoveredAndSaysWhereToKeepIt` |
-| No recovery key, backup code or backdoor issued | met | `BootstrapTest.issuesNothingAlongsideTheAdministratorItCreated`, `ServiceLoginGateTest.issuesNothingAlongsideTheAdministratorItCreated` |
-| After completion the login screen appears, and the `Administrator` can authenticate | **partial — see §5** | first half: `FirstRunWindowTest.theLoginScreenReplacesTheWizardOnceTheAdministratorExists`; second half: `ServiceLoginGateTest.theAdministratorTheWizardCreatesCanAuthenticate` — at the service, not through that screen |
-
-Also verified by hand, which no test covers: the pair run as the README
-describes, with the **real** `PosixMachineAdministrators` reading `/etc/group`
-rather than an injected one — wizard needed, policy refusal with five named
-violations, `Ok`, wizard no longer needed, second attempt `ADMINISTRATOR_EXISTS`,
-`Administrator` granted a Session as an `Administrator` and denied one as an
-`Operator`.
+| A `Session` expires after a configured period without activity; the stage closes and returns to the login screen | met | `SessionExpiryTest.aSessionEndsAfterThePeriodWithoutActivity`, `…aSessionSurvivesUpToTheLastMomentOfThePeriod`; `SessionWindowTest.theWindowClosesAndTheLoginScreenReturnsWhenTheSessionEnds`, `…theLoginScreenSomeoneComesBackToIsEmpty` |
+| `Operator` activity resets the countdown | met | `SessionExpiryTest.activityBuysAnotherWholePeriod`, `SessionLifecycleTest.activityStartsTheCountdownAgain`, `…askingAboutASessionIsNotActivity`, `SessionWindowTest.whatTheOperatorDoesIsReportedToTheService` |
+| The `Administrator` can change the period globally, and disable expiry entirely | **partial — see §5** | `InactivityPeriodConfigurationTest` (seven tests, including `expiryCanBeSwitchedOffEntirely` and `theChangeSurvivesAServiceRestart`) — at the service, with no screen to do it from |
+| An `Operator` can log out manually | met | `SessionLifecycleTest.anOperatorCanLogOut`, `…loggingOutTwiceIsNotAnOk`, `SessionWindowTest.loggingOutEndsTheSessionAndHandsThePersonBack` |
+| A closed connection ends the `Session` immediately, with no heartbeat | met | `ServiceOverTheSocketTest.endsTheSessionOfAClientThatDisappears` (real socket, real client), `SessionLifecycleTest.aSessionEndsWithTheConnectionItWasGrantedOn` |
+| Expiry is evaluated against both monotonic and wall-clock time | met | `SessionExpiryTest.aClockSetBackwardsDoesNotLengthenASession`, `…timeTheMonotonicClockDidNotCountStillCountsAgainstTheSession` |
+| A wall-clock jump beyond tolerance expires the `Session` and records an `AuthenticationEvent` | met | `…aWallClockJumpBeyondToleranceEndsTheSession`, `…BackwardsBeyondToleranceEndsTheSessionToo`, `…aCorrectionSmallerThanTheToleranceIsNotAJump`, `…aClockJumpIsRecordedAsAnAuthenticationEvent` |
+| A second `Authenticate` while a `Session` is live is refused, and the existing one kept | met | `SessionLifecycleTest.aSecondAuthenticationIsRefusedWhileASessionIsLive`, `…theRefusalIsMadeWithoutLookingAtAnyAccount`, `ServiceOverTheSocketTest.refusesASecondSessionOverTheSocket`, `LoginWindowTest.aSessionAlreadyOpenIsNotShownAsAWrongPassword` |
+| The `SessionToken` still never touches disk | met | pre-existing `SessionTokenTest.isNeverWrittenToDisk` walks the whole directory, so it now covers the new event log too; `SessionExpiryTest.nothingRecordedAboutASessionCarriesItsToken` |
 
 ## 3. Design decisions a reviewer should judge, not rediscover
 
-- **The peer is named by the kernel, at accept time.** `SO_PEERCRED` is read
-  once in `TransportServer.Connection`'s constructor and cached, because the
-  credentials are fixed at `connect()` and a handle asked after the peer died
-  would answer nothing. `ConnectionHandle.peer()` returns `Optional<Peer>`;
-  empty means the platform will not say, and is refused rather than trusted.
-- **Policy and fact are split.** The handle reports who the peer is;
-  `MachineAdministrators` decides whether that peer administers the machine, and
-  is injected into `AuthenticationService`. That split is what lets both answers
-  be tested: a suite cannot arrange real group membership, and one asserting
-  against the real `/etc/group` would be asserting about the developer.
-- **Two tests were passing by accident before this change.**
-  `ServiceOverTheSocketTest` and `ServiceLoginGateTest` bootstrap over a real
-  socket, and would have passed or failed on whether the developer happens to be
-  in `sudo`. They now name the machine's administrators themselves, and name them
-  by the account running the suite — so what is admitted is exactly what
-  `SO_PEERCRED` reported about that very process, which is a stronger join of
-  Seams 1 and 2 than a blanket "everyone".
-- **Guard order: who before what.** `Bootstrap` settles the peer before it looks
-  at the store, so a peer with no business here is told the same thing on a fresh
-  install as on one set up years ago.
-- **`AskIfBootstrapNeeded` is answered to anyone.** A client must choose a window
-  before it knows anything else, and a fresh install reveals the answer the
-  moment it draws one. `BootstrapTest.aPeerToldTheBootstrapIsNeededIsStillRefusedTheBootstrap`
-  pins that being told is not being allowed.
-- **The wire says `Bootstrap`; everything above says first run.** `Bootstrap`
-  predates this ticket and is `core.ipc`'s settled name. `CONTEXT.md`'s term is
-  `FirstRunWizard`, so `LoginGate`, the outcomes and the windows use it, and
-  `ServiceLoginGate` is the one place the two vocabularies meet. Renaming the
-  wire message was judged churn beyond this ticket.
-- **The wizard takes the login window's stage and hands it back.** This is the
-  first of two screens rather than a second window, so nothing is left behind and
-  nobody has to go and find another window in order to log in.
-- **`protect` asks which window to open on the JavaFX application thread.** One
-  round trip, no hashing, and nothing has been drawn yet, so there is no window
-  to freeze. On Linux the first connect is what socket-activates the service, so
-  this is where a cold start is paid.
+- **Expiry is lazy, and that is ADR-0009.** No timer in the privileged process:
+  every request carrying a `SessionToken` first asks whether the live `Session`
+  has run out. Nothing acts on an expired `Session` until a client asks, and the
+  client asks anyway. The ADR records the four rejected alternatives, including
+  the heartbeat and `CLOCK_BOOTTIME`.
+- **A resumed machine and a clock someone set are the same event here.** Both
+  make the wall clock run ahead of the monotonic one, and a JVM cannot tell them
+  apart. Both end the `Session` as `CLOCK_JUMPED`, and `SessionEndedText` words
+  it as both possibilities rather than guessing between them.
+- **The tolerance is not the security control.** Taking the *longer* of the two
+  measures is: a clock set backwards shortens the wall measure and leaves the
+  monotonic one untouched, so it buys nothing. One minute is only where drift
+  stops being ordinary.
+- **The guard asks once per countdown, at the moment the service named.** Every
+  answer carries how long is left, so the guard never computes a deadline. Its
+  reporting cadence is a quarter of that, capped at twenty seconds — so an
+  `InactivityPeriod` shorter than the cap cannot coalesce away the activity of
+  someone who is working.
+- **A `SessionToken` is not a bearer credential.** It names a `Session` only on
+  the connection that `Session` was granted on; presented on another it is
+  `NO_SUCH_SESSION`, which is also what an unknown token gets.
+- **`Sessions` has its own monitor, not the service's.** The close listener runs
+  on whichever thread noticed the connection go and must not queue behind an
+  Argon2id hash. The monitor is held long enough to read two clocks.
+- **The gate owns the window an `Operator` works in.** `SessionWindow` places the
+  host's view untouched inside a `BorderPane` with one control above it. Two
+  things have to happen there that no host should write and none should be able
+  to forget: somewhere to log out, and closing when the service says the
+  `Session` is over. `login.css` rules are all scoped, so the gate's stylesheet
+  cannot restyle what the host handed over.
+- **`admit` returns `Admission` rather than `Optional<Session>`.** Story 54's
+  refusal has a different remedy from a wrong password, and `DeniedReason`'s
+  javadoc always said the set grows when the client must act differently. The
+  refusal reveals nothing: no Account is read to produce it, and a live `Session`
+  is visible to anyone who can see the screen it is open on.
+- **The audit log is a seam with the smallest honest thing behind it.** #9 owns
+  the HMAC chain, rotation and export, and `AuthenticationEventLog`'s javadoc
+  says so. What is here writes one flushed CSV line per event and swallows what
+  it cannot write, because story 81 says a full disk must not lock everyone out.
 
 ## 4. What the two-axis review found and what was done
 
-**Standards axis.** No hard ADR violation. Acted on:
+**Standards axis.** No ADR contradiction; ADR-0009 honoured point for point.
+Acted on:
 
-- `Peer` was load-bearing new language missing from `CONTEXT.md` while the same
-  commit added `MachineAdministrator` and `FirstRunWizard`. Added.
-- The `Bootstrap`/`FirstRun` split described above — `LoginGate` was offering
-  `bootstrapNeeded()` beside a private `firstRunIsNeeded()`, and `WizardRefused`
-  beside `FirstRunOutcome`. Unified as above.
-- `FirstRunController` was `LoginController` retyped: the same virtual-thread
-  block down to the verbatim comment, the same unreachable sentence, and a
-  constant called `INTERRUPTED` catching a `RuntimeException`. Extracted to
-  `GateAttempt`; the constant is now `UNANSWERED`.
-- A `MessageCodec` comment saying "peer" where it meant "message", now that a
-  `Peer` type shares the package.
+- `timeout` — the first entry on the new `InactivityPeriod` `_Avoid_` list — had
+  reached a test's javadoc. Reworded.
+- `GateWindow`'s javadoc still said the login screen "is replaced by nothing".
+  This change puts it back. Corrected.
+- Repeated `switch` over `SessionOutcome` in four `AuthenticationService`
+  methods, with one arm written three times. Gathered into
+  `onTheSessionNamedBy`, which is now the shape of every request only a live
+  `Session` may make.
+- `expireAnySessionThatIsDue()` returned a value its name never mentioned. Split
+  into `theConfiguredPeriod()` and a void `expireAnySessionThatIsDue(period)`.
+- Three lines wrapped where they fit inside 100 columns.
 
-**Spec axis.** Acted on:
+**Spec axis.** Every acceptance criterion checked one by one; the table in §2 is
+its verdict. Acted on:
 
-- Nothing pinned that no recovery key is issued — true only because nobody had
-  added a field. Now asserted on both sides of the socket.
-- Nothing pinned the unreachable-at-startup branch. `NoServiceAtStartupTest`
-  does, asked of its own stage.
+- The `SessionGuard`'s twenty-second coalescing was a constant, while
+  `InactivityPeriod.of` accepts any positive duration — so a period of ten
+  seconds would have expired someone who was working. The cadence now follows
+  what the service says the `Session` has left.
+- `Sessions.open` registered a close listener per admission, so a client logging
+  in and out on one connection accumulated them. One per connection now.
+- A window closed with its own decoration left the guard asking. `setOnHidden`
+  stops it.
 
 ## 5. Open ground — judge these rather than assume them
 
-- **AC8's second half is met at the service, not through the screen the person
-  is left looking at.** `ServiceLoginGate.admit` asks to act as an `Operator`,
-  and the service refuses the `Administrator` there by design (issue #5, stories
-  38–39). So the `Administrator` just created cannot log in through the window
-  that replaces the wizard; they can authenticate, and are proven to, over the
-  wire. The screen that will ask on their behalf is the administration UI, which
-  is a later ticket. The README says this plainly rather than leaving someone to
-  discover it. **This is the largest open question in the change**: either the
-  criterion means what is built, or issue #6 wanted an administration entry point
-  that its own body never describes.
-- **`STORE_UNAVAILABLE` reaches the person as "could not contact the service".**
-  A store the privileged process cannot read is shown with the wording for a
-  service that is not running, so the remedy named is the wrong one. This was
-  *not* changed: the pre-existing `admit` path already maps it the same way, and
-  `ServiceUnreachableException`'s javadoc records that ADR-0002's three
-  distinguishable startup failures are their own ticket. Fixing the wording here
-  would invent a fourth vocabulary ahead of that ticket.
-- **The group database is the machine's own local file.** ADR-0008 §Consequences
-  states the limit: administrators from a directory service are not found, and
-  `id -nG` was rejected rather than spawn a subprocess from a process running as
-  root. If a reviewer disagrees, that is the paragraph to argue with.
-- **`FirstRunRefusedReason` restates two of three `ErrorCode` constants.** Kept
-  deliberately: `STORE_UNAVAILABLE` cannot reach the window, and a type carrying
-  only what can happen means the controller's switch has no unreachable arm. A
-  reviewer who wants `ErrorCode` passed through instead should say so.
-- **No password confirmation field.** The ticket does not ask for one, and it was
-  not added. Given that the password cannot be recovered and is typed once,
-  blind, it is worth a ticket of its own — flagged rather than smuggled in.
-- **`showWaiting(boolean)` is still written twice**, once per controller. The
-  shape is shared but the controls are not, and a helper taking three nodes and a
-  label read worse than the six lines it replaced.
-- **Windows.** `MachineAdministrators.forCurrentPlatform()` throws there, as
-  `PlatformListeningChannelSource` already does. `SO_PEERCRED` does not exist on
-  that platform either, so `peer()` would be empty and the wizard refused. Both
-  belong to the unbuilt Windows service ticket, and neither pretends otherwise.
+- **The `Administrator` can configure the period, but has nowhere to do it
+  from.** `ChangeInactivityPeriod` is complete and tested at Seams 1 and 2, and
+  unreachable from the shipped client: `ServiceLoginGate.admit` asks to act as an
+  `Operator`, and the service refuses the `Administrator` there by design. This
+  is the *same* open question issue #6's review recorded as its largest, and it
+  resolves the same way — the administration entry point is issue #12, whose
+  first acceptance criterion is that the panel is reachable only by an
+  `Administrator` `Session`. Adding a gate method and a second login path here
+  would be building #12 ahead of #12. **Flagged rather than smuggled in**: if a
+  reviewer thinks #7 owned that entry point, this is the paragraph to argue with.
+- **`AuthenticationEventType.CONFIGURATION_CHANGED` is early.** #7 only requires
+  the clock jump to be recorded. `CONTEXT.md` has always called a configuration
+  change an `AuthenticationEvent`, and this ticket introduces the only one that
+  exists, so it is recorded. A reviewer who wants the audit ticket to own every
+  event type should say so.
+- **`Admission` and `SessionStatus` are not in `CONTEXT.md`.** They are host-
+  facing and `public`, which is the argument for adding them. They were not,
+  because `FirstRunOutcome` and its three implementations — equally public,
+  equally host-facing — are not there either: the glossary holds the domain's
+  nouns, and these are the closed sets of answers a window switches on.
+  `InactivityPeriod`, which *is* a domain noun, was added.
+- **The end-of-`Session` sentence travels as a `String`**, from `SessionGuard`
+  through to `LoginController`, with `""` meaning "nothing to say". A type was
+  considered and refused: the value is a label's text at every hop, and a
+  `Label` with no text is already how "nothing to say" is spelt in JavaFX.
+- **One listener per connection is not one listener per lifetime.** Two clients
+  taking turns on two connections still add a listener to each on every turn.
+  Bounded by successful authentications, each of which costs an Argon2id
+  verification, so it is untidiness rather than an exposure — but it is not zero.
+- **Closing the feature window does not log out.** It stops the guard; the
+  `Session` then expires as any unattended one does, or ends with the connection
+  when the process exits. Sending a logout from an `onHidden` handler was judged
+  worse than relying on the mechanism this ticket exists to build.
+- **A kiosk `Session` is not ended by a clock jump.** Switching expiry off
+  switches off both rules, deliberately: a kiosk that logged itself out because
+  the machine's time was corrected is a kiosk nobody could keep running.
+  ADR-0009 §Consequences states it.
+- **`Sessions` holds one slot, and `Authenticate` refuses rather than replaces.**
+  The alternative — the newest authentication wins — would let anyone who can
+  type a password throw out the person working. Story 54 says which one is kept
+  and this follows it, but it is a product decision worth seeing.
