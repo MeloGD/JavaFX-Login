@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -33,9 +34,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
@@ -261,6 +266,28 @@ class LockoutTest {
         Optional.empty(),
         refusedUntilRecordedFor(OPERATOR),
         "the Lockout was still only in the service's memory");
+  }
+
+  /**
+   * Story 42: the state belongs to the privileged service, and belongs to it on disk rather than in
+   * a check written in Java. Every file the Lockout touched is owner-only, so the account the
+   * graphical client runs as can neither read what is counted against them nor delete it — and a
+   * later build that put this state in a file of its own would fail here rather than quietly ship a
+   * Lockout an Operator can remove.
+   */
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void everyFileTheLockoutIsWrittenToIsOwnerOnly() throws IOException {
+    lockOutTheOperator();
+
+    try (Stream<Path> files = Files.list(directory)) {
+      for (Path file : files.toList()) {
+        assertEquals(
+            Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+            Files.getPosixFilePermissions(file),
+            () -> file.getFileName() + " can be read by the account the client runs as");
+      }
+    }
   }
 
   /** Story 44: an Administrator releases a colleague who fat-fingered their password. */

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.javafxlogin.core.account.FailedAuthentications;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.authentication.AuthenticationService;
 import com.javafxlogin.core.harness.ServiceHarness;
@@ -20,6 +21,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -116,6 +118,23 @@ class CredentialStoreSchemaTest {
     }
 
     assertEquals("WEAK", strengthRecordedFor("wren.holloway", storeFile));
+  }
+
+  /**
+   * The upgrade must not refuse anybody. An Account written before Lockout existed has failed
+   * nothing, and a migration that left it counted as anything else would lock someone out of their
+   * own product on the strength of a number nobody ever counted.
+   */
+  @Test
+  void anAccountFromAnEarlierSchemaHasFailedNothing() {
+    Path storeFile = ServiceHarness.storeFileIn(directory);
+    createStoreAtTheInitialSchema(storeFile);
+
+    try (CredentialStore store = CredentialStore.openOrCreate(storeFile)) {
+      assertEquals(
+          Optional.of(FailedAuthentications.none()),
+          store.failedAuthenticationsOf("wren.holloway"));
+    }
   }
 
   /**
