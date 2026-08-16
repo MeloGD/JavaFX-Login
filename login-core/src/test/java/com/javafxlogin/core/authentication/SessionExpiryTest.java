@@ -169,11 +169,12 @@ class SessionExpiryTest {
   @Test
   void anOrdinaryTimeoutIsNotRecorded() throws IOException {
     SessionToken token = admitAnOperator();
+    String beforeTheTimeout = recordedEvents();
 
     harness.clock().passes(PERIOD);
     reasonFor(token);
 
-    assertEquals("", recordedEvents());
+    assertEquals(beforeTheTimeout, recordedEvents());
   }
 
   /** The SessionToken is never written down, and an event about a Session is still not a place. */

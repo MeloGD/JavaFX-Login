@@ -38,5 +38,20 @@ public enum ErrorCode {
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.
    */
-  STORE_UNAVAILABLE
+  STORE_UNAVAILABLE,
+
+  /**
+   * An export named a destination the service will not write to: one that is not an absolute path,
+   * one whose directory does not exist, one inside the directory the service keeps its own files
+   * in, or one where something is already there. Answered as one code rather than four, because
+   * every one of them is answered by choosing another path — and because a privileged process that
+   * reported which paths exist would be answering questions it was not asked.
+   */
+  EXPORT_DESTINATION_REFUSED,
+
+  /**
+   * The record could not be read, or the copy could not be written. Nothing is left at the
+   * destination: half an export is a record that stops for a reason it does not state.
+   */
+  EXPORT_FAILED
 }

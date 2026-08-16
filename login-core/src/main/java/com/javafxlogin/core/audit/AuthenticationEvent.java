@@ -16,6 +16,16 @@ import java.util.Objects;
  */
 public record AuthenticationEvent(Instant at, AuthenticationEventType type, String subject) {
 
+  /**
+   * What stands in the subject where there is no Account to name: an attempt against a name nobody
+   * holds, or one refused before any name was looked up.
+   *
+   * <p>It is written the way it is so that it cannot be mistaken for a name, and no Account can be
+   * called it — the bundled blocklist refuses it, which is what stops an Operator being provisioned
+   * under the placeholder and hiding among the events that carry it.
+   */
+  public static final String NO_ACCOUNT = "(no account)";
+
   public AuthenticationEvent {
     Objects.requireNonNull(at, "at");
     Objects.requireNonNull(type, "type");

@@ -10,12 +10,15 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.audit.AuthenticationEventExport;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.io.IOException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -86,6 +89,9 @@ public final class MessageCodec {
                   .put("period", change.period().text());
           case ClearLockout clear ->
               carrying("ClearLockout", clear.token()).put("accountName", clear.accountName());
+          case ExportAuthenticationEvents export ->
+              carrying("ExportAuthenticationEvents", export.token())
+                  .put("destination", export.destination().toString());
         };
     return write(message);
   }
@@ -98,6 +104,7 @@ public final class MessageCodec {
           case Denied denied -> denied(denied);
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
+          case AuthenticationEventsExported exported -> exported(exported.export());
           case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
           case PolicyRefused refused -> carrying("PolicyRefused", refused.violations());
           case SessionLive live -> sessionLive(live);
@@ -130,6 +137,8 @@ public final class MessageCodec {
       case "Logout" -> new Logout(token(message));
       case "ChangeInactivityPeriod" -> new ChangeInactivityPeriod(token(message), period(message));
       case "ClearLockout" -> new ClearLockout(token(message), text(message, "accountName"));
+      case "ExportAuthenticationEvents" ->
+          new ExportAuthenticationEvents(token(message), destination(message));
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -150,6 +159,10 @@ public final class MessageCodec {
           new Assessed(
               new Assessment(
                   violationsOf(message), constant(PasswordStrength.class, message, "strength")));
+      case "AuthenticationEventsExported" ->
+          new AuthenticationEventsExported(
+              new AuthenticationEventExport(
+                  count(message, "events"), flag(message, "chainIntact")));
       case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
       case "PolicyRefused" -> policyRefused(message);
       case "SessionLive" -> new SessionLive(millis(message, "expiresInMillis"));
@@ -158,6 +171,12 @@ public final class MessageCodec {
       case ERROR -> new ErrorResponse(constant(ErrorCode.class, message, "code"));
       default -> throw new MalformedMessageException("Not a response this build reads: " + type);
     };
+  }
+
+  private static ObjectNode exported(AuthenticationEventExport export) {
+    return message("AuthenticationEventsExported")
+        .put("events", export.events())
+        .put("chainIntact", export.chainIntact());
   }
 
   private static ObjectNode assessed(Assessed assessed) {
@@ -222,6 +241,28 @@ public final class MessageCodec {
           "The " + field + " field is missing or is neither a whole number nor null");
     }
     return value.isNull() ? Optional.empty() : Optional.of(Duration.ofMillis(value.longValue()));
+  }
+
+  /**
+   * A count of things, which is never negative and never a fraction. A message that says an export
+   * held minus four entries is not one this build reads.
+   */
+  private static long count(ObjectNode message, String field) {
+    JsonNode value = message.get(field);
+    if (value == null || !value.isIntegralNumber() || value.longValue() < 0) {
+      throw new MalformedMessageException(
+          "The " + field + " field is missing or is not a count");
+    }
+    return value.longValue();
+  }
+
+  /** A path the peer chose, read as text. What the service will write to is the service's word. */
+  private static Path destination(ObjectNode message) {
+    try {
+      return Path.of(text(message, "destination"));
+    } catch (InvalidPathException e) {
+      throw new MalformedMessageException("The destination is not a path on this machine", e);
+    }
   }
 
   private static InactivityPeriod period(ObjectNode message) {

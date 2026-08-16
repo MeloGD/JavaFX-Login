@@ -33,3 +33,8 @@ default
 # The product's own name. A deployment that renames the product adds the new name to its own file
 # above; a host product adds its own name there too.
 JavaFX Login
+
+# What the audit log writes where there is no Account to name — an attempt against a name nobody
+# holds, or one refused before any name was looked up. Refused as an Account name so that nobody
+# can be provisioned under it and hide among those entries. AuthenticationEvent.NO_ACCOUNT.
+(no account)

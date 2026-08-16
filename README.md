@@ -66,6 +66,25 @@ where the single `Administrator` is created. It is accepted only while no `Admin
 machine where you are not `root` and not in `sudo`, `wheel` or `admin`, the wizard will refuse you
 and say so.
 
+## What gets written down
+
+Beside the `CredentialStore`, and owner-only like it, the service keeps
+`authentication-events.csv`: every authentication attempt, `Lockout`, Account
+change, configuration change and export, one line each, timestamped with an
+offset. Each line is chained under an HMAC whose key lives next to it, so an
+entry edited or removed in the middle breaks every entry after it. The file
+rotates at a megabyte and keeps five, so it cannot fill a disk, and a record that
+cannot be written never stops an authentication.
+
+**Nothing in the application reads it back**, deliberately — an in-app viewer
+would turn the record of what happened into one more thing to read out of the
+application it audits. An `Administrator` exports it to a file and reads it with
+their own tools; the export is checked against its own chain as it is copied, and
+answers with how many entries there were and whether the chain held. ADR-0011 has
+the reasoning, including what the chain is and is not worth. The request exists
+at the service and no screen reaches it yet, for the same reason as clearing a
+`Lockout`: that screen is the administration panel.
+
 **There is still nobody to reach the feature with.** Enrolment, which is how an `Administrator`
 creates `Operator`s, is still to be built, and the login screen admits `Operator`s only. Until that
 lands the pair refuses every login attempt — correctly, and including the `Administrator` you just

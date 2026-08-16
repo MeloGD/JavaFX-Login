@@ -3,6 +3,8 @@ package com.javafxlogin.core.authentication;
 import com.javafxlogin.core.account.Account;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEvent;
+import com.javafxlogin.core.audit.AuthenticationEventArchive;
+import com.javafxlogin.core.audit.AuthenticationEventExport;
 import com.javafxlogin.core.audit.AuthenticationEventLog;
 import com.javafxlogin.core.audit.AuthenticationEventType;
 import com.javafxlogin.core.audit.FileAuthenticationEventLog;
@@ -13,6 +15,7 @@ import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Assess;
 import com.javafxlogin.core.ipc.Assessed;
 import com.javafxlogin.core.ipc.Authenticate;
+import com.javafxlogin.core.ipc.AuthenticationEventsExported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
@@ -22,6 +25,7 @@ import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
+import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
@@ -41,6 +45,9 @@ import com.javafxlogin.core.session.SessionToken;
 import com.javafxlogin.core.store.CredentialStore;
 import com.javafxlogin.core.store.CredentialStoreException;
 import com.javafxlogin.core.store.SchemaTooNewException;
+import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -72,9 +79,17 @@ public final class AuthenticationService implements AutoCloseable {
 
   /**
    * Where AuthenticationEvents are written, beside the store for the same reason: only the account
-   * this service runs as may write in that directory.
+   * this service runs as may write in that directory. The rotated files are named after it, and the
+   * key their chain is computed under lives next to them.
    */
   private static final String EVENT_LOG = "authentication-events.csv";
+
+  /**
+   * The key the record's chain is computed under, made on the first event and read on every start
+   * after that. Beside the record for the same reason the record is beside the store, and it is
+   * what puts an edit of the record beyond an Administrator who cannot read that directory.
+   */
+  private static final String EVENT_LOG_KEY = "authentication-events.key";
 
   private final CredentialStore store;
   private final Authenticator authenticator;
@@ -84,6 +99,8 @@ public final class AuthenticationService implements AutoCloseable {
   private final Lockouts lockouts;
   private final SessionClock clock;
   private final AuthenticationEventLog events;
+  private final AuthenticationEventArchive archive;
+  private final Path ownDirectory;
   private final SecureRandom random;
 
   private AuthenticationService(
@@ -92,7 +109,9 @@ public final class AuthenticationService implements AutoCloseable {
       AccountPolicy policy,
       MachineAdministrators administrators,
       SessionClock clock,
-      AuthenticationEventLog events) {
+      AuthenticationEventLog events,
+      AuthenticationEventArchive archive,
+      Path ownDirectory) {
     this.store = store;
     this.authenticator = authenticator;
     this.policy = policy;
@@ -101,6 +120,8 @@ public final class AuthenticationService implements AutoCloseable {
     this.lockouts = new Lockouts(store, clock);
     this.clock = clock;
     this.events = events;
+    this.archive = archive;
+    this.ownDirectory = ownDirectory;
     this.random = new SecureRandom();
   }
 
@@ -157,13 +178,20 @@ public final class AuthenticationService implements AutoCloseable {
 
     CredentialStore store = CredentialStore.openOrCreate(storeFile);
     try {
+      // One object behind two interfaces, on purpose. Everything that records an event holds the
+      // write-only one; only the export holds the one that can read a file back.
+      FileAuthenticationEventLog log =
+          new FileAuthenticationEventLog(
+              storeFile.resolveSibling(EVENT_LOG), storeFile.resolveSibling(EVENT_LOG_KEY));
       return new AuthenticationService(
           store,
           new Authenticator(parameters),
           AccountPolicy.bundledExtendedBy(storeFile.resolveSibling(DEPLOYMENT_BLOCKED_NAMES)),
           administrators,
           clock,
-          new FileAuthenticationEventLog(storeFile.resolveSibling(EVENT_LOG)));
+          log,
+          log,
+          storeFile.toAbsolutePath().normalize().getParent());
     } catch (RuntimeException e) {
       store.close();
       throw e;
@@ -197,6 +225,7 @@ public final class AuthenticationService implements AutoCloseable {
         case Logout logout -> logOut(logout, connection);
         case ChangeInactivityPeriod change -> changeInactivityPeriod(change, connection);
         case ClearLockout clear -> clearLockout(clear, connection);
+        case ExportAuthenticationEvents export -> exportAuthenticationEvents(export, connection);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -211,6 +240,11 @@ public final class AuthenticationService implements AutoCloseable {
    * this class asks who the peer is: authenticating is answered for anyone, because the password is
    * the proof. This request has no password to prove anything with — it is the one that creates the
    * first one — so the operating system's word about the peer is all there is to go on.
+   *
+   * <p>Only the creation is recorded, and against the name the Administrator now holds. A refused
+   * attempt has nothing but a typed string to be recorded against, and story 77 keeps typed strings
+   * out of the record: whoever mistypes a password into the name box would otherwise put it there
+   * permanently, at the one moment the machine is least supervised.
    */
   private Response bootstrap(Bootstrap request, ConnectionHandle connection) {
     if (!administersThisMachine(connection)) {
@@ -226,6 +260,7 @@ public final class AuthenticationService implements AutoCloseable {
     String hash = authenticator.hash(request.password());
     store.insert(
         new Account(request.administratorName(), Role.ADMINISTRATOR, hash, assessment.strength()));
+    record(AuthenticationEventType.ADMINISTRATOR_CREATED, request.administratorName());
     return new Ok();
   }
 
@@ -251,6 +286,11 @@ public final class AuthenticationService implements AutoCloseable {
     // visible to anyone who can see the screen it is open on. The live one is kept, so a second
     // person typing a password cannot throw out the person working.
     if (theMachineIsBusy()) {
+      // Recorded against nobody, because nobody has been looked up: the name that was typed is a
+      // typed string until an Account is found holding it, and story 77 keeps those out of here.
+      record(
+          AuthenticationEventType.AUTHENTICATION_REFUSED_SESSION_ALREADY_LIVE,
+          AuthenticationEvent.NO_ACCOUNT);
       return Denied.because(DeniedReason.SESSION_ALREADY_LIVE);
     }
 
@@ -269,14 +309,22 @@ public final class AuthenticationService implements AutoCloseable {
     // whatever name it names, which is what the absent branch above is for.
     Optional<Duration> refusedFor = account.flatMap(found -> lockouts.refusalOf(found.name()));
     if (refusedFor.isPresent()) {
+      record(AuthenticationEventType.AUTHENTICATION_REFUSED_LOCKED_OUT, account.get().name());
       return Denied.lockedFor(refusedFor.get());
     }
 
-    // The Account is named rather than assumed present: nothing but the reference hash can verify
-    // when there is no Account, and a build that ever made that untrue should fail here as a
-    // refusal rather than reach the line below with nothing in hand.
-    if (!verified || account.isEmpty()) {
-      return refuse(account);
+    // The absent Account is settled before the verification is read, rather than beside it: what
+    // was verified there was the reference hash, which nothing can be right about. Everything
+    // below therefore has an Account in hand.
+    if (account.isEmpty()) {
+      record(
+          AuthenticationEventType.AUTHENTICATION_FAILED_NO_SUCH_ACCOUNT,
+          AuthenticationEvent.NO_ACCOUNT);
+      return Denied.because(DeniedReason.AUTH_FAILED);
+    }
+
+    if (!verified) {
+      return refuse(account.get(), AuthenticationEventType.AUTHENTICATION_FAILED_WRONG_PASSWORD);
     }
 
     // An Administrator asking to act as an Operator is refused here, in the privileged process,
@@ -285,34 +333,38 @@ public final class AuthenticationService implements AutoCloseable {
     // replacing it, so the refusal costs what every other refusal costs — and it is counted
     // against the Account like any other failure, because an Account that could never be locked
     // out would be one an attacker could tell from every other Account by failing at it all day.
+    // The record says which of the two it was, because the record is read by whoever administers
+    // the deployment and they are owed the difference the login screen may not be told.
     if (account.get().role() != request.requestedRole()) {
-      return refuse(account);
+      return refuse(account.get(), AuthenticationEventType.AUTHENTICATION_FAILED_WRONG_ROLE);
     }
 
     lockouts.succeeded(account.get().name());
     SessionToken token = SessionToken.generate(random);
     sessions.open(token, account.get().name(), account.get().role(), connection);
+
+    // Recorded once the Session exists, not once the password checked out. Everything else here
+    // records a refusal, which is over by the time it is written; an admission is not over until
+    // there is a Session, and the record says what happened rather than what was about to.
+    record(AuthenticationEventType.AUTHENTICATION_SUCCEEDED, account.get().name());
     return new Granted(token);
   }
 
   /**
-   * Refuses an attempt and remembers that it happened, where there was an Account for it to happen
-   * to.
+   * Refuses an attempt against an Account that exists, records why, and remembers that it happened.
    *
    * <p>The failure that reaches the configured number is answered as the Lockout it has just
    * caused rather than as one more wrong password: someone told only that it failed keeps guessing
-   * at an Account that has stopped listening, which is the whole of story 43.
+   * at an Account that has stopped listening, which is the whole of story 43. It is two events and
+   * not one — the attempt, and the Lockout it caused — because they are two things that happened.
    */
-  private Response refuse(Optional<Account> account) {
-    if (account.isEmpty()) {
-      return Denied.because(DeniedReason.AUTH_FAILED);
-    }
-    String accountName = account.get().name();
-    Optional<Duration> lockedFor = lockouts.failed(accountName);
+  private Response refuse(Account account, AuthenticationEventType why) {
+    record(why, account.name());
+    Optional<Duration> lockedFor = lockouts.failed(account.name());
     if (lockedFor.isEmpty()) {
       return Denied.because(DeniedReason.AUTH_FAILED);
     }
-    record(AuthenticationEventType.ACCOUNT_LOCKED_OUT, accountName);
+    record(AuthenticationEventType.ACCOUNT_LOCKED_OUT, account.name());
     return Denied.lockedFor(lockedFor.get());
   }
 
@@ -378,6 +430,59 @@ public final class AuthenticationService implements AutoCloseable {
         request.token(),
         connection,
         live -> onlyAnAdministrator(live, () -> clearFor(request.accountName())));
+  }
+
+  /**
+   * Copies the record out for an Administrator to read with their own tools, which is the only way
+   * it is ever read (story 75).
+   *
+   * <p>The export is recorded after the copy is made rather than before, so the copy does not claim
+   * to hold the export that produced it. What the exported file does not say about itself, the file
+   * it was copied from says at the next export.
+   */
+  private Response exportAuthenticationEvents(
+      ExportAuthenticationEvents request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> onlyAnAdministrator(live, () -> exportTo(request.destination(), live)));
+  }
+
+  private Response exportTo(Path destination, SessionOutcome.Live live) {
+    if (!isSomewhereThisServiceMayWrite(destination)) {
+      return new ErrorResponse(ErrorCode.EXPORT_DESTINATION_REFUSED);
+    }
+    try {
+      AuthenticationEventExport export = archive.exportTo(destination);
+      record(AuthenticationEventType.AUTHENTICATION_EVENTS_EXPORTED, live.accountName());
+      return new AuthenticationEventsExported(export);
+    } catch (FileAlreadyExistsException e) {
+      return new ErrorResponse(ErrorCode.EXPORT_DESTINATION_REFUSED);
+    } catch (IOException e) {
+      return new ErrorResponse(ErrorCode.EXPORT_FAILED);
+    }
+  }
+
+  /**
+   * Whether this service will write a copy of the record where it was asked to.
+   *
+   * <p>Three refusals, and each of them is about the process being privileged rather than about the
+   * Administrator being untrusted. A relative path would be resolved against a working directory
+   * the person asking cannot see. A path inside this service's own directory would let an export
+   * land on the store, the record or the key it is chained under. And a directory that does not
+   * exist would have this process creating directories somewhere a client named.
+   *
+   * <p>Whether something is already there is not decided here — it is decided by the operating
+   * system when the file is created, because a check made first and acted on afterwards is a check
+   * a symbolic link planted in between goes round.
+   */
+  private boolean isSomewhereThisServiceMayWrite(Path destination) {
+    Path absolute = destination.toAbsolutePath().normalize();
+    Path parent = absolute.getParent();
+    return destination.isAbsolute()
+        && parent != null
+        && Files.isDirectory(parent)
+        && !absolute.startsWith(ownDirectory);
   }
 
   private Response clearFor(String accountName) {

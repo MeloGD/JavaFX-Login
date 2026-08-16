@@ -48,15 +48,36 @@ public final class OwnerOnlyFiles {
       }
     }
     if (!Files.exists(file)) {
-      if (posix) {
-        Files.createFile(file, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
-      } else {
-        Files.createFile(file);
-      }
+      createOwnerOnly(file, posix);
+      return;
     }
     if (posix) {
       Files.setPosixFilePermissions(file, OWNER_ONLY);
     } else {
+      restrictWithoutPosix(file);
+    }
+  }
+
+  /**
+   * Creates a file that must not exist yet, owner-only, and creates no directory to hold it.
+   *
+   * <p>This is what an export is written through. It refuses an existing file rather than
+   * reasserting the mode on it, because the privileged process writing to a path someone else chose
+   * must not be a way to overwrite a file — including one reached through a symbolic link, which is
+   * why the refusal is the operating system's and not a check made just before writing.
+   *
+   * @throws java.nio.file.FileAlreadyExistsException if something is already there
+   * @throws IOException if the file cannot be created
+   */
+  public static void createNew(Path file) throws IOException {
+    createOwnerOnly(file, FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+  }
+
+  private static void createOwnerOnly(Path file, boolean posix) throws IOException {
+    if (posix) {
+      Files.createFile(file, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
+    } else {
+      Files.createFile(file);
       restrictWithoutPosix(file);
     }
   }

@@ -8,12 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.audit.AuthenticationEventExport;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
@@ -236,6 +238,39 @@ class MessageCodecTest {
 
     assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
     assertEquals(sent.accountName(), received.accountName());
+  }
+
+  @Test
+  void carriesAnExportAuthenticationEventsUnchanged() {
+    ExportAuthenticationEvents sent =
+        new ExportAuthenticationEvents(
+            SessionToken.generate(new SecureRandom()), Path.of("/tmp/events.csv"));
+
+    ExportAuthenticationEvents received =
+        (ExportAuthenticationEvents) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.destination(), received.destination());
+  }
+
+  @Test
+  void carriesAnAuthenticationEventsExportedUnchanged() {
+    AuthenticationEventsExported sent =
+        new AuthenticationEventsExported(new AuthenticationEventExport(4312, false));
+
+    assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  /** A count of entries is a count. A message saying an export held minus four is not one. */
+  @Test
+  void refusesAnExportThatHeldFewerThanNoEntries() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes(
+                    "{\"type\":\"AuthenticationEventsExported\",\"events\":-4,"
+                        + "\"chainIntact\":true}")));
   }
 
   @Test

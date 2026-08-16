@@ -144,11 +144,12 @@ final class ServiceLoginGate implements LoginGate {
       case STORE_UNAVAILABLE ->
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach its CredentialStore");
-      // Both are answered to a request made from an Administrator's Session about an Account that
-      // already exists, which the first run is neither: it carries no Session at all, being what
-      // creates the Account that can hold one, and it names no Account but the one it is making.
-      // Reaching here means the service answered a question nobody asked.
-      case NOT_ADMINISTRATOR, NO_SUCH_ACCOUNT ->
+      // Every one of these is answered to a request made from an Administrator's Session — about
+      // an Account that already exists, or about a file to copy the record into. The first run is
+      // neither: it carries no Session at all, being what creates the Account that can hold one,
+      // and it asks for nothing to be written anywhere. Reaching here means the service answered a
+      // question nobody asked.
+      case NOT_ADMINISTRATOR, NO_SUCH_ACCOUNT, EXPORT_DESTINATION_REFUSED, EXPORT_FAILED ->
           throw unexpected("an attempt to create the Administrator", error);
     };
   }

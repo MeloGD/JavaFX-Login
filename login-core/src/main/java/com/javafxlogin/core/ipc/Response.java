@@ -11,6 +11,7 @@ public sealed interface Response
         Denied,
         Ok,
         Assessed,
+        AuthenticationEventsExported,
         BootstrapNeeded,
         PolicyRefused,
         SessionLive,

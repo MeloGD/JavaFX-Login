@@ -155,7 +155,26 @@ _Avoid_: host key, system key
 A recorded fact about access: an authentication attempt, a lockout, an Account
 change, a configuration change, an export, or a Session ended because the
 machine's clock moved. Events are written and never read back by the application.
+Where there is no Account to name, one is recorded against a fixed placeholder
+that no Account may be called — never against the string somebody typed.
 _Avoid_: log line, audit entry, log record
+
+**EventChain**:
+The HMAC that links each AuthenticationEvent to the one before it, so that an
+entry edited or removed in the middle breaks every entry after it. Its key lives
+beside the CredentialStore and is readable only by the AuthenticationService,
+which is what puts the record beyond the Administrator it may be about — and not
+beyond a MachineAdministrator, who was never in the threat model. It is checked
+when the record is exported, and nowhere else.
+_Avoid_: signature, checksum, integrity hash
+
+**AuthenticationEventExport**:
+A copy of every AuthenticationEvent still kept, written to one file an
+Administrator names and read with their own tools. It is the only way the record
+is ever read: nothing hands an event back to the application. The copy is
+owner-only, like everything else the AuthenticationService writes, and making one
+is itself an AuthenticationEvent.
+_Avoid_: log viewer, report, download
 
 **Lockout**:
 The state of an Account that has failed authentication often enough to be

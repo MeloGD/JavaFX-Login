@@ -1,4 +1,4 @@
-# Code review — Lockout (issue #8, Seams 1 and 3)
+# Code review — Audit log (issue #9)
 
 Written for a final reviewing agent. It records what was built, what a two-axis
 review found, what was acted on, and — more usefully — what was **not**, so the
@@ -10,181 +10,206 @@ ground.
 | | |
 |---|---|
 | Branch | `dev-login` |
-| Base / fixed point | `2c3b1d7`, the tip after issue #7's review record |
-| Diff to review | `git diff 2c3b1d7...HEAD` |
-| Packages | `com.javafxlogin.core.account`, `…core.authentication`, `…core.store`, `…core.ipc`, `…core.audit`, `com.javafxlogin.ui.login` |
-| Build | `mvn -o test` → 351 tests, 0 failures, 1 skipped by an OS guard |
-| New decision | ADR-0010 (`docs/adr/0010-lockout-is-persisted-and-says-so.md`) |
-| New migration | `V004__lockout.sql` — two columns on `accounts`, two `configuration` rows |
+| Base / fixed point | `4671ab8`, the tip after issue #8's review record |
+| Diff to review | `git diff 4671ab8...HEAD` |
+| Packages | `com.javafxlogin.core.audit`, `…core.authentication`, `…core.ipc`, `…core.store`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o clean test` → 338 core tests, 49 UI, 1 feature, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0011 (`docs/adr/0011-the-audit-log-is-chained-bounded-and-only-copied-out.md`) |
+| New migration | none — nothing about the record lives in the CredentialStore |
 
 **How this review was run.** The two axes were meant to run as parallel
-sub-agents, as issues #6 and #7 did. Both were killed by a session limit before
-they read anything, so the review below was carried out in one context instead.
-A final reviewer should weigh that: the axes did not check each other, and the
-same agent that wrote the code judged it.
+sub-agents. The Standards axis completed and its report is §4 below, largely
+verbatim. The Spec axis was killed by a session limit before it read anything,
+so that axis was carried out in this context instead — by the same agent that
+wrote the code. A final reviewer should weigh that: §2's table is a self-assessment,
+and §5 is where it says so. This is the second ticket in a row where a review
+sub-agent died this way (#8's record says the same).
 
 ## 2. What the ticket asked for
 
-Issue #8, "Lockout that survives a service restart" — parent spec issue #1,
-stories 40–44, plus story 89 (no rate-limiting state in memory). It was blocked
-by #5 (the walking skeleton), which had landed.
+Issue #9, "Audit log: write-only, HMAC-chained AuthenticationEvents" — parent
+spec issue #1, stories 73–81. It was blocked by #5 (the walking skeleton), which
+had landed. The `audit` package already held `AuthenticationEvent`,
+`AuthenticationEventLog` and a `FileAuthenticationEventLog` that wrote a plain
+CSV line: issues #7 and #8 put them there and both said in as many words that the
+chain, the rotation and the export belonged to this ticket.
 
 ### Acceptance criteria against evidence
 
 | Criterion | Status | Proof |
 |---|---|---|
-| An Account that fails authentication a configured number of times enters `Lockout` | met | `LockoutTest.theConfiguredNumberOfFailuresLocksTheAccount`, `…theNumberOfFailuresThatLocksIsWhateverTheStoreSays`, `ConfigurationTest.aFreshStoreLocksAnAccountOutAfterFiveFailuresForAQuarterOfAnHour` |
-| `Lockout` survives a restart of the `AuthenticationService` | met | `LockoutTest.theLockoutSurvivesARestartOfTheService` (closes the service and reopens it against the same files) |
-| A locked Account receives a distinct refusal saying so and for how long | met | `LockoutTest.aLockedAccountIsToldSoAndForHowLong`, `…theRefusalSaysWhatIsLeftOfTheLockoutRatherThanItsWholeLength`; over a real socket, `ServiceLoginGateTest.carriesALockoutBackWithTheWaitTheServiceDecided`; as a person meets it, `LoginWindowTest.aLockedAccountIsToldHowLongItHasToWait` |
-| `Lockout` state is in the store the service owns and is unreachable by an unprivileged process | met | `LockoutTest.everyFileTheLockoutIsWrittenToIsOwnerOnly` walks the whole directory after a Lockout; `StoreFilePermissionsTest` still asserts the mode on create and reopen |
-| Every write is flushed, since the service does not run continuously | met | `LockoutTest.theLockoutIsWrittenToTheStoreAtOnceRatherThanWhenTheServiceStops` reads the row over a second JDBC connection while the service still holds its own; `PRAGMA synchronous = FULL` and autocommit are what make that true |
-| The `Administrator` can clear a `Lockout` | met at the service | `LockoutTest.anAdministratorCanClearALockout`, `…clearingALockoutLeavesNothingCountedAgainstTheAccount`, `…anOperatorsSessionCannotClearALockout`, `…clearingALockoutForAnAccountThatDoesNotExistIsRefused`, `…aTokenThatNamesNoSessionClearsNothing` — **no screen, see §5** |
-| Entering and clearing each record an `AuthenticationEvent` | met | `LockoutTest.enteringALockoutIsRecorded`, `…clearingALockoutIsRecorded` |
-| A successful authentication resets the failure count | met | `LockoutTest.aSuccessfulAuthenticationForgetsTheFailuresBeforeIt`, `…theFailuresBeforeASuccessfulAttemptNeverAddUpToALockout` |
+| Authentication attempts, `Lockout`s, Account changes, configuration changes and exports all recorded | met, for everything this build can do | `AuthenticationEventRecordingTest` — `aSuccessfulAuthenticationIsRecordedAgainstTheAccount`, `aWrongPasswordIsRecordedAgainstTheAccountItWasOfferedTo`, `theRightPasswordInTheWrongRoleIsRecordedAsSuch`, `beingRefusedWhileLockedOutIsRecorded`, `anAttemptMadeWhileTheMachineIsBusyIsRecordedAgainstNobody`, `creatingTheAdministratorIsRecorded`, `exportingIsItselfRecorded`; `LockoutTest.enteringALockoutIsRecorded`, `…clearingALockoutIsRecorded`; `InactivityPeriodConfigurationTest.aChangeIsRecordedAgainstTheAdministratorWhoMadeIt` |
+| Entries are CSV, ISO-8601 **with a timezone** | met | `FileAuthenticationEventLogTest.theTimestampCarriesATimezone` matches the offset or `Z` |
+| A nonexistent Account is recorded against a fixed placeholder, never the typed string | met | `…anAttemptAgainstANameNobodyHoldsIsRecordedAgainstAPlaceholder` fails at a name shaped like a password and asserts the typed string is not in the file; `noAccountCanBeCalledWhatStandsInForOneThatIsMissing` proves the placeholder is refused as an Account name |
+| Each entry chained under an HMAC; a deletion or edit in the middle is detectable | met | `anEditedEntryIsFoundAtTheNextExport`, `anEntryRemovedFromTheMiddleIsFoundAtTheNextExport`, `aWholeFileRemovedFromTheMiddleIsFoundAtTheNextExport`, `anUntouchedRecordExportsWithItsChainIntact`, `theChainCarriesOnAcrossARestartOfTheService` |
+| Every entry flushed to disk as it is written | met, with the caveat in §5 | `anEntryIsOnTheDiskBeforeRecordingReturns`; the mechanism is `FileChannel.force(true)` on every entry |
+| The log rotates at a bounded size and count | met | `theRecordRotatesAndCannotGrowWithoutBound` — five files kept, under six megabytes in all |
+| **Authentication still succeeds when the log cannot be written** | met | `authenticationStillSucceedsWhenTheRecordCannotBeWritten` (the record's path is a directory); `recordingSwallowsAFileItCannotWrite` at the unit level |
+| The `Administrator` can export; the application never reads it back for display | met at the service — **no screen, see §5** | `anAdministratorCanExportTheRecord`, `theExportHoldsEveryEntryOldestFirst`, `theExportIsOwnerOnly`, `anOperatorCannotExportTheRecord`, `aTokenThatNamesNoSessionExportsNothing`, and four refusals of a destination |
+| No password, `SessionToken` or enrolment secret in an entry | met as far as it can be | `noPasswordEverReachesTheRecord`, `noSessionTokenEverReachesTheRecord`; there is no enrolment secret in this build (issue #10) |
 
 ## 3. Design decisions a reviewer should judge, not rediscover
 
-- **The state is two columns on the Account, and that is ADR-0010.** The service
-  stops after five idle minutes (ADR-0002), so a counter in memory is one an
-  attacker clears by waiting — story 89 says so outright. It is in the
-  `CredentialStore` rather than a file of its own because that buys the same
-  directory, owner and mode without a second thing to keep consistent with the
-  Accounts it is about.
-- **Nothing is remembered about a name no Account holds.** Counting failures
-  against whatever was typed would close the oracle below, and would pay with a
-  row in the privileged store for every string ever typed at a login screen —
-  one of which is eventually somebody's password in the wrong box, which is the
-  reasoning story 77 already applies to the audit log.
-  `LockoutTest.aNameNoAccountHoldsIsNeverLockedOutAndIsNeverWrittenDown` reads
-  the store's bytes and asserts the name is not in them.
-- **`LOCKED_OUT` is an oracle, deliberately, and it is priced.** It is the one
-  answer this service gives that says something about an Account. Five wrong
-  guesses at a name confirm the name is real — at the cost of one Argon2id
-  verification per guess, the Account locked for a quarter of an hour, and an
-  `ACCOUNT_LOCKED_OUT` line in the audit log. Story 43 asks for it, because the
-  alternative is a person retyping a correct password for fifteen minutes at a
-  screen insisting it is wrong. ADR-0010 states the trade and the six options it
-  beat, including the two that would remove the leak.
-- **The Lockout is applied after the Argon2id verification, not instead of it.**
-  Every refusal therefore costs the same — locked, wrong and absent alike — so
-  the stopwatch ADR-0002 keeps away from the account list is kept away from the
-  list of locked Accounts too. Skipping the work would save nothing: an attempt
-  costs one hash whatever name it names. This is why
-  `AbsentAccountCostsTheSameTest` still passes, and why it now raises the policy
-  out of its own way rather than switching Lockout off (see §4).
-- **A correct password in the wrong Role counts as a failure.** An Account that
-  could never be locked out would be the one an attacker picks out of the list
-  by failing at it all afternoon — and the Account whose Role is guessable is
-  the Administrator's. `LockoutTest.aRightPasswordInTheWrongRoleCountsTowardsTheLockout`.
-- **Timed by the wall clock alone, and never outlasting its configured length.**
-  A monotonic reading is a count from an origin the process chose and means
-  nothing after a restart, so ADR-0009's second clock cannot be used here. A
-  Lockout that claims to end further away than the configured length is read as
-  over: whoever set the clock back is a MachineAdministrator who can rewrite the
-  file directly, so it costs nothing already lost, and the alternative is
-  refusing a person until a date a clock error invented.
-- **`Denied` grew one optional field rather than the wire growing a response.**
-  `DeniedReason`'s javadoc had always said the set grows when a client must act
-  differently, and issue #1's protocol sketch names `LOCKED_OUT` there. The
-  record refuses to be built any other way: a Lockout always says how long, and
-  nothing else ever does — enforced in the compact constructor and at the codec
-  (`MessageCodecTest.refusesARefusalWhoseReasonAndWaitDoNotAgree`).
-- **`Lockouts` is a sibling of `Sessions`, and package-private.** Four methods —
-  `refusalOf`, `failed`, `succeeded`, `clear` — and the service turns what they
-  answer into responses and events, exactly as it does for `Sessions`. It is not
-  `public` because nothing outside the package has any business with it.
+- **The chain value is the *first* field of the line, not the last.** An Account
+  name is the only field a person controls; it is written last so that finding
+  where the chain value ends never means parsing back through a quoted name
+  somebody else chose. For the same reason a control character in a name is
+  folded to a space — one event is one line, and an Account name does not get to
+  decide how many entries there are.
+- **The chain value the next entry follows is read from the disk on the first
+  event after a start.** It has to be. The service stops after five idle minutes
+  (ADR-0002), so a chain that began again on each start would break after every
+  login, which reads exactly like tampering. Reading one field of one line is not
+  reading the record back: no event ever enters the application.
+- **`AuthenticationEventArchive` is a second interface, not two more methods on
+  `AuthenticationEventLog`.** One object implements both, and `open` hands it
+  over twice. Whoever records an event holds a reference that cannot read one
+  back; only the one request an Administrator must be authenticated to make holds
+  the other. The write-only promise of story 74 stays exactly as narrow as it was.
+- **The chain is verified at exactly one moment — when the record is exported.**
+  That gives the check a caller in production rather than only in the suite, and
+  it is the moment a person is in a position to do something about the answer.
+- **The export leaves as a file and never as a response.** ADR-0003 caps a frame
+  at a megabyte and the record may be five; and a response carrying events is one
+  refactor away from the viewer story 74 exists to prevent. The response carries
+  two numbers: how many entries, and whether the chain held.
+- **The exported copy is owner-only.** An export the logged-in operating-system
+  account can read is the account list and the pattern of every login handed to
+  the person ADR-0002 keeps them from. Reading the copy costs the privileges the
+  service runs with. This is the decision most worth disagreeing with, and
+  ADR-0011 states it rather than burying it.
+- **The service refuses a destination that is relative, whose directory is
+  absent, or that is inside its own directory** — one `ErrorCode` for all of
+  them, because every one is answered by choosing another path and a privileged
+  process that reported which paths exist would be answering questions nobody
+  asked. Whether something is *already* there is decided by the operating system
+  at `O_CREAT|O_EXCL`, not by a check made first and acted on afterwards, so a
+  symbolic link planted in between goes nowhere.
+- **A failed authentication says in the record why it failed** — wrong password,
+  no such Account, wrong Role, locked out, machine busy — where the client is
+  told only `AUTH_FAILED`. Issue #1 asks for exactly this in its protocol sketch.
+  Whoever exports the file has already proved they administer the deployment.
+- **An entry that could not be written is not chained onto.** The in-memory chain
+  value advances only after the bytes are on the disk, so a failed write leaves a
+  gap that still verifies rather than a break that reads as an edit.
+- **`AUTHENTICATION_SUCCEEDED` is recorded after the Session is opened**, not
+  after the password checks out. Every other entry records a refusal, which is
+  over by the time it is written; an admission is not over until there is a
+  Session.
+- **No migration, no store column.** Nothing about the record lives in the
+  CredentialStore, deliberately: recording must not fail an operation, and a
+  store that cannot be written must not become a record that cannot be written.
 
-## 4. What the two-axis review found and what was done
+## 4. What the review found and what was done
 
-**Standards axis.** No ADR contradiction; ADR-0002 and ADR-0009 honoured, and
-ADR-0010 written for the decisions this ticket had to make itself. `CONTEXT.md`'s
-`_Avoid_` list for `Lockout` (ban, throttle, block) is respected throughout, and
-`LockoutPolicy` was added to the glossary because it is new load-bearing
-language. Acted on:
+**Standards axis** (sub-agent, completed). Verdict: conforms, no hard violations,
+no line over 100 characters, no ADR contradicted. Acted on all of it:
 
-- The Role guard was written twice once `ClearLockout` arrived — the same
-  `live.role() != ADMINISTRATOR` cascade in two methods. Gathered into
-  `onlyAnAdministrator`, which is now the shape of every request only an
-  Administrator may make, as `onTheSessionNamedBy` is for every request only a
-  live Session may make.
-- The codec had `expiresInMillis` read and written by hand, and `lockedForMillis`
-  would have been the second copy of it. Both now go through one pair of
-  `millis` helpers, so "an absent duration is an explicit null" is written once.
-- `CredentialStore.inactivityPeriod()` and the new `lockoutPolicy()` would have
-  duplicated the settings lookup. Extracted `setting(name)`; the missing-setting
-  and not-a-value behaviour `ConfigurationTest` already pinned is unchanged.
-- Five lines wrapped where they exceeded 100 columns, and one test's imports
-  re-sorted.
+- **Ubiquitous-language drift.** Three places still said "audit log" where the
+  glossary now says `AuthenticationEventExport`: ADR-0011's final bullet named
+  `ExportAuditLog`, *a type that does not exist* — the real error of the batch;
+  the handler was `exportAuditLog(ExportAuthenticationEvents …)` where every
+  other handler is named for its request; and the Seam 1 test was `AuditLogTest`.
+  All three renamed. The wire types themselves had already been renamed from
+  `ExportAuditLog`/`AuditLogExported` mid-build for the same reason.
+- **Duplicated Code** — the rotation generations were walked three times, and
+  `lastChainValueOnDisk` reimplemented the ordering `oldestFirst()` already owns.
+  It now walks `oldestFirst()` backwards; two of the three walks remain, and they
+  are the rotation and the export, which move in opposite directions on purpose.
+- **Mysterious Name** — one concept had three names (`previous`,
+  `previousValue`, `previousChainValue()`), `firstKept` read as a noun, and the
+  new service field `directory` was vague beside `store`/`events`/`archive`. Now
+  `chainValueOfTheLastEntry`, `followed`, `nothingCheckedYet`, `ownDirectory`.
+- **A test that asserted nothing** — `recordingSwallowsAFileItCannotWrite`
+  passed if `record` did not throw. It now also asserts the entry landed nowhere,
+  which is the difference between swallowed and silently written elsewhere.
+- **`EVENT_LOG_KEY` had no javadoc** where every constant beside it does. Written.
+- **The `@throws` contract** — callers depend on `FileAlreadyExistsException`
+  specifically (it becomes `EXPORT_DESTINATION_REFUSED`), and that was documented
+  only on `OwnerOnlyFiles.createNew`. Now on `AuthenticationEventArchive.exportTo`
+  as well, with the reason it is named apart.
+- **Divergent Change on `FileAuthenticationEventLog`** — it now owns writing,
+  forcing, rotation, chain bootstrap and both halves of the line format. Noted
+  and **not** acted on: ADR-0011 sanctions replacing the inside of this class, the
+  line format is the piece that could follow `EventChain` out, and splitting it
+  now would be a second seam with one caller. Left for a final reviewer.
+- **Primitive Obsession on the chain value** — declined, see §5.
 
-**Spec axis.** Every acceptance criterion checked one by one; the table in §2 is
-its verdict. Acted on:
-
-- Criterion 4 ("not reachable by an unprivileged process") had only indirect
-  evidence — `StoreFilePermissionsTest` asserts the store's mode, but nothing
-  asserted that a Lockout does not write anywhere else.
-  `LockoutTest.everyFileTheLockoutIsWrittenToIsOwnerOnly` now walks the whole
-  directory after a Lockout, so a later build that put this state in a file of
-  its own fails rather than shipping a Lockout an Operator can delete.
-- The upgrade path was untested for this migration.
-  `CredentialStoreSchemaTest.anAccountFromAnEarlierSchemaHasFailedNothing`
-  builds a store at V001, migrates it, and asserts the Account comes out having
-  failed nothing — a migration that left it counted as anything else would lock
-  someone out on the strength of a number nobody counted.
-- `AbsentAccountCostsTheSameTest` fails at one Account twenty times, so at the
-  shipped policy it would have been locked out halfway through the warm-up and
-  every later sample would have timed a refusal an absent name can never
-  receive. It now raises the number of failures out of the measurement's way,
-  with the reason written where it is done. **This is a real interaction worth a
-  reviewer's eye**: the equal-cost property is now asserted only for the
-  attempts before a Lockout, which is the only window in which it can be
-  asserted at all.
+**Spec axis** (this context, not a sub-agent). Every acceptance criterion checked
+one by one; §2's table is its verdict. It found no missing criterion and one
+piece of scope worth naming: nothing in the ticket asked for control characters
+in a subject to be folded, and the folding is there because line-by-line
+verification is what makes the chain checkable at all. It is written where it is
+done and stated in ADR-0011.
 
 ## 5. Open ground — judge these rather than assume them
 
-- **The `Administrator` can clear a `Lockout`, but has nowhere to do it from.**
-  `ClearLockout` is complete and tested at Seam 1, and unreachable from the
-  shipped client: `ServiceLoginGate.admit` asks to act as an `Operator`, and the
-  service refuses the `Administrator` there by design. This is the *same* open
-  question issues #6 and #7 recorded, and it resolves the same way — the
+- **The Spec axis was self-assessed.** §2's table was filled in by the agent that
+  wrote the code, because the sub-agent for it died on a session limit. Every row
+  names a test, so it can be checked cheaply — but it was not checked by anyone
+  else. Start here.
+- **Truncating the tail of the record is undetectable, by design.** The chain
+  head is held in memory and re-read from the disk, with no sidecar file
+  recording where the record had got to. Removing the newest entries therefore
+  leaves a sound chain. Both ADR-0001 and ADR-0005 promise a record that "cannot
+  be edited or removed, **only withheld**", and losing the newest entries is what
+  withholding is — it is already what a failed write does. A reviewer who wants
+  the tail protected should argue with this paragraph and with ADR-0011's first
+  rejected option, which prices the sidecar.
+- **The oldest entry still kept can have its contents edited undetected.** What
+  it followed was rotated away, so it is taken on trust and its own chain value
+  is what the next entry is checked against. Editing its *chain value* still
+  breaks everything after it. This is stated in the export's own comment.
+- **The chain stops nobody who holds root.** The key sits at `0600` beside the
+  record, so it stops the Administrator — an Account of this system, which is
+  exactly the attacker ADR-0001 and ADR-0005 name — and a MachineAdministrator
+  reads it and recomputes the file. Reading this as protection against the
+  machine's owner would be reading it as a strength no offline product has.
+- **The chain value stayed a bare `String`.** The Standards axis called
+  Primitive Obsession: `EventChain` got a type and its value did not, and `""`
+  ("nothing to follow") and `null` ("not looked for yet") share one field.
+  Declined, and worth disagreeing with: the value never crosses a boundary —
+  it is computed, written and compared inside two classes in one package — so a
+  type would buy no protection anywhere, unlike `SessionToken`, which crosses the
+  wire and outlives a request. What was fixed instead is the naming and a javadoc
+  that pins both absent states.
+- **The `Administrator` can export, but has nowhere to do it from.**
+  `ExportAuthenticationEvents` is complete and tested at Seam 1 and unreachable
+  from the shipped client: `ServiceLoginGate.admit` asks to act as an `Operator`
+  and the service refuses the `Administrator` there by design. This is the *same*
+  open question issues #6, #7 and #8 recorded, and it resolves the same way — the
   administration panel is issue #12. **Flagged rather than smuggled in.**
-- **The single `Administrator` can lock themselves out, and only they can clear
-  it.** Five failed attempts at the Administrator's own name — including the
-  correct password offered at the login screen, which asks for the Operator Role
-  — refuse them for fifteen minutes, and the request that would release them
-  needs an Administrator Session nobody can obtain in the meantime. It ends by
-  itself, and the alternative (an Account that never locks) is the oracle §3
-  refuses. A reviewer who wants the Administrator exempted should argue with
-  this paragraph rather than assume it was missed.
-- **Nothing in this build changes the `LockoutPolicy`.** The migration writes
-  five failures and fifteen minutes; the store reads them again on every
-  decision, so the screen that will change them is a change of caller, not of
-  shape. No setter was added, because a setter nobody calls is a constant with
-  extra steps — the suite writes the `configuration` row directly instead
-  (`ServiceHarness.lockoutPolicyIs`), which is what a deployment would do today.
-- **`Denied` and `NotAdmitted` carry the same invariant twice.** The UI keeps its
-  own vocabulary — `NotAdmitted` has always carried the service's `DeniedReason`
-  rather than being the wire type — and the duplicated rule is what makes
-  `lockedFor().orElseThrow()` honest in `LoginController`. Considered and kept;
-  worth disagreeing with if you think the client should carry the `Denied`.
-- **A Lockout is not extended by attempts made during it.** Nothing is counted
-  while an Account is refused, because nothing is verified. Someone hammering a
-  locked Account gets the same fifteen minutes rather than an ever-growing one,
-  which is deliberate: the alternative lets anyone who can reach the login
-  screen keep an Operator out indefinitely.
-- **The wait a person reads is rounded up to whole minutes, floored at one.**
-  Fourteen and a half minutes reads as fifteen. A screen that said "one minute"
-  and then refused someone would be worse than a screen that overstates by
-  thirty seconds; `LoginController.waitOf` is where to argue.
-- **`FailedAuthentications` is not in `CONTEXT.md`.** It is the store's record of
-  what leads to a `Lockout` rather than a domain noun of its own, and the
-  glossary holds the nouns. `LockoutPolicy` was added, because a deployment
-  configures it and ADR-0010 rests on it.
-- **The event log names the Account, not the Administrator who cleared it.**
-  `AuthenticationEvent` carries one subject, there is exactly one Administrator,
-  and the Account released is the name a reader is looking for. If the audit
-  ticket (#9) gives events an actor, `LOCKOUT_CLEARED` is the first that wants
-  one.
-- **Nothing here slows an offline attack on a stolen hash.** That is Argon2id's
-  job at the parameters ADR-0002 pins, and reading a Lockout as protection
-  against it would be reading it as a strength it does not have. The ticket says
-  this in its own words, and so does `LockoutPolicy`'s javadoc.
+- **The export has no Seam 2 test.** It is covered at Seam 1 and by a codec
+  round-trip, and not over a real socket, because no client sends it yet. The
+  Lockout ticket earned its socket test by having a screen that meets a Lockout.
+- **"Flushed to disk" is asserted as "readable when `record` returns".** A suite
+  cannot observe an `fsync`. `FileChannel.force(true)` is the mechanism and the
+  test pins the property one layer above it. A reviewer who wants more would need
+  to cut power to a machine.
+- **A refused first run is not recorded.** Someone who is not a
+  MachineAdministrator attempting to create the Administrator leaves no entry,
+  because the only thing to record it against is a string that was typed, and
+  story 77 keeps typed strings out of the record. ADR-0011 lists this as the
+  omission most worth arguing with.
+- **An ordinary Session ending is still not recorded**, and this ticket did not
+  change that. `SessionExpiryTest.anOrdinaryTimeoutIsNotRecorded` had asserted
+  the record was *empty*, which stopped being true the moment authentication
+  attempts were recorded; it now asserts the record is unchanged across the
+  timeout, which is the claim it was always making.
+- **The rotation bounds are constants — a megabyte, five files.** Nothing
+  configures them, because nothing in this build would, and a setting nobody
+  writes is a constant with a lookup in front of it. The reasoning is the same
+  one the `LockoutPolicy` used in the other direction, where a deployment does
+  configure it.
+- **Every authentication now costs a forced write.** Both branches of the
+  equal-cost path pay it — an attempt against a name nobody holds records an
+  entry exactly as one against a real Account does — so ADR-0010's symmetry
+  holds, and `AbsentAccountCostsTheSameTest` still passes at a quarter-median
+  tolerance. Worth a reviewer's eye anyway: it is a new syscall on the hot path
+  of the one operation this project times.
+- **`ServiceLoginGate.refusalOf` grew two `ErrorCode`s it throws on.** The two
+  export codes cannot reach the first run, which carries no Session at all. The
+  compiler forced the edit, because the switch is exhaustive — and a clean build
+  is what caught it, since incremental compilation had been passing a stale
+  `login-ui` for several runs. Worth remembering for the next ticket that touches
+  a sealed type: `mvn -o clean test` before believing a green suite.
