@@ -8,7 +8,8 @@ package com.javafxlogin.core.ipc;
  * never becomes an interned String, and every implementation redacts itself when printed.
  */
 public sealed interface Request
-    permits Assess,
+    permits AcknowledgePasswordReset,
+        Assess,
         AskIfBootstrapNeeded,
         AskIfSessionIsLive,
         Authenticate,

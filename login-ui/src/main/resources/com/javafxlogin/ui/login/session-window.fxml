@@ -24,12 +24,18 @@
         <Insets top="8.0" right="12.0" bottom="8.0" left="12.0"/>
       </padding>
       <!--
-        Empty on an ordinary login. It carries the one thing the AuthenticationService says exactly
-        once — that an Administrator reset this Account's password, and when — because the login
-        screen it was said on has already closed by the time this window opens.
+        Empty on an ordinary login. It carries the one thing the AuthenticationService keeps saying
+        until somebody reads it — that an Administrator reset this Account's password, and when —
+        because the login screen it was said on has already closed by the time this window opens.
+
+        The button beside it is what ends it. The service repeats the notice at every admission
+        until it arrives, so a person who never dismisses it is told again tomorrow; both controls
+        are unmanaged while there is nothing to say, so an empty notice takes no room.
       -->
       <Label fx:id="notice" styleClass="warning" wrapText="true" maxWidth="Infinity"
              HBox.hgrow="ALWAYS"/>
+      <Button fx:id="noticeRead" text="Entendido" onAction="#onNoticeRead"
+              visible="false" managed="false"/>
       <Button fx:id="logOut" text="Cerrar sesión" onAction="#onLogOut"/>
     </HBox>
   </top>

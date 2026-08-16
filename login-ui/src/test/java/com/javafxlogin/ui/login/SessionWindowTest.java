@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
 import javafx.scene.Parent;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.layout.StackPane;
@@ -194,6 +195,44 @@ class SessionWindowTest extends ApplicationTest {
     admitAnOperator();
 
     assertEquals("", lookup("#notice").queryAs(Label.class).getText());
+    assertFalse(
+        lookup("#noticeRead").queryAs(Button.class).isVisible(),
+        "there is nothing to say and something to dismiss it with");
+  }
+
+  /**
+   * The notice is spent when the person reads it and not when the service sends it. Dismissing it is
+   * what tells the service, which until then says it again at every admission — so a client that
+   * died before drawing this window has not swallowed the only copy.
+   */
+  @Test
+  void theNoticeIsOverOnlyWhenThePersonSaysTheyHaveReadIt() {
+    gate.withAPasswordResetAt(Instant.parse("2026-03-01T09:00:00Z"));
+    admitAnOperator();
+    assertEquals(0, gate.noticesRead(), "nobody has read anything yet");
+
+    clickOn("#noticeRead");
+
+    await(() -> gate.noticesRead() == 1);
+    assertEquals("", lookup("#notice").queryAs(Label.class).getText(), "the notice should be gone");
+    assertFalse(lookup("#noticeRead").queryAs(Button.class).isVisible());
+  }
+
+  /**
+   * A service that could not be told is not something to put in front of the person. They have read
+   * it; the worst it costs is being shown it again next time, which is the safe direction.
+   */
+  @Test
+  void aNoticeStaysDismissedEvenWhenTheServiceCannotBeTold() {
+    gate.withAPasswordResetAt(Instant.parse("2026-03-01T09:00:00Z"));
+    admitAnOperator();
+
+    gate.cannotBeToldTheNoticeWasRead();
+    clickOn("#noticeRead");
+
+    await(() -> gate.noticesRead() == 1);
+    assertEquals("", lookup("#notice").queryAs(Label.class).getText(), "the notice should be gone");
+    assertTrue(lookup("#feature").tryQuery().isPresent(), "the window should still be here");
   }
 
   private void admitAnOperator() {

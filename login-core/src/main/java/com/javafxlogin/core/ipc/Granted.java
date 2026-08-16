@@ -13,11 +13,12 @@ import java.util.Optional;
  * which is the decision the service is here to make.
  *
  * @param token the opaque 128-bit SessionToken, never persisted and never logged
- * @param passwordResetAt when an Administrator took this Account's password away, where that has
- *     happened since the last time anybody logged in and the Operator has not been told yet. It
- *     rides on the admission rather than on the refusal before it, because the person it is for is
- *     the one who has just proved they hold the Account — and it is said once: the service forgets
- *     it as it says it, so a reset is news the next morning and not a banner for a fortnight.
+ * @param passwordResetAt when an Administrator took this Account's password away, where the person
+ *     holding the Account has not said they have read about it yet. It rides on the admission
+ *     rather than on the refusal before it, because the person it is for is the one who has just
+ *     proved they hold the Account — and it is said on every admission until an {@link
+ *     AcknowledgePasswordReset} arrives, because a notice that was sent is not a notice that
+ *     arrived: a client that died before drawing a window would otherwise have spent the only copy.
  */
 public record Granted(SessionToken token, Optional<Instant> passwordResetAt) implements Response {
 

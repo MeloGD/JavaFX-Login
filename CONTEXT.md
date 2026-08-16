@@ -70,7 +70,9 @@ _Avoid_: invite code, token, activation key, one-time password
 An Administrator taking an Operator's password away and issuing an
 EnrolmentSecret in its place. The old password stops working at once rather than
 when the new one arrives, so a reset cannot be started and quietly abandoned, and
-the Operator is told at their next successful login that it happened and when.
+the Operator is told that it happened and when — on every successful login until
+they say they have read it, because a notice that was sent is not a notice that
+arrived.
 The Administrator's own password is not subject to it: that one is chosen at the
 FirstRunWizard by whoever will use it, and there is nobody to hand a secret to.
 _Avoid_: forgot password, recovery, password change

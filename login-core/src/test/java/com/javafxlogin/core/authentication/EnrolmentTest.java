@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.javafxlogin.core.account.EnrolmentSecret;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.harness.ServiceHarness;
+import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
+import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.CreateAccount;
@@ -63,6 +65,9 @@ class EnrolmentTest {
   private static final String ADMINISTRATOR_PASSWORD = "Correct-Horse-1";
   private static final String OPERATOR = "finch.mercer";
   private static final String CHOSEN_PASSWORD = "Another-Horse-2";
+
+  /** What an Operator picks for themselves after an Administrator has taken the last one away. */
+  private static final String RECHOSEN_PASSWORD = "A-Third-Horse-3";
 
   /** What V005 writes, and what every test here that does not say otherwise runs against. */
   private static final Duration SECRET_LASTS_FOR = Duration.ofHours(72);
@@ -398,27 +403,101 @@ class EnrolmentTest {
   /** Criterion 9: the Operator is told, at the moment they have proved the Account is theirs. */
   @Test
   void theOperatorIsToldAtTheirNextLoginThatTheirPasswordWasReset() {
-    harness.provisionOperator(OPERATOR, CHOSEN_PASSWORD);
-    Instant resetAt = harness.clock().wallTime();
-    String secret = resetThePasswordOf(OPERATOR).secret();
-    assertInstanceOf(Ok.class, enrol(OPERATOR, secret, "A-Third-Horse-3"));
+    Instant resetAt = whoseEnrolmentFollowedAReset();
 
-    Granted granted = assertInstanceOf(Granted.class, attempt(OPERATOR, "A-Third-Horse-3"));
+    Granted granted = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD));
 
     assertEquals(Optional.of(resetAt), granted.passwordResetAt());
   }
 
-  /** It is news, and news is said once. */
-  @Test
-  void theOperatorIsToldOnce() {
+  /**
+   * An Operator who had a password, had it taken away by an Administrator, and has enrolled again
+   * with one of their own — which is the state everything about the notice is asserted from.
+   *
+   * @return the moment the password was taken away, which is what the notice says
+   */
+  private Instant whoseEnrolmentFollowedAReset() {
     harness.provisionOperator(OPERATOR, CHOSEN_PASSWORD);
+    Instant resetAt = harness.clock().wallTime();
     String secret = resetThePasswordOf(OPERATOR).secret();
-    enrol(OPERATOR, secret, "A-Third-Horse-3");
-    logOutOf(assertInstanceOf(Granted.class, attempt(OPERATOR, "A-Third-Horse-3")).token());
+    assertInstanceOf(Ok.class, enrol(OPERATOR, secret, RECHOSEN_PASSWORD));
+    return resetAt;
+  }
 
-    Granted again = assertInstanceOf(Granted.class, attempt(OPERATOR, "A-Third-Horse-3"));
+  /**
+   * A notice that was sent is not a notice that arrived. It is said again on the next admission,
+   * and the one after that, because a client that died between being granted a Session and drawing
+   * a window would otherwise have spent the only copy of the one thing here that exists to be
+   * noticed by the Operator and by nobody else.
+   */
+  @Test
+  void theOperatorIsToldAgainUntilTheySayTheyHaveReadIt() {
+    Instant resetAt = whoseEnrolmentFollowedAReset();
 
+    for (int login = 1; login <= 3; login++) {
+      Granted granted = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD));
+      assertEquals(
+          Optional.of(resetAt),
+          granted.passwordResetAt(),
+          "login " + login + " should still have said so");
+      logOutOf(granted.token());
+    }
+  }
+
+  /** And it stops the moment they say they have read it, which is the only thing that ends it. */
+  @Test
+  void theOperatorIsToldNoMoreOnceTheyHaveReadIt() {
+    whoseEnrolmentFollowedAReset();
+    Granted told = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD));
+
+    assertInstanceOf(Ok.class, harness.send(new AcknowledgePasswordReset(told.token())));
+    logOutOf(told.token());
+
+    Granted again = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD));
     assertEquals(Optional.empty(), again.passwordResetAt());
+  }
+
+  /** Reading it is not working: a person reading a notice has not touched the ProtectedFeature. */
+  @Test
+  void sayingTheNoticeWasReadIsNotActivity() {
+    whoseEnrolmentFollowedAReset();
+    SessionToken token = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD)).token();
+
+    harness.clock().passes(Duration.ofMinutes(10));
+    assertInstanceOf(Ok.class, harness.send(new AcknowledgePasswordReset(token)));
+    harness.clock().passes(Duration.ofMinutes(6));
+
+    assertEquals(
+        new SessionEnded(SessionEndedReason.INACTIVITY),
+        harness.send(new AskIfSessionIsLive(token)),
+        "acknowledging a notice restarted the countdown");
+  }
+
+  /** Saying it twice, or when there was nothing to say, is what was asked for and not a failure. */
+  @Test
+  void sayingItWasReadWhenThereWasNothingToReadIsStillOk() {
+    harness.provisionOperator(OPERATOR, CHOSEN_PASSWORD);
+    SessionToken token = admit(OPERATOR, CHOSEN_PASSWORD, Role.OPERATOR);
+
+    assertInstanceOf(Ok.class, harness.send(new AcknowledgePasswordReset(token)));
+    assertInstanceOf(Ok.class, harness.send(new AcknowledgePasswordReset(token)));
+  }
+
+  /**
+   * The Session is the whole of the authorisation, and it is what names the Account: a client that
+   * holds no Session dismisses nothing, and one that holds a Session cannot dismiss somebody else's
+   * notice because it never says whose.
+   */
+  @Test
+  void aTokenThatNamesNoSessionAcknowledgesNothing() {
+    Instant resetAt = whoseEnrolmentFollowedAReset();
+
+    Response response =
+        harness.send(new AcknowledgePasswordReset(SessionToken.generate(new SecureRandom())));
+
+    assertEquals(new SessionEnded(SessionEndedReason.NO_SUCH_SESSION), response);
+    Granted granted = assertInstanceOf(Granted.class, attempt(OPERATOR, RECHOSEN_PASSWORD));
+    assertEquals(Optional.of(resetAt), granted.passwordResetAt(), "the notice was spent anyway");
   }
 
   /** An Operator who was never reset is told nothing, which is what an ordinary login is. */

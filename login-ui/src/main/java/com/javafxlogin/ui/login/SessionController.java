@@ -43,6 +43,7 @@ public final class SessionController {
   @FXML private StackPane protectedFeature;
   @FXML private Button logOut;
   @FXML private Label notice;
+  @FXML private Button noticeRead;
 
   private LoginGate gate;
   private Session session;
@@ -60,13 +61,52 @@ public final class SessionController {
     Objects.requireNonNull(admitted, "admitted");
     this.session = admitted.session();
 
-    admitted.passwordResetAt().ifPresent(resetAt -> notice.setText(sentenceFor(resetAt)));
+    admitted.passwordResetAt().ifPresent(resetAt -> show(sentenceFor(resetAt)));
     protectedFeature.getChildren().add(Objects.requireNonNull(view, "view"));
     guard = SessionGuard.watching(root, gate, session, this::theSessionEnded);
   }
 
+  private void show(String sentence) {
+    notice.setText(sentence);
+    // Both controls are hidden until there is something to say, and they take no room while they
+    // are: an empty notice would otherwise push the host product's view down the window for the
+    // benefit of a sentence nobody is being shown.
+    noticeRead.setVisible(true);
+    noticeRead.setManaged(true);
+  }
+
   private static String sentenceFor(Instant resetAt) {
     return PASSWORD_WAS_RESET.formatted(WHEN.format(resetAt));
+  }
+
+  /**
+   * The person says they have read it, which is the only thing that ends it.
+   *
+   * <p>The notice goes from the window first and the service is told afterwards, because the two are
+   * not the same promise: the window is this person's and answers immediately, while telling the
+   * service crosses the socket. A report that does not arrive costs nothing worse than the notice
+   * being shown again at the next admission — which is the behaviour this whole arrangement exists
+   * to have, so it fails in the safe direction.
+   */
+  @FXML
+  private void onNoticeRead() {
+    dismissTheNotice();
+    GateAttempt.make(
+        "password-reset-notice-read",
+        () -> {
+          gate.passwordResetNoticeWasRead(session);
+          return null;
+        },
+        ignored -> {},
+        // A service that could not be told is not something to put in front of the person: they
+        // have read the notice, and the worst it costs is being shown it again next time.
+        ignored -> {});
+  }
+
+  private void dismissTheNotice() {
+    notice.setText("");
+    noticeRead.setVisible(false);
+    noticeRead.setManaged(false);
   }
 
   /**

@@ -92,6 +92,23 @@ public interface LoginGate {
   void logOut(Session session);
 
   /**
+   * Reports that the person holding this Session has read the notice saying their password was
+   * reset, so that the service stops sending it.
+   *
+   * <p>Until this is called the notice arrives with every admission. That is deliberate: a notice
+   * that was sent is not a notice that arrived, and a client that died before drawing a window would
+   * otherwise have spent the only copy of the one thing this service says that has to reach a
+   * particular person.
+   *
+   * <p>Reading a notice is not activity and this does not restart the Session's countdown.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  void passwordResetNoticeWasRead(Session session);
+
+  /**
    * Whether this installation is still waiting for its single Administrator, which is what decides
    * whether a person sees the first-run wizard or the login screen.
    *

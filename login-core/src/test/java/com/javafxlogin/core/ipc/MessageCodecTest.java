@@ -99,6 +99,8 @@ class MessageCodecTest {
     assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new ReportActivity(token)));
     assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new AskIfSessionIsLive(token)));
     assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new Logout(token)));
+    assertArrayEquals(
+        token.copyOfBytes(), tokenOfRoundTripped(new AcknowledgePasswordReset(token)));
   }
 
   @Test
@@ -436,6 +438,7 @@ class MessageCodecTest {
       case ReportActivity report -> report.token().copyOfBytes();
       case AskIfSessionIsLive ask -> ask.token().copyOfBytes();
       case Logout logout -> logout.token().copyOfBytes();
+      case AcknowledgePasswordReset seen -> seen.token().copyOfBytes();
       default -> throw new AssertionError("not a request about a Session: " + received);
     };
   }

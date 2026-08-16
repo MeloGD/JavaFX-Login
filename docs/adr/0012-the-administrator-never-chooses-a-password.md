@@ -44,6 +44,8 @@ told at their next login.
 - Re-issuing a lost or expired secret is `InitiateReset` again: for an Account
   awaiting enrolment there is simply no password to take away, and nothing the
   Operator is owed being told about.
+- The notice that a password was reset is **consumed when it is read, not when it
+  is sent** — see the amendment below.
 - The single Administrator is outside all of it. Its password is chosen at the
   FirstRunWizard by whoever will use it, and both `CreateAccount` with the
   Administrator Role and `InitiateReset` against the Administrator are refused.
@@ -75,6 +77,33 @@ bits against a store that counts every wrong one towards the same Lockout a wron
 password earns. The alternative is a person who has been handed a code standing
 at a login screen that tells them their password is wrong, which is a screen that
 will never let them in and never say why.
+
+## Amended: the notice is spent when it is read, not when it is sent
+
+As first built, the service read `password_reset_at` and cleared it in the same
+call, on the admission that reported it. The review of this ticket flagged what
+that means and it was right: a client that died between being granted a Session
+and drawing a window would have spent the only copy, and the Operator would never
+be told — about the one event in this system that exists to be noticed by them and
+by nobody else. The service, not the person, decided they had been told.
+
+It now works the other way. The notice rides on **every** admission until an
+`AcknowledgePasswordReset` arrives, carrying the Session and nothing else — only
+somebody who has proved they hold the Account can say they were told about it,
+and because the Account is the Session's own rather than one a client named, a
+patched client cannot dismiss anybody else's. Reading a notice is not activity, so
+acknowledging one does not restart the countdown on an Operator who has walked
+away from the screen it was on. Acknowledging nothing is an `Ok`: what the caller
+asked for is that the notice be over, and afterwards it is.
+
+The window dismisses the notice first and tells the service afterwards, which is
+the safe direction — a report that never arrives costs one repeat of a sentence,
+and the repeat is the whole mechanism working.
+
+**What it costs.** A person who never presses the button is told again at every
+login, forever. That is the intended failure: the alternative is a notice about a
+password reset that somebody silently never received, and being told twice is
+cheaper than being told never.
 
 ## Considered options
 
@@ -108,6 +137,13 @@ will never let them in and never say why.
   other direction: there was no password to be wrong about, and whoever guessed
   the name of a new Operator could otherwise lock them out of their own enrolment
   before they ever reached the screen.
+- **Clearing the reset notice as it is sent**, which is how this was first built.
+  Rejected on review: it treats sending as receiving, and the one message here
+  that has to reach a particular person is the one it would drop silently.
+- **Showing the notice until the Session ends, and clearing it then.** Rejected:
+  a Session ends by inactivity as often as by anybody looking at the screen, so
+  it would clear the notice for an Operator who walked away before reading it —
+  the same defect with a longer window.
 - **Granting a Session at the end of a successful enrolment.** Rejected: it saves
   one typing of a password that has just been chosen and has never been tested,
   and it makes `CompleteEnrolment` a way to obtain a Session without

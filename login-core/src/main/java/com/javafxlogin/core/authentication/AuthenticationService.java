@@ -10,6 +10,7 @@ import com.javafxlogin.core.audit.AuthenticationEventType;
 import com.javafxlogin.core.audit.FileAuthenticationEventLog;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
+import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Assess;
@@ -238,6 +239,7 @@ public final class AuthenticationService implements AutoCloseable {
         case CreateAccount create -> createAccount(create, connection);
         case InitiateReset reset -> initiateReset(reset, connection);
         case CompleteEnrolment complete -> completeEnrolment(complete);
+        case AcknowledgePasswordReset seen -> acknowledgePasswordReset(seen, connection);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -368,9 +370,10 @@ public final class AuthenticationService implements AutoCloseable {
 
     lockouts.succeeded(account.get().name());
 
-    // Read here, and forgotten as it is read: this is the moment somebody has proved they hold the
-    // Account, and so the only moment a reset they did not ask for can be reported to the person it
-    // was done to rather than to whoever walked past the screen.
+    // Read here, because this is the moment somebody has proved they hold the Account, and so the
+    // only moment a reset they did not ask for can be reported to the person it was done to rather
+    // than to whoever walked past the screen. Reading it does not spend it: it is said again on the
+    // next admission, and the one after that, until an AcknowledgePasswordReset says it was read.
     Optional<Instant> passwordResetAt = enrolments.resetToDeclareFor(account.get().name());
 
     SessionToken token = SessionToken.generate(random);
@@ -492,6 +495,29 @@ public final class AuthenticationService implements AutoCloseable {
     lockouts.succeeded(request.accountName());
     record(AuthenticationEventType.ENROLMENT_COMPLETED, request.accountName());
     return new Ok();
+  }
+
+  /**
+   * The person holding the Session says they have read the notice about their password having been
+   * reset, so the service stops saying it.
+   *
+   * <p>The Session is the whole of the authorisation, and it is the right one: only somebody who has
+   * proved they hold the Account can say they were told about it. The Account is the Session's own
+   * rather than one a client named, so a patched client cannot dismiss somebody else's notice.
+   *
+   * <p>Nothing to acknowledge is answered with {@link Ok} rather than refused. What the caller asked
+   * for is that the notice be over, and afterwards it is — and a client that sent this twice, or on
+   * a Session that never had one, has not done anything wrong.
+   */
+  private Response acknowledgePasswordReset(
+      AcknowledgePasswordReset request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> {
+          enrolments.declaredTo(live.accountName());
+          return new Ok();
+        });
   }
 
   /**

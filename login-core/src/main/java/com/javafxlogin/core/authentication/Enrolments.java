@@ -109,18 +109,30 @@ final class Enrolments {
   }
 
   /**
-   * What this Account's holder is owed being told about a reset they did not ask for, and forgetting
-   * it in the same call because it is said exactly once.
+   * What this Account's holder is owed being told about a reset they did not ask for.
    *
    * <p>Read at the moment somebody proves they hold the Account, which is the only moment it can be
    * said to the right person: an Administrator initiating a reset knows they did it, and a screen
    * showing the notice to whoever comes past would be telling the machine's room rather than the
    * Operator.
+   *
+   * <p>Reading it does not spend it — see {@link #declaredTo}. It is said on every admission until
+   * somebody says they have read it, because a notice that was sent is not a notice that arrived.
    */
   Optional<Instant> resetToDeclareFor(String accountName) {
-    Optional<Instant> resetAt = store.passwordResetAt(accountName);
-    resetAt.ifPresent(ignored -> store.forgetPasswordReset(accountName));
-    return resetAt;
+    return store.passwordResetAt(accountName);
+  }
+
+  /**
+   * The person holding the Account has read the notice, so it is over.
+   *
+   * <p>This is the only thing that ends it. The alternative — forgetting it as it is handed to the
+   * client — spends the one copy on a message that may never have been drawn: a client that dies
+   * between being granted a Session and painting a window would leave the Operator never told,
+   * about the one event in this system that exists to be noticed by them and nobody else.
+   */
+  void declaredTo(String accountName) {
+    store.forgetPasswordReset(accountName);
   }
 
   private Enrolment enrolmentOf(EnrolmentSecret secret) {

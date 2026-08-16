@@ -35,6 +35,7 @@ final class FakeLoginGate implements LoginGate {
   private final AtomicInteger activityReports = new AtomicInteger();
   private final AtomicInteger questionsAboutTheSession = new AtomicInteger();
   private final AtomicInteger logouts = new AtomicInteger();
+  private final AtomicInteger noticesRead = new AtomicInteger();
 
   private final List<String> enrolments = new CopyOnWriteArrayList<>();
 
@@ -45,6 +46,7 @@ final class FakeLoginGate implements LoginGate {
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
   private volatile EnrolmentOutcome nextEnrolmentOutcome = new Enrolled();
   private volatile Instant passwordResetAt;
+  private volatile boolean noticeReadFails;
 
   /** An Account the service says has no password yet, whatever is typed for it. */
   private volatile String awaitingEnrolment;
@@ -97,6 +99,16 @@ final class FakeLoginGate implements LoginGate {
     passwordResetAt = resetAt;
   }
 
+  /**
+   * A service that answers everything else and cannot be told the notice was read. Narrower than
+   * {@link #becomeUnreachable} on purpose: a service that has gone away entirely also ends the
+   * Session the guard is watching, which would close the window a test about the notice is looking
+   * at.
+   */
+  void cannotBeToldTheNoticeWasRead() {
+    noticeReadFails = true;
+  }
+
   /** What the enrolment screen offered, as {@code name/secret/password}, in order. */
   List<String> enrolments() {
     return List.copyOf(enrolments);
@@ -135,6 +147,11 @@ final class FakeLoginGate implements LoginGate {
   /** How many times a Session was ended deliberately. */
   int logouts() {
     return logouts.get();
+  }
+
+  /** How many times somebody said they had read the notice about their password being reset. */
+  int noticesRead() {
+    return noticesRead.get();
   }
 
   /** What the window offered, as {@code name/password}, in the order it offered it. */
@@ -188,6 +205,17 @@ final class FakeLoginGate implements LoginGate {
       awaitingEnrolment = null;
     }
     return nextEnrolmentOutcome;
+  }
+
+  @Override
+  public void passwordResetNoticeWasRead(Session session) {
+    Objects.requireNonNull(session, "session");
+    noticesRead.incrementAndGet();
+    if (!reachable || noticeReadFails) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    // As the real service does: it is over, and the next admission says nothing.
+    passwordResetAt = null;
   }
 
   @Override

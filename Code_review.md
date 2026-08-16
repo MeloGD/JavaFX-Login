@@ -1644,16 +1644,12 @@ ticket's:
 
 ## 5. Open ground — judge these rather than assume them
 
-- **The reset notice is spent at the moment it is granted, not when it is read.**
-  `Enrolments.resetToDeclareFor` reads `password_reset_at` and clears it in the
-  same call, so a client that dies between `Granted` and drawing the window never
-  tells the person. The Spec axis raised this and it is real. It was left as it
-  is: acknowledging a notice would be a new request in the protocol for a rare
-  failure, and the Operator has just been through the reset from the other side —
-  their password stopped working and somebody handed them a code — so the notice
-  confirms something they lived through rather than being the only sign of it.
-  `PASSWORD_RESET_INITIATED` is in the audit log permanently either way. **The
-  most arguable decision in this change.**
+- ~~**The reset notice is spent at the moment it is granted, not when it is
+  read.**~~ **Closed by the follow-up below.** The Spec axis raised it, it was
+  left standing here as the most arguable decision in the change, and the
+  repository owner then asked for it to be fixed. See "Enrolment, follow-up" at
+  the end of this file: the notice now survives until an
+  `AcknowledgePasswordReset` says somebody read it.
 - **`ENROLMENT_REQUIRED` is the second refusal that says something about an
   Account.** It names a name as real and as unclaimed. ADR-0012 states the price;
   story 30 asks for it; a reviewer who disagrees should argue with the ADR rather
@@ -1681,3 +1677,97 @@ ticket's:
   else, and hiding it is how a transcription error becomes three failed attempts
   and a Lockout. `EnrolmentWindowTest.theCodeIsShownAsItIsTyped` pins it, so a
   later change has to argue with the test.
+
+---
+
+# Code review — Enrolment, follow-up (issue #10): the notice is read, not merely sent
+
+An addition to the entry above rather than a replacement for it. The two-axis
+review of issue #10 left one thing standing as open ground — §5's first bullet —
+and the repository owner asked for it to be closed rather than lived with. This
+records what changed and why the first version was wrong.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Base / fixed point | `dc8d1c1`, the enrolment commit above |
+| Packages | `com.javafxlogin.core.ipc`, `…core.authentication`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o clean test` → 413 core tests, 68 UI, 1 feature, 0 failures, 1 skipped by an OS guard |
+| Decision | ADR-0012, amended in place under "**Amended: the notice is spent when it is read, not when it is sent**" |
+| New migration | none — the column and its meaning are unchanged; only what ends it moved |
+
+## 2. What was wrong
+
+`Enrolments.resetToDeclareFor` read `password_reset_at` and cleared it in the same
+call, on the admission that reported it. That treats **sending as receiving**. A
+client that died between being granted a Session and painting a window — a crash,
+a kill, a display that never came up — had already spent the only copy, and the
+Operator would never be told that an Administrator had taken their password away.
+It is the one message this service produces whose whole purpose is to reach one
+particular person, and it was the one being dropped silently.
+
+The service, rather than the person, was deciding they had been told.
+
+## 3. What it does now
+
+- The notice rides on **every** admission while `password_reset_at` is set.
+- A new request, `AcknowledgePasswordReset`, ends it. It carries the
+  `SessionToken` and nothing else: the Account it clears is the Session's own, so
+  a patched client cannot dismiss somebody else's notice, and only somebody who
+  has proved they hold the Account can say they were told about it.
+- Reading a notice **is not activity**. It goes through the same
+  `onTheSessionNamedBy` path every other Session request uses, which never touches
+  the countdown, so acknowledging one does not keep alive the Session of an
+  Operator who walked away from the screen it was on.
+- Acknowledging nothing answers `Ok`. What the caller asked for is that the notice
+  be over, and afterwards it is; a client that sends it twice has done nothing
+  wrong.
+- The window shows an "Entendido" button beside the notice, unmanaged while there
+  is nothing to say. It **dismisses first and tells the service afterwards**,
+  which is the safe direction: a report that never arrives costs one repeat of a
+  sentence, and the repeat is the mechanism working rather than failing.
+
+## 4. What it costs, stated plainly
+
+A person who never presses the button is told again at every login, forever.
+That is the intended failure and it is the right way round: being told twice is
+cheaper than being told never, about a password somebody else took away.
+
+## 5. Evidence
+
+| Claim | Proof |
+|---|---|
+| Said again on every admission until read | `EnrolmentTest.theOperatorIsToldAgainUntilTheySayTheyHaveReadIt` — three logins, three notices |
+| Reading it is the only thing that ends it | `theOperatorIsToldNoMoreOnceTheyHaveReadIt` |
+| Acknowledging is not activity | `sayingTheNoticeWasReadIsNotActivity` — 10 minutes, an acknowledgement, 6 more, and the Session has expired |
+| Idempotent, and fine when there is nothing to acknowledge | `sayingItWasReadWhenThereWasNothingToReadIsStillOk` |
+| A token naming no Session dismisses nothing | `aTokenThatNamesNoSessionAcknowledgesNothing` — and asserts the notice is still owed afterwards |
+| Carried on the wire | `MessageCodecTest.carriesEverySessionRequestsTokenByteForByte` |
+| The window dismisses it and tells the service | `SessionWindowTest.theNoticeIsOverOnlyWhenThePersonSaysTheyHaveReadIt` |
+| A service that cannot be told does not undo the dismissal | `SessionWindowTest.aNoticeStaysDismissedEvenWhenTheServiceCannotBeTold` |
+| Nothing to say means nothing on the window | `SessionWindowTest.anOrdinaryLoginIsToldNothing` |
+
+## 6. Open ground this leaves
+
+- **`FakeLoginGate` grew a second way to fail.** `cannotBeToldTheNoticeWasRead`
+  exists because `becomeUnreachable` is too broad for this test: a service that
+  has gone away entirely also ends the Session the `SessionGuard` is watching,
+  which closes the very window the assertion is about. A reviewer should check
+  that the narrower switch is not hiding something the broad one would catch.
+- **The button is the only way to dismiss it.** Closing the window, logging out,
+  or letting the Session expire all leave the notice owed — deliberately, since
+  none of those is evidence anybody read it, but it does mean an Operator who
+  habitually ignores the bar sees it every morning.
+- **Nothing records that the notice was read.** It is not an
+  `AuthenticationEvent`: the record already holds `PASSWORD_RESET_INITIATED`
+  permanently, and what somebody clicked at their own screen is not a fact about
+  access. Arguable — a deployment auditing whether resets are being noticed would
+  want it.
+
+**The clean-build warning at the end of issue #9's entry earned its place again.**
+`MessageCodecTest.tokenOfRoundTripped` switches over `Request` with a `default`
+that throws, so adding a token-carrying request compiled and passed incrementally
+and failed under `mvn -o clean test`. The lesson stands: a green incremental suite
+is not evidence when a sealed type has grown.

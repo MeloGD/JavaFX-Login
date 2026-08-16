@@ -1,6 +1,7 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
@@ -98,6 +99,18 @@ final class ServiceLoginGate implements LoginGate {
     // asked for. Anything else is an answer to a question nobody put.
     if (!(response instanceof Ok || response instanceof SessionEnded)) {
       throw unexpected("a logout", response);
+    }
+  }
+
+  @Override
+  public synchronized void passwordResetNoticeWasRead(Session session) {
+    Objects.requireNonNull(session, "session");
+    Response response = ask(new AcknowledgePasswordReset(session.token()));
+    // A Session that ended before the person got round to dismissing the notice is not a failure to
+    // dismiss it: the notice goes with the window, and the service will say it again at the next
+    // admission — which is exactly what it is for.
+    if (!(response instanceof Ok || response instanceof SessionEnded)) {
+      throw unexpected("a notice that was read", response);
     }
   }
 

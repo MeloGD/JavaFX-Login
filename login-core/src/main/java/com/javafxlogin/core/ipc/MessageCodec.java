@@ -100,6 +100,8 @@ public final class MessageCodec {
                   .put("role", create.role().name());
           case InitiateReset reset ->
               carrying("InitiateReset", reset.token()).put("accountName", reset.accountName());
+          case AcknowledgePasswordReset seen ->
+              carrying("AcknowledgePasswordReset", seen.token());
           case CompleteEnrolment complete ->
               message("CompleteEnrolment")
                   .put("accountName", complete.accountName())
@@ -160,6 +162,7 @@ public final class MessageCodec {
           new CreateAccount(
               token(message), text(message, "accountName"), constant(Role.class, message, "role"));
       case "InitiateReset" -> new InitiateReset(token(message), text(message, "accountName"));
+      case "AcknowledgePasswordReset" -> new AcknowledgePasswordReset(token(message));
       case "CompleteEnrolment" ->
           new CompleteEnrolment(
               text(message, "accountName"), chars(message, "secret"), chars(message, "password"));
