@@ -136,6 +136,15 @@ public final class ServiceHarness implements AutoCloseable {
     configure("lockout.lasts_for", lastsFor.toString());
   }
 
+  /**
+   * Configures how long an enrolment secret stays usable, the way {@link #lockoutPolicyIs} does and
+   * for the same reason: the screen an Administrator would change it from is the administration
+   * panel's ticket, and the service reads the setting again on every decision.
+   */
+  public void enrolmentSecretLastsFor(Duration lastsFor) {
+    configure("enrolment.secret_lasts_for", lastsFor.toString());
+  }
+
   private void configure(String setting, String value) {
     try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile());
         PreparedStatement statement =
@@ -166,11 +175,12 @@ public final class ServiceHarness implements AutoCloseable {
   /**
    * Writes an Operator straight into the CredentialStore, hashed with this harness's parameters.
    *
-   * <p>It goes round the service because no request creates an Operator yet: an Administrator
-   * provisions one and never chooses their password, which is issue #10's enrolment. Until then a
-   * test that needs someone who may reach the ProtectedFeature has to put them there itself. The
-   * store is opened and closed again around the insert, so the service's own connection keeps
-   * owning the file for the rest of the test.
+   * <p>It goes round the service on purpose, and still does now that enrolment exists: an Operator
+   * with a password of their own is the state most tests need to start from, and reaching it
+   * through the service would be three requests and an Administrator Session in every {@code
+   * @BeforeEach}. What enrolment does to an Account is asserted where enrolment is tested. The store
+   * is opened and closed again around the insert, so the service's own connection keeps owning the
+   * file for the rest of the test.
    */
   public void provisionOperator(String name, String password) {
     provisionOperatorIn(directory, parameters, name, password);

@@ -6,6 +6,7 @@ import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,11 +36,18 @@ final class FakeLoginGate implements LoginGate {
   private final AtomicInteger questionsAboutTheSession = new AtomicInteger();
   private final AtomicInteger logouts = new AtomicInteger();
 
+  private final List<String> enrolments = new CopyOnWriteArrayList<>();
+
   private volatile boolean reachable = true;
   private volatile boolean firstRunNeeded;
   private volatile boolean aSessionIsAlreadyLive;
   private volatile Duration lockedFor;
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
+  private volatile EnrolmentOutcome nextEnrolmentOutcome = new Enrolled();
+  private volatile Instant passwordResetAt;
+
+  /** An Account the service says has no password yet, whatever is typed for it. */
+  private volatile String awaitingEnrolment;
 
   /** What the service says about a Session from now on, until a test says otherwise. */
   private volatile SessionStatus status = new SessionContinues(Optional.of(Duration.ofMinutes(15)));
@@ -71,6 +79,27 @@ final class FakeLoginGate implements LoginGate {
   FakeLoginGate withAnAccountLockedFor(Duration remaining) {
     lockedFor = remaining;
     return this;
+  }
+
+  /** An Account the service says is waiting for somebody to give it a password. */
+  FakeLoginGate awaitingEnrolment(String accountName) {
+    awaitingEnrolment = accountName;
+    return this;
+  }
+
+  /** What the service answers the next enrolment with. */
+  void answerTheEnrolmentWith(EnrolmentOutcome outcome) {
+    nextEnrolmentOutcome = outcome;
+  }
+
+  /** What the service says on the next admission about a reset the person was never told about. */
+  void withAPasswordResetAt(Instant resetAt) {
+    passwordResetAt = resetAt;
+  }
+
+  /** What the enrolment screen offered, as {@code name/secret/password}, in order. */
+  List<String> enrolments() {
+    return List.copyOf(enrolments);
   }
 
   /** Makes every later attempt fail the way an AuthenticationService that is not there fails. */
@@ -132,10 +161,33 @@ final class FakeLoginGate implements LoginGate {
     if (lockedFor != null) {
       return NotAdmitted.lockedFor(lockedFor);
     }
+    if (accountName.equals(awaitingEnrolment)) {
+      return NotAdmitted.because(DeniedReason.ENROLMENT_REQUIRED);
+    }
     if (!Objects.equals(admissible.get(accountName), offered)) {
       return NotAdmitted.because(DeniedReason.AUTH_FAILED);
     }
-    return new Admitted(new Session(SessionToken.generate(new SecureRandom())));
+    return new Admitted(
+        new Session(SessionToken.generate(new SecureRandom())),
+        Optional.ofNullable(passwordResetAt));
+  }
+
+  @Override
+  public EnrolmentOutcome completeEnrolment(String accountName, char[] secret, char[] password) {
+    // Copied at once: the window blanks both arrays it handed over as soon as this returns.
+    String offeredSecret = new String(secret);
+    String chosen = new String(password);
+    enrolments.add(accountName + "/" + offeredSecret + "/" + chosen);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (nextEnrolmentOutcome instanceof Enrolled) {
+      // As the real service does: the Account now has a password of its own, and the one thing it
+      // was waiting for is over.
+      admissible.put(accountName, chosen);
+      awaitingEnrolment = null;
+    }
+    return nextEnrolmentOutcome;
   }
 
   @Override

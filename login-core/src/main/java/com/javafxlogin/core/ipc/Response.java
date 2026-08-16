@@ -13,6 +13,7 @@ public sealed interface Response
         Assessed,
         AuthenticationEventsExported,
         BootstrapNeeded,
+        EnrolmentIssued,
         PolicyRefused,
         SessionLive,
         SessionEnded,

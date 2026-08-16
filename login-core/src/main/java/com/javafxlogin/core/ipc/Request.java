@@ -15,6 +15,9 @@ public sealed interface Request
         Bootstrap,
         ChangeInactivityPeriod,
         ClearLockout,
+        CompleteEnrolment,
+        CreateAccount,
         ExportAuthenticationEvents,
+        InitiateReset,
         Logout,
         ReportActivity {}

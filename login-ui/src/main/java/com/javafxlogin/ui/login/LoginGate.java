@@ -118,6 +118,21 @@ public interface LoginGate {
   FirstRunOutcome createAdministrator(String administratorName, char[] password);
 
   /**
+   * Offers a one-time enrolment secret and the password its holder has chosen for themselves.
+   *
+   * <p>No Session goes with it, and none comes back. Whoever is at this screen has not authenticated
+   * and cannot: the Account they are enrolling has no password until this returns. What stands in
+   * for a Session is the secret, which the AuthenticationService issued, hashed and expires — and
+   * every way of not holding it is one refusal, decided over there.
+   *
+   * <p>Blocks: the password is hashed at the other end. Must not be called on the JavaFX application
+   * thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  EnrolmentOutcome completeEnrolment(String accountName, char[] secret, char[] password);
+
+  /**
    * Opens whichever window this installation needs on {@code stage} — the first-run wizard while
    * there is no Administrator, the login screen once there is — and, once an Operator is admitted,
    * closes it and opens the view {@code protectedFeature} builds on a stage of its own.

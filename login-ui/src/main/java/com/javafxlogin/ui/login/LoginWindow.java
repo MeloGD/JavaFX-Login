@@ -14,6 +14,10 @@ import javafx.stage.Stage;
  * logging out, is looking at one application that changed what it was showing rather than at
  * windows appearing and disappearing around them — and the window they are handed back to is loaded
  * fresh, so nothing they typed an hour ago is still in it.
+ *
+ * <p>The enrolment screen shares that stage too, and hands it back the same way. An Account with no
+ * password is not a wrong password, so being sent there is not being refused: it is this
+ * application showing the one screen where the code somebody was given is worth something.
  */
 final class LoginWindow {
 
@@ -30,7 +34,7 @@ final class LoginWindow {
 
   /**
    * @param saying what to tell the person before they have done anything — why they are back at
-   *     this window, where they arrived at it by a Session ending
+   *     this window, where they arrived at it by a Session ending or by finishing an enrolment
    */
   private static void show(
       LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, String saying) {
@@ -41,8 +45,24 @@ final class LoginWindow {
     GateWindow window = GateWindow.loadedFrom(FXML);
     window
         .controller(LoginController.class)
-        .admitWith(gate, session -> hold(gate, stage, protectedFeature, session), saying);
+        .admitWith(
+            gate,
+            admitted -> hold(gate, stage, protectedFeature, admitted),
+            accountName -> enrol(gate, stage, protectedFeature, accountName),
+            saying);
     window.showOn(stage, LOGIN_TITLE);
+  }
+
+  /**
+   * Puts the enrolment screen on the same stage, and puts the login window back when it is done.
+   *
+   * <p>Whether the enrolment succeeded or the person gave up and closed nothing, they end where they
+   * started: at the login screen, with a sentence saying which of the two happened.
+   */
+  private static void enrol(
+      LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, String accountName) {
+    EnrolmentWindow.show(
+        gate, stage, accountName, sentence -> show(gate, stage, protectedFeature, sentence));
   }
 
   /**
@@ -53,11 +73,11 @@ final class LoginWindow {
    * goes.
    */
   private static void hold(
-      LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, Session session) {
+      LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, Admitted admitted) {
     SessionWindow.open(
         gate,
-        session,
-        protectedFeature.apply(session),
+        admitted,
+        protectedFeature.apply(admitted.session()),
         sentence -> show(gate, stage, protectedFeature, sentence));
     stage.close();
   }

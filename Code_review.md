@@ -1490,3 +1490,194 @@ done and stated in ADR-0011.
   is what caught it, since incremental compilation had been passing a stale
   `login-ui` for several runs. Worth remembering for the next ticket that touches
   a sealed type: `mvn -o clean test` before believing a green suite.
+
+---
+
+# Code review — Enrolment (issue #10, Seams 1 and 3)
+
+Written for a final reviewing agent. It records what was built, what a two-axis
+review found, what was acted on, and — more usefully — what was **not**, so the
+next reviewer spends its effort on open ground rather than re-deriving settled
+ground.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Base / fixed point | `7025c79`, the tip after issue #9's review record |
+| Diff to review | `git diff 7025c79...HEAD` |
+| Packages | `com.javafxlogin.core.account`, `…core.authentication`, `…core.ipc`, `…core.policy`, `…core.store`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o clean test` → 409 core tests, 66 UI, 1 feature, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0012 (`docs/adr/0012-the-administrator-never-chooses-a-password.md`) |
+| New migration | V005 (`db/migration/V005__enrolment.sql`) — **rebuilds the `accounts` table** |
+
+**How this review was run.** Both axes ran as parallel sub-agents and both
+finished — the first ticket in three where that happened, after #8 and #9 each
+lost one to a session limit. Neither report is a self-assessment. Both are
+summarised in §4 and neither is reproduced whole.
+
+**Scope was settled before any code was written.** Issue #10's eleven acceptance
+criteria are all service-side, and the person-facing half of the flow had no home
+otherwise, so this ticket delivers the service **and the Operator's enrolment
+screen**. The `Administrator`'s side — a screen to create an Account, a screen to
+initiate a reset — is left to issue #12, exactly as clearing a `Lockout` and
+exporting the record already are.
+
+## 2. What the ticket asked for
+
+Issue #10, "Enrolment: the Administrator never chooses anyone's password" —
+parent spec issue #1, stories 18–31, and ASVS 5.0 §6.4.6. It was blocked by #4
+(password policy) and #6 (first-run wizard), both landed.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| `CreateAccount` takes no password, returns a 128-bit secret a human can transcribe | met | `CreateAccount` has token/name/Role and no password field; `EnrolmentSecretTest.carriesAHundredAndTwentyEightBits` counts the eight admissible last characters (32²⁵ × 8 = 2¹²⁸); `EnrolmentTest.creatingAnAccountAnswersWithASecretAndTheMomentItRunsOut` |
+| Returned **once**, never re-readable | met | no request reads it back; `theSecretIsNeverReadableAgain` searches every byte the service wrote in its own directory |
+| Stored hashed, never in the clear, never in the audit log | met | `theSecretIsStoredAsAHashAndNotAsItself`, `theRecordSaysAnEnrolmentWasIssuedAndNotWhatItWas` |
+| A fast hash rather than Argon2id, justified by 128 service-generated bits | met | `EnrolmentSecretTest.hashesTheBitsWithSha256AndNothingElse` pins two SHA-256 vectors computed outside this build; the reasoning is ADR-0012 |
+| Expires after a configurable lifetime; consumed on first successful use | met | `aSecretThatHasRunOutIsRefused`, `aSecretIsGoodUntilTheMomentItRunsOut`, `howLongASecretLastsIsWhateverTheStoreSays`, `aSecretNeverOutlastsTheTimeItWasIssuedFor`, `aSecretIsConsumedByTheEnrolmentItCompletes`, `aRefusedPasswordLeavesTheSecretWhereItWas` |
+| `CompleteEnrolment` carries name, secret and password and **no `SessionToken`** | met | the record has no token component; `completingAnEnrolmentCarriesNoSession` |
+| A distinct `ENROLMENT_REQUIRED` refusal at authentication | met | `anAccountAwaitingEnrolmentIsRefusedWithAReasonOfItsOwn`; `AbsentAccountCostsTheSameTest.anAttemptAgainstAnAccountAwaitingEnrolmentCostsTheSameToo` proves it costs what an absent Account costs |
+| `InitiateReset` invalidates the old password **immediately** | met | one UPDATE nulls `password_hash` as it writes the secret, and V005's `CHECK` makes both-at-once unrepresentable; `aResetTakesTheOldPasswordAwayImmediately`, `aResetLeavesNoHashOfTheOldPasswordBehind` |
+| The Operator is told at the next login that their password was reset, and when | met | `Granted.passwordResetAt`; `theOperatorIsToldAtTheirNextLoginThatTheirPasswordWasReset`, `theOperatorIsToldOnce`, `anOrdinaryLoginIsToldNothing`, `aFirstEnrolmentIsNotAResetAnybodyIsToldAbout`; shown by `SessionWindowTest.anOperatorIsToldTheirPasswordWasResetAndWhen` |
+| The Administrator can re-issue a lost or expired secret | met | `InitiateReset` again; `theAdministratorCanReissueASecretThatRanOut`, `reissuingASecretRetiresTheOneBeforeIt` |
+| The Administrator's own password stays self-chosen and outside this flow | met | `theAdministratorIsNeverEnrolledByAnybody`, `theAdministratorsOwnPasswordCannotBeResetFromASession` |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **V005 rewrites the `accounts` table rather than extending it.** `password_hash`
+  has been `NOT NULL` since V001, and an Account awaiting enrolment has no
+  password — not an empty one, not a placeholder, and above all not a hash of
+  something the Administrator picked. SQLite cannot drop a `NOT NULL`, so the
+  table is written again and the rows carried across by name.
+  `CredentialStoreSchemaTest.anAccountFromAnEarlierSchemaKeepsItsPasswordThroughTheRebuild`
+  runs the whole path from a store at V001.
+- **A `CHECK` says an Account has a password *or* an outstanding enrolment, never
+  both and never neither.** Both would be an Account whose old password still
+  works while a secret to replace it is in the post; neither would be an Account
+  nobody can use and no Administrator can rescue. In the schema rather than only
+  in Java, for the reason the single-Administrator index is.
+- **Re-issuing and resetting are one request.** `InitiateReset` puts the Account
+  into awaiting-enrolment with a fresh secret; whether there was a password to
+  take away decides one thing only — whether the Operator is told about it.
+- **The refusal is decided after the Argon2id verification**, exactly as
+  ADR-0010 decided for a `Lockout`. A refusal that came back in no time at all
+  would name the Account with a stopwatch before the message named it in words.
+- **A wrong secret counts towards the `Lockout`; being sent to the enrolment
+  screen does not.** The enrolment screen is the one place a credential for such
+  an Account can be offered, so leaving it uncounted would make awaiting
+  enrolment the single state in which guessing here is free. Counting the
+  *routing* refusal, on the other hand, would let whoever guessed a new
+  Operator's name lock them out of their own enrolment. ADR-0012 argues both.
+- **The secret survives a password the policy refused.** It is consumed by an
+  enrolment that completed, not by an attempt at one, or somebody who chose a
+  password one character short would need another secret.
+- **The lifetime is configuration read on every decision**, so an Administrator
+  who shortens it shortens the secrets already in somebody's pocket. The store
+  keeps the moment the secret was *issued*, never the moment it expires.
+- **Crockford's base 32.** The four characters read as each other by hand are not
+  in the alphabet, and three of them are read back as what was meant. 26
+  characters is 130 bits, so the last one carries three bits of secret and two of
+  nothing — and a text that puts anything in those two is refused, because a
+  secret with two spellings cannot be compared by its text.
+
+## 4. What the two-axis review found and what was done
+
+**Standards axis — one hard finding, fixed.** `Enrolments.Issued` was a bare
+record holding the plaintext secret as a `String`, so its default `toString()`
+printed the one value this whole ticket exists to make unrepeatable, while every
+sibling redacts. Fixed structurally rather than by adding a `toString`: the record
+now carries the `EnrolmentSecret` itself, which redacts, and
+`AuthenticationService.issued` is the single place it becomes text — on its way
+out of the process to the screen it is read off. That also closes the Primitive
+Obsession the same reviewer flagged.
+
+Also acted on:
+
+- **Duplicated Code.** `waitOf(Duration)` and the `LOCKED_OUT` sentence were
+  byte-identical in `LoginController` and the new `EnrolmentController`.
+  Extracted to `LockoutText`, following `PolicyViolationText` and
+  `SessionEndedText`. The two screens now say the same thing about the same
+  Lockout because they read it from the same place.
+- **Repeated Switches.** `LoginController` switched on `DeniedReason` twice — a
+  `when` guard, then an exhaustive switch that had to `throw` for the case the
+  guard had already taken. Now one switch in `refused(NotAdmitted)`, no
+  unreachable throw.
+- **Hand-built SQL.** `CredentialStore.awaitEnrolment` concatenated a fragment
+  and counted bind parameters by hand. Now one fixed statement with
+  `password_reset_at = COALESCE(?, password_reset_at)`.
+- A dead `fx:id="recoveryWarning"` in `enrolment-window.fxml`, removed.
+
+**Spec axis — eleven of eleven met, one under-proved, fixed.** The fast-hash
+criterion rested on Javadoc, ADR-0012 and an assertion that the stored value was
+64 hexadecimal characters — which pins a shape and not an algorithm.
+`hashesTheBitsWithSha256AndNothingElse` now pins two vectors computed outside
+this build, so a later change that salted it, slowed it, or hashed the text
+instead of the bits fails.
+
+**Not acted on, deliberately.** The Spec axis named four things as unasked-for.
+Three are judgements this ticket owns and stands by, and the fourth is not this
+ticket's:
+
+- **The "tengo un código" button on the login screen.** Without it, somebody
+  handed a code has to type a password they do not have, be refused, and be sent
+  to the screen they were always going to — which works and reads as an
+  application that does not know what it wants. Story 23 puts this flow at the
+  login screen.
+- **The repeated-password field.** Not policy, and nothing is sent when the two
+  differ: it is the one rule the screen owns. There is no recovery key here, so a
+  typo in a password nobody has ever seen costs another trip to the
+  Administrator.
+- **`CredentialStore.lockoutPolicy` also catching `DateTimeParseException`.** A
+  latent bug in issue #9's code, found by writing the same method for the
+  enrolment lifetime: `Duration.parse` throws something that is not an
+  `IllegalArgumentException`, so `lockout.lasts_for = 'a while'` escaped past the
+  documented `CredentialStoreException` contract. One line, one test
+  (`aLockoutLengthThatIsNotOneIsNotGuessedAtEither`), disclosed here rather than
+  smuggled.
+- **`CLAUDE.md`'s new "Additional behaviour" section** is the repository owner's
+  edit, not this ticket's, and was left alone. Both axes flagged it; the Standards
+  axis also noted four spelling errors in it.
+
+## 5. Open ground — judge these rather than assume them
+
+- **The reset notice is spent at the moment it is granted, not when it is read.**
+  `Enrolments.resetToDeclareFor` reads `password_reset_at` and clears it in the
+  same call, so a client that dies between `Granted` and drawing the window never
+  tells the person. The Spec axis raised this and it is real. It was left as it
+  is: acknowledging a notice would be a new request in the protocol for a rare
+  failure, and the Operator has just been through the reset from the other side —
+  their password stopped working and somebody handed them a code — so the notice
+  confirms something they lived through rather than being the only sign of it.
+  `PASSWORD_RESET_INITIATED` is in the audit log permanently either way. **The
+  most arguable decision in this change.**
+- **`ENROLMENT_REQUIRED` is the second refusal that says something about an
+  Account.** It names a name as real and as unclaimed. ADR-0012 states the price;
+  story 30 asks for it; a reviewer who disagrees should argue with the ADR rather
+  than with the code.
+- **An Account awaiting enrolment reads as the weakest `PasswordStrength` band.**
+  That is V002's rule (an unknown password must not display as a strong one) and
+  not a measurement, and the administration panel will be the first thing to show
+  it to anybody.
+- **Nothing rewraps the `DataKey` on enrolment.** Story 61 belongs to the
+  SecretVault (#11), where the `DataKey` first exists. The seam it will need is
+  `Enrolments.completedBy` — the single place this build writes a password an
+  Operator chose.
+- **No language is set on a created Account.** Issue #10's prose mentions a
+  language alongside the name and Role; none of its acceptance criteria do, and
+  story 104 is issue #13's. `CreateAccount` carries a name and a Role only.
+- **The Administrator's half has no screen**, so nothing in the shipped
+  application issues a secret yet. Every test that needs one goes through the
+  service directly. That is #12.
+- **`EnrolmentSecret.text()` returns a `String`.** Unlike a password, it is drawn
+  on a screen and read aloud, so every layer between the record and the label
+  already holds a copy; what protects it is being consumable once and hashed at
+  rest. A reviewer who wants `char[]` here should say what it would buy.
+- **The enrolment screen shows the code in a plain `TextField`, not a
+  `PasswordField`.** It is being copied character by character off something
+  else, and hiding it is how a transcription error becomes three failed attempts
+  and a Lockout. `EnrolmentWindowTest.theCodeIsShownAsItIsTyped` pins it, so a
+  later change has to argue with the test.

@@ -5,14 +5,20 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The name or the password broke the AccountPolicy, and the Administrator was not created.
+ * A name or a password broke the AccountPolicy, and nothing was created or changed.
  *
  * <p>It carries every rule that was broken rather than the first one, so the person can fix the
  * whole thing at once instead of discovering it a rule at a time. The rules are named rather than
  * worded: turning them into sentences is this module's job, which is what lets the wording change,
  * and be translated, without the privileged process knowing.
+ *
+ * <p>It is the answer to both of the screens that choose a credential — the first-run wizard and the
+ * enrolment screen — because it is the same refusal by the same rules in the same process. Neither
+ * screen has the Account it names; the wizard's does not exist yet and the enrolment screen's is
+ * already there and unchanged.
  */
-public record PolicyRefusal(List<PolicyViolation> violations) implements FirstRunOutcome {
+public record PolicyRefusal(List<PolicyViolation> violations)
+    implements FirstRunOutcome, EnrolmentOutcome {
 
   public PolicyRefusal {
     Objects.requireNonNull(violations, "violations");

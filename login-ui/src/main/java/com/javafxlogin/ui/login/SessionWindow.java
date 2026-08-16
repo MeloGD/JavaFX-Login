@@ -1,6 +1,5 @@
 package com.javafxlogin.ui.login;
 
-import com.javafxlogin.core.session.Session;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.scene.Parent;
@@ -19,6 +18,10 @@ import javafx.stage.Stage;
  *
  * <p>What the host handed over is untouched: it is placed inside, and nothing here knows what it
  * is.
+ *
+ * <p>It is also where the one thing the service says only once gets said. An Operator whose password
+ * an Administrator reset is told so on the admission that follows, and this is the first window they
+ * see afterwards — the login screen they were told it on has already closed.
  */
 final class SessionWindow {
 
@@ -39,9 +42,9 @@ final class SessionWindow {
    * @param handBack given the sentence explaining why, and expected to show the login screen
    */
   static void open(
-      LoginGate gate, Session session, Parent protectedFeature, Consumer<String> handBack) {
+      LoginGate gate, Admitted admitted, Parent protectedFeature, Consumer<String> handBack) {
     Objects.requireNonNull(gate, "gate");
-    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(admitted, "admitted");
     Objects.requireNonNull(protectedFeature, "protectedFeature");
     Objects.requireNonNull(handBack, "handBack");
 
@@ -54,7 +57,7 @@ final class SessionWindow {
     stage.setOnHidden(event -> controller.stopWatching());
     controller.hold(
         gate,
-        session,
+        admitted,
         protectedFeature,
         sentence -> {
           handBack.accept(sentence);

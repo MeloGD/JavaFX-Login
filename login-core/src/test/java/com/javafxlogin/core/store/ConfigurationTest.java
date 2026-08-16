@@ -35,11 +35,52 @@ class ConfigurationTest {
     }
   }
 
+  /** The value V005 writes, and the three days this project says a deployment gets. */
+  @Test
+  void aFreshStoreLetsAnEnrolmentSecretLastThreeDays() {
+    try (CredentialStore store = openStore()) {
+      assertEquals(Duration.ofHours(72), store.enrolmentSecretLastsFor());
+    }
+  }
+
+  /** A secret that expires the moment it is issued is not a policy: it is enrolment switched off. */
+  @Test
+  void anEnrolmentSecretThatLastsNoTimeIsNotAPolicy() {
+    try (CredentialStore store = openStore()) {
+      execute("UPDATE configuration SET value = 'PT0S' WHERE name = 'enrolment.secret_lasts_for'");
+
+      assertThrows(CredentialStoreException.class, store::enrolmentSecretLastsFor);
+    }
+  }
+
+  @Test
+  void anEnrolmentLifetimeThatIsNotOneIsNotGuessedAt() {
+    try (CredentialStore store = openStore()) {
+      execute("UPDATE configuration SET value = 'a while' WHERE name = 'enrolment.secret_lasts_for'");
+
+      assertThrows(CredentialStoreException.class, store::enrolmentSecretLastsFor);
+    }
+  }
+
   /** A store somebody edited by hand is refused rather than read as "never locks anyone out". */
   @Test
   void aLockoutPolicyThatIsNotOneIsNotGuessedAt() {
     try (CredentialStore store = openStore()) {
       execute("UPDATE configuration SET value = 'a few' WHERE name = 'lockout.failures_that_lock'");
+
+      assertThrows(CredentialStoreException.class, store::lockoutPolicy);
+    }
+  }
+
+  /**
+   * A length that is not a length is refused as a store this build did not write, and not as
+   * whichever library happened to refuse it: {@code Duration.parse} throws something that is not an
+   * IllegalArgumentException, and a caller that saw it would be seeing past the store's own contract.
+   */
+  @Test
+  void aLockoutLengthThatIsNotOneIsNotGuessedAtEither() {
+    try (CredentialStore store = openStore()) {
+      execute("UPDATE configuration SET value = 'a while' WHERE name = 'lockout.lasts_for'");
 
       assertThrows(CredentialStoreException.class, store::lockoutPolicy);
     }

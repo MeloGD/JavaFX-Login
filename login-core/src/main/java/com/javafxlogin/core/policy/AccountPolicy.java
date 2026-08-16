@@ -79,9 +79,35 @@ public final class AccountPolicy {
     Objects.requireNonNull(accountName, "accountName");
     Objects.requireNonNull(password, "password");
 
+    Assessment ofThePassword = assessPassword(password);
     Set<PolicyViolation> violations = EnumSet.noneOf(PolicyViolation.class);
     violations.addAll(names.violationsOf(accountName));
-    violations.addAll(passwords.violationsOf(password));
-    return new Assessment(List.copyOf(violations), passwords.strengthOf(password));
+    violations.addAll(ofThePassword.violations());
+    return new Assessment(List.copyOf(violations), ofThePassword.strength());
+  }
+
+  /**
+   * What the policy makes of a proposed Account name on its own, which is what creating an Account
+   * asks: an Administrator chooses the name and never the password, so there is no password to put
+   * beside it.
+   */
+  public List<PolicyViolation> violationsOfName(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    return List.copyOf(names.violationsOf(accountName));
+  }
+
+  /**
+   * What the policy makes of a proposed password on its own, which is what completing an enrolment
+   * asks.
+   *
+   * <p>The name is deliberately left out of that decision. It belongs to an Account that already
+   * exists and passed these rules when it was created, and somebody setting their first password
+   * cannot change it — a deployment that extended its blocklist in the meantime would otherwise
+   * leave an Operator refused for a reason they have no way to fix.
+   */
+  public Assessment assessPassword(char[] password) {
+    Objects.requireNonNull(password, "password");
+    return new Assessment(
+        List.copyOf(passwords.violationsOf(password)), passwords.strengthOf(password));
   }
 }

@@ -34,6 +34,24 @@ public enum ErrorCode {
   NO_SUCH_ACCOUNT,
 
   /**
+   * An Account already holds the name a new one was to be created under. Answered plainly, for the
+   * reason {@link #NO_SUCH_ACCOUNT} is: the caller is an Administrator whose Session the service
+   * granted, and one who is not told would go on handing out an enrolment secret for somebody
+   * else's Account.
+   */
+  ACCOUNT_EXISTS,
+
+  /**
+   * An enrolment was asked for on behalf of the Administrator — creating a second one, or resetting
+   * the one that exists. There is exactly one Administrator, it comes into existence at the
+   * first-run wizard, and its password is chosen there by the person who will use it. Nothing about
+   * this flow applies to it: there is no second Administrator to hand a secret to, and an
+   * Administrator who could reset their own password by asking would be an Administrator whose
+   * password an attacker with their Session need never have known.
+   */
+  CANNOT_ENROL_THE_ADMINISTRATOR,
+
+  /**
    * The CredentialStore could not be read or written. Says nothing about why: the caller can only
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.

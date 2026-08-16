@@ -85,8 +85,19 @@ the reasoning, including what the chain is and is not worth. The request exists
 at the service and no screen reaches it yet, for the same reason as clearing a
 `Lockout`: that screen is the administration panel.
 
-**There is still nobody to reach the feature with.** Enrolment, which is how an `Administrator`
-creates `Operator`s, is still to be built, and the login screen admits `Operator`s only. Until that
-lands the pair refuses every login attempt — correctly, and including the `Administrator` you just
-created. This project ships no default credential and issues no recovery key, and it never will.
-What an admitted `Operator` sees is proven by the test suite instead.
+## How anybody comes to have a password
+
+The `Administrator`'s own is chosen at the first-run wizard by whoever will use it. Every other
+`Account` is created by the `Administrator` **without a password**: they choose the name and the
+`Role`, and what they receive is a one-time enrolment secret of 128 bits to hand over. The person
+who will use the `Account` types it at the login screen, chooses a password nobody else has ever
+known, and logs in. Resetting a forgotten password is the same thing again — the old one stops
+working the moment the reset is asked for, and its holder is told at their next login that it
+happened and when. ADR-0012 has the reasoning, including what this does and does not protect.
+
+**There is still no screen for the `Administrator`'s half of it.** Creating an `Account` and
+initiating a reset exist at the service and no window reaches them yet, for the same reason as
+clearing a `Lockout` and exporting the record: that screen is the administration panel. Until it
+lands, the pair started above shows the login screen and the enrolment screen behind it, and an
+`Operator` to try them with has to be created through the service directly — which is what the test
+suite does. This project ships no default credential and issues no recovery key, and it never will.

@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -92,6 +94,17 @@ public final class MessageCodec {
           case ExportAuthenticationEvents export ->
               carrying("ExportAuthenticationEvents", export.token())
                   .put("destination", export.destination().toString());
+          case CreateAccount create ->
+              carrying("CreateAccount", create.token())
+                  .put("accountName", create.accountName())
+                  .put("role", create.role().name());
+          case InitiateReset reset ->
+              carrying("InitiateReset", reset.token()).put("accountName", reset.accountName());
+          case CompleteEnrolment complete ->
+              message("CompleteEnrolment")
+                  .put("accountName", complete.accountName())
+                  .put("secret", new String(complete.secret()))
+                  .put("password", new String(complete.password()));
         };
     return write(message);
   }
@@ -100,7 +113,11 @@ public final class MessageCodec {
   public static byte[] encode(Response response) {
     ObjectNode message =
         switch (response) {
-          case Granted granted -> carrying("Granted", granted.token());
+          case Granted granted -> granted(granted);
+          case EnrolmentIssued issued ->
+              message("EnrolmentIssued")
+                  .put("secret", issued.secret())
+                  .put("expiresAt", issued.expiresAt().toString());
           case Denied denied -> denied(denied);
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
@@ -139,6 +156,13 @@ public final class MessageCodec {
       case "ClearLockout" -> new ClearLockout(token(message), text(message, "accountName"));
       case "ExportAuthenticationEvents" ->
           new ExportAuthenticationEvents(token(message), destination(message));
+      case "CreateAccount" ->
+          new CreateAccount(
+              token(message), text(message, "accountName"), constant(Role.class, message, "role"));
+      case "InitiateReset" -> new InitiateReset(token(message), text(message, "accountName"));
+      case "CompleteEnrolment" ->
+          new CompleteEnrolment(
+              text(message, "accountName"), chars(message, "secret"), chars(message, "password"));
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -152,7 +176,15 @@ public final class MessageCodec {
     ObjectNode message = read(payload);
     String type = text(message, TYPE);
     return switch (type) {
-      case "Granted" -> new Granted(token(message));
+      case "Granted" -> new Granted(token(message), moment(message, "passwordResetAt"));
+      case "EnrolmentIssued" ->
+          new EnrolmentIssued(
+              text(message, "secret"),
+              moment(message, "expiresAt")
+                  .orElseThrow(
+                      () ->
+                          new MalformedMessageException(
+                              "A secret that expires at no moment is not one this build reads")));
       case "Denied" -> denied(message);
       case "Ok" -> new Ok();
       case "Assessed" ->
@@ -171,6 +203,43 @@ public final class MessageCodec {
       case ERROR -> new ErrorResponse(constant(ErrorCode.class, message, "code"));
       default -> throw new MalformedMessageException("Not a response this build reads: " + type);
     };
+  }
+
+  /**
+   * An admission, and the one thing it may carry besides the token: a reset the Operator is owed
+   * being told about. Written as an explicit {@code null} where there is none, for the reason {@link
+   * #sessionLive} gives — a missing field is a message this codec does not read.
+   */
+  private static ObjectNode granted(Granted granted) {
+    return moment(carrying("Granted", granted.token()), "passwordResetAt", granted.passwordResetAt());
+  }
+
+  private static ObjectNode moment(
+      ObjectNode message, String field, Optional<Instant> moment) {
+    moment.ifPresentOrElse(
+        present -> message.put(field, present.toString()), () -> message.putNull(field));
+    return message;
+  }
+
+  /**
+   * A moment in time, as ISO-8601 with an offset, which is how story 76 has this system write every
+   * one of them. A field that is present and says there is no such moment is read; one that is
+   * missing, or that holds something that is not a moment, is not.
+   */
+  private static Optional<Instant> moment(ObjectNode message, String field) {
+    JsonNode value = message.get(field);
+    if (value == null || !(value.isNull() || value.isTextual())) {
+      throw new MalformedMessageException(
+          "The " + field + " field is missing or is neither a moment nor null");
+    }
+    if (value.isNull()) {
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(Instant.parse(value.textValue()));
+    } catch (DateTimeParseException e) {
+      throw new MalformedMessageException("The " + field + " field is not a moment", e);
+    }
   }
 
   private static ObjectNode exported(AuthenticationEventExport export) {

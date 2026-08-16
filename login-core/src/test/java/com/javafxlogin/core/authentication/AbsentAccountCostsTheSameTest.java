@@ -1,5 +1,6 @@
 package com.javafxlogin.core.authentication;
 
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.account.Role;
@@ -7,6 +8,12 @@ import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.harness.ServiceHarness;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
+import com.javafxlogin.core.ipc.CreateAccount;
+import com.javafxlogin.core.ipc.EnrolmentIssued;
+import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
+import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.session.SessionToken;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -64,38 +71,70 @@ class AbsentAccountCostsTheSameTest {
 
   @Test
   void anAttemptAgainstANonexistentAccountCostsTheSameAsAgainstARealOne() {
-    warmUp();
+    assertCostsTheSame(NAME, "nobody.here");
+  }
 
-    long[] realAccountSamples = new long[MEASURED_ATTEMPTS];
-    long[] absentAccountSamples = new long[MEASURED_ATTEMPTS];
+  /**
+   * And so does one against an Account nobody has enrolled yet. Its refusal says in words that it
+   * exists, which story 30 asks for — but the words are the whole of what it gives away. A refusal
+   * that came back in no time at all would name it as an Account before the answer did, and would
+   * name it to whoever is guessing rather than to whoever holds the secret.
+   */
+  @Test
+  void anAttemptAgainstAnAccountAwaitingEnrolmentCostsTheSameToo() {
+    assertCostsTheSame(NAME, anAccountAwaitingEnrolment());
+  }
+
+  private void assertCostsTheSame(String oneName, String anotherName) {
+    warmUp(oneName, anotherName);
+
+    long[] oneSamples = new long[MEASURED_ATTEMPTS];
+    long[] anotherSamples = new long[MEASURED_ATTEMPTS];
 
     // Interleaved rather than measured in two phases: this machine builds several projects at
     // once, and load that drifts between one phase and the next would read as a difference
     // between the two branches. Alternating makes any such drift hit both equally.
     for (int i = 0; i < MEASURED_ATTEMPTS; i++) {
-      realAccountSamples[i] = nanosToRefuse(NAME);
-      absentAccountSamples[i] = nanosToRefuse("nobody.here");
+      oneSamples[i] = nanosToRefuse(oneName);
+      anotherSamples[i] = nanosToRefuse(anotherName);
     }
 
-    long realAccount = medianOf(realAccountSamples);
-    long absentAccount = medianOf(absentAccountSamples);
+    long one = medianOf(oneSamples);
+    long another = medianOf(anotherSamples);
 
-    double difference = Math.abs(realAccount - absentAccount);
-    double larger = Math.max(realAccount, absentAccount);
+    double difference = Math.abs(one - another);
+    double larger = Math.max(one, another);
     assertTrue(
         difference / larger < TOLERATED_RELATIVE_DIFFERENCE,
         () ->
-            "wrong password against a real Account took "
-                + realAccount
-                + " ns, against an absent one "
-                + absentAccount
-                + " ns — the difference is large enough to name which Accounts exist");
+            "a refused attempt took "
+                + one
+                + " ns against "
+                + oneName
+                + " and "
+                + another
+                + " ns against "
+                + anotherName
+                + " — the difference is large enough to tell the two apart with a stopwatch");
   }
 
-  private void warmUp() {
+  /** An Account created the way an Administrator creates one, with the machine handed back. */
+  private String anAccountAwaitingEnrolment() {
+    String name = "finch.mercer";
+    Response admitted =
+        harness.send(new Authenticate(NAME, PASSWORD.toCharArray(), Role.ADMINISTRATOR));
+    SessionToken administrator = assertInstanceOf(Granted.class, admitted).token();
+    assertInstanceOf(
+        EnrolmentIssued.class,
+        harness.send(new CreateAccount(administrator, name, Role.OPERATOR)));
+    harness.send(new Logout(administrator));
+    return name;
+  }
+
+  private void warmUp(String oneName, String anotherName) {
     for (int i = 0; i < WARMUP_ATTEMPTS; i++) {
-      nanosToRefuse(NAME);
-      nanosToRefuse("nobody.here");
+      nanosToRefuse(oneName);
+      nanosToRefuse(anotherName);
     }
   }
 

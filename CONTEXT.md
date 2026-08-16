@@ -49,6 +49,32 @@ _Avoid_: setup screen, onboarding, installer, registration
 The single capability set attached to an Account: either Administrator or
 Operator. Roles are mutually exclusive and an Account never holds both.
 
+**Enrolment**:
+The state of an Account that has no password, and the act of giving it one. Every
+Operator begins here: the Administrator creates the Account and is handed an
+EnrolmentSecret rather than choosing a password, and the person who will use the
+Account turns that secret into a password nobody else has ever known. An Account
+holds a password or an outstanding Enrolment, never both and never neither, and
+the CredentialStore refuses any row that says otherwise.
+_Avoid_: activation, registration, onboarding, invite
+
+**EnrolmentSecret**:
+The 128 bits an Administrator hands over instead of a password. It is shown once,
+kept only as a hash, never written to an AuthenticationEvent, expires, and is
+consumed by the Enrolment it completes. It stands behind a fast hash rather than
+Argon2id, because it was generated rather than chosen and there is nothing for a
+work factor to buy.
+_Avoid_: invite code, token, activation key, one-time password
+
+**PasswordReset**:
+An Administrator taking an Operator's password away and issuing an
+EnrolmentSecret in its place. The old password stops working at once rather than
+when the new one arrives, so a reset cannot be started and quietly abandoned, and
+the Operator is told at their next successful login that it happened and when.
+The Administrator's own password is not subject to it: that one is chosen at the
+FirstRunWizard by whoever will use it, and there is nobody to hand a secret to.
+_Avoid_: forgot password, recovery, password change
+
 **SecondFactor**:
 A second proof of identity, beyond the password, that an Account could be asked
 for. Deferred from v1: a seam and a reserved column in the CredentialStore exist

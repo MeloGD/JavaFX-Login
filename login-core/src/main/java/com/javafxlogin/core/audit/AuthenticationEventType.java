@@ -4,10 +4,10 @@ package com.javafxlogin.core.audit;
  * What an {@link AuthenticationEvent} records.
  *
  * <p>The set grew one ticket at a time, alongside the thing being recorded, so that no build ever
- * had a constant nothing writes. The audit log's own ticket is the one that completes it: story 73
+ * had a constant nothing writes. The audit log's own ticket is the one that completed it: story 73
  * names authentication attempts, Lockouts, Account changes, configuration changes and exports, and
- * all five are here. What is still missing is what is still unbuilt — enrolment adds the Account
- * changes only it can make, and the SecretVault adds its own.
+ * all five are here. Enrolment has since added the Account changes only it can make. What is still
+ * missing is what is still unbuilt — the SecretVault adds its own.
  *
  * <p>A failed authentication says here why it failed, which is the one place it may be said. The
  * client is told {@code AUTH_FAILED} and nothing more, because telling it apart at the login screen
@@ -16,11 +16,36 @@ package com.javafxlogin.core.audit;
  */
 public enum AuthenticationEventType {
 
-  /**
-   * The single Administrator was created by the FirstRunWizard. The only Account change this build
-   * can make: enrolment, which is how Operators come into existence, is its own ticket.
-   */
+  /** The single Administrator was created by the FirstRunWizard. */
   ADMINISTRATOR_CREATED,
+
+  /**
+   * An Administrator created an Account, which comes into existence with no password and an
+   * enrolment secret somebody else will turn into one.
+   */
+  ACCOUNT_CREATED,
+
+  /**
+   * A one-time enrolment secret was issued for an Account — with the Account, on a reset, or on its
+   * own where one was lost or ran out. What it was is not here and is nowhere else either: the
+   * record says that an enrolment was issued, because a record that said what it was would be a
+   * copy of the secret outliving the moment it was shown.
+   */
+  ENROLMENT_SECRET_ISSUED,
+
+  /** An Administrator took an Account's password away, which is what starts a reset. */
+  PASSWORD_RESET_INITIATED,
+
+  /** Somebody offered a valid enrolment secret and chose the password that Account now has. */
+  ENROLMENT_COMPLETED,
+
+  /**
+   * An enrolment secret was offered and refused: wrong, expired, already used, or against an
+   * Account that has a password and is waiting for nothing. Recorded against the Account where a
+   * name holds one, and against the placeholder where it does not — story 77 again, because the
+   * enrolment screen has a name box like every other screen.
+   */
+  ENROLMENT_FAILED,
 
   /** An Account offered the right password in the Role it holds and was admitted. */
   AUTHENTICATION_SUCCEEDED,
@@ -50,6 +75,14 @@ public enum AuthenticationEventType {
    * the person sitting at it looks like.
    */
   AUTHENTICATION_REFUSED_SESSION_ALREADY_LIVE,
+
+  /**
+   * Somebody tried to log in to an Account that has no password yet, and was sent to the enrolment
+   * screen instead. Not counted as a failure against the Account: there was no password to be wrong
+   * about, and an Account nobody has enrolled yet could otherwise be locked out of its own
+   * enrolment by whoever guessed its name first.
+   */
+  AUTHENTICATION_REFUSED_ENROLMENT_REQUIRED,
 
   /**
    * A Session was ended because the machine's clock stopped agreeing with the clock that cannot be

@@ -20,13 +20,17 @@ import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
 import com.javafxlogin.core.ipc.ClearLockout;
+import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.ConnectionHandle;
+import com.javafxlogin.core.ipc.CreateAccount;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
+import com.javafxlogin.core.ipc.EnrolmentIssued;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.InitiateReset;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
@@ -38,6 +42,7 @@ import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.machine.MachineAdministrators;
 import com.javafxlogin.core.policy.AccountPolicy;
 import com.javafxlogin.core.policy.Assessment;
+import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.SessionClock;
 import com.javafxlogin.core.session.SessionEndedReason;
@@ -51,6 +56,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
@@ -97,6 +104,7 @@ public final class AuthenticationService implements AutoCloseable {
   private final MachineAdministrators administrators;
   private final Sessions sessions;
   private final Lockouts lockouts;
+  private final Enrolments enrolments;
   private final SessionClock clock;
   private final AuthenticationEventLog events;
   private final AuthenticationEventArchive archive;
@@ -123,6 +131,7 @@ public final class AuthenticationService implements AutoCloseable {
     this.archive = archive;
     this.ownDirectory = ownDirectory;
     this.random = new SecureRandom();
+    this.enrolments = new Enrolments(store, clock, random);
   }
 
   /**
@@ -226,6 +235,9 @@ public final class AuthenticationService implements AutoCloseable {
         case ChangeInactivityPeriod change -> changeInactivityPeriod(change, connection);
         case ClearLockout clear -> clearLockout(clear, connection);
         case ExportAuthenticationEvents export -> exportAuthenticationEvents(export, connection);
+        case CreateAccount create -> createAccount(create, connection);
+        case InitiateReset reset -> initiateReset(reset, connection);
+        case CompleteEnrolment complete -> completeEnrolment(complete);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
@@ -297,10 +309,13 @@ public final class AuthenticationService implements AutoCloseable {
     Optional<Account> account = store.findByName(request.accountName());
 
     // The absent branch spends the same Argon2id work as the present one, so a stopwatch at the
-    // login screen cannot name which Accounts are real.
+    // login screen cannot name which Accounts are real. An Account awaiting enrolment goes down
+    // that same branch: it has no hash to be right about, and a refusal that came back in no time
+    // at all would name it as an Account before the answer below says so in words.
     boolean verified =
         account
-            .map(found -> authenticator.verify(request.password(), found.passwordHash()))
+            .flatMap(Account::passwordHash)
+            .map(hash -> authenticator.verify(request.password(), hash))
             .orElseGet(() -> authenticator.verifyAgainstAbsentAccount(request.password()));
 
     // A Lockout is applied after the verification rather than instead of it, so that a refused
@@ -323,6 +338,18 @@ public final class AuthenticationService implements AutoCloseable {
       return Denied.because(DeniedReason.AUTH_FAILED);
     }
 
+    // An Account nobody has enrolled against yet, or one an Administrator has just taken the
+    // password of. There is nothing here a password could be right about, so the person is sent to
+    // the screen where the secret they were handed is worth something — rather than to retype a
+    // password they were never given. It is not counted as a failure against the Account: whoever
+    // guessed the name first would otherwise be able to lock an Operator out of their own
+    // enrolment, and there was no password to be wrong about.
+    if (account.get().isAwaitingEnrolment()) {
+      record(
+          AuthenticationEventType.AUTHENTICATION_REFUSED_ENROLMENT_REQUIRED, account.get().name());
+      return Denied.because(DeniedReason.ENROLMENT_REQUIRED);
+    }
+
     if (!verified) {
       return refuse(account.get(), AuthenticationEventType.AUTHENTICATION_FAILED_WRONG_PASSWORD);
     }
@@ -340,6 +367,12 @@ public final class AuthenticationService implements AutoCloseable {
     }
 
     lockouts.succeeded(account.get().name());
+
+    // Read here, and forgotten as it is read: this is the moment somebody has proved they hold the
+    // Account, and so the only moment a reset they did not ask for can be reported to the person it
+    // was done to rather than to whoever walked past the screen.
+    Optional<Instant> passwordResetAt = enrolments.resetToDeclareFor(account.get().name());
+
     SessionToken token = SessionToken.generate(random);
     sessions.open(token, account.get().name(), account.get().role(), connection);
 
@@ -347,7 +380,129 @@ public final class AuthenticationService implements AutoCloseable {
     // records a refusal, which is over by the time it is written; an admission is not over until
     // there is a Session, and the record says what happened rather than what was about to.
     record(AuthenticationEventType.AUTHENTICATION_SUCCEEDED, account.get().name());
-    return new Granted(token);
+    return new Granted(token, passwordResetAt);
+  }
+
+  /**
+   * Creates an Account, without ever being told what it will authenticate with.
+   *
+   * <p>This is ASVS 5.0 §6.4.6 and the whole of what issue #10 is for: the Administrator says who
+   * exists and the person who will use the Account says what its password is. What comes back is a
+   * secret to hand over, shown once and never readable again.
+   *
+   * <p>ADR-0005 is honest about the size of this. It does not stop a compromised Administrator
+   * reaching the SecretVault — they can create an Operator here and enrol it themselves, which is
+   * two requests. What it removes is the quieter thing: an Administrator taking over an Account
+   * somebody is already using, handing it back, and going on knowing a password that stays in use.
+   */
+  private Response createAccount(CreateAccount request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(), connection, live -> onlyAnAdministrator(live, () -> createFor(request)));
+  }
+
+  private Response createFor(CreateAccount request) {
+    if (request.role() == Role.ADMINISTRATOR) {
+      return new ErrorResponse(ErrorCode.CANNOT_ENROL_THE_ADMINISTRATOR);
+    }
+    List<PolicyViolation> violations = policy.violationsOfName(request.accountName());
+    if (!violations.isEmpty()) {
+      return new PolicyRefused(violations);
+    }
+    // Said plainly, unlike anything the login screen answers: the caller holds a Session this
+    // service granted in the Role that manages Accounts, and one who is not told would walk away
+    // handing somebody an enrolment secret for an Account that was never created.
+    if (store.findByName(request.accountName()).isPresent()) {
+      return new ErrorResponse(ErrorCode.ACCOUNT_EXISTS);
+    }
+    Enrolments.Issued secret = enrolments.create(request.accountName(), request.role());
+    record(AuthenticationEventType.ACCOUNT_CREATED, request.accountName());
+    return issued(secret, request.accountName());
+  }
+
+  /**
+   * Takes an Account's password away and issues a secret in its place — a reset for somebody who
+   * forgot theirs, and the same request again where a secret was lost or ran out.
+   */
+  private Response initiateReset(InitiateReset request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> onlyAnAdministrator(live, () -> resetFor(request.accountName())));
+  }
+
+  private Response resetFor(String accountName) {
+    Optional<Account> account = store.findByName(accountName);
+    if (account.isEmpty()) {
+      return new ErrorResponse(ErrorCode.NO_SUCH_ACCOUNT);
+    }
+    // The Administrator's own password is chosen at the first-run wizard by whoever will use it,
+    // and there is nobody to hand a secret to. An Administrator who could reset it from a Session
+    // would be one whose password an attacker holding that Session need never have known.
+    if (account.get().role() == Role.ADMINISTRATOR) {
+      return new ErrorResponse(ErrorCode.CANNOT_ENROL_THE_ADMINISTRATOR);
+    }
+    boolean thereWasAPasswordToTakeAway = !account.get().isAwaitingEnrolment();
+    Enrolments.Issued secret = enrolments.issueFor(account.get());
+    if (thereWasAPasswordToTakeAway) {
+      record(AuthenticationEventType.PASSWORD_RESET_INITIATED, accountName);
+    }
+    return issued(secret, accountName);
+  }
+
+  /**
+   * Turns a one-time secret into the password its holder chose, which is the only way an Operator
+   * ever comes to have one.
+   *
+   * <p>It carries no Session, because whoever sends it cannot have one: the Account has no password
+   * to have authenticated with. Everything that is not the outstanding secret is refused in the same
+   * words — a wrong secret, an expired one, one that has been used, and an Account that is waiting
+   * for nothing — and a refusal counts against the Account like any other failure. That is the one
+   * place guessing at this Account can happen, so leaving it uncounted would make waiting for
+   * enrolment the one state in which guessing is free.
+   */
+  private Response completeEnrolment(CompleteEnrolment request) {
+    Optional<Account> account = store.findByName(request.accountName());
+
+    Optional<Duration> refusedFor = account.flatMap(found -> lockouts.refusalOf(found.name()));
+    if (refusedFor.isPresent()) {
+      record(AuthenticationEventType.AUTHENTICATION_REFUSED_LOCKED_OUT, account.get().name());
+      return Denied.lockedFor(refusedFor.get());
+    }
+
+    if (account.isEmpty()) {
+      record(AuthenticationEventType.ENROLMENT_FAILED, AuthenticationEvent.NO_ACCOUNT);
+      return Denied.because(DeniedReason.AUTH_FAILED);
+    }
+    if (!enrolments.accepts(request.accountName(), request.secret())) {
+      return refuse(account.get(), AuthenticationEventType.ENROLMENT_FAILED);
+    }
+
+    // The name is not assessed again. It belongs to an Account that already exists and passed the
+    // rules when it was created, and the person here cannot change it.
+    Assessment assessment = policy.assessPassword(request.password());
+    if (!assessment.violations().isEmpty()) {
+      // The secret survives a refused password. It is consumed by an enrolment that completed, not
+      // by an attempt at one, or a person who chose a password one character short would have to go
+      // back to the Administrator for another secret.
+      return new PolicyRefused(assessment.violations());
+    }
+
+    enrolments.completedBy(
+        request.accountName(), authenticator.hash(request.password()), assessment.strength());
+    lockouts.succeeded(request.accountName());
+    record(AuthenticationEventType.ENROLMENT_COMPLETED, request.accountName());
+    return new Ok();
+  }
+
+  /**
+   * Answers with the secret, and records that one was issued and never what it was. Two things
+   * happened where an Account was created or reset, and this is the half they have in common.
+   */
+  private Response issued(Enrolments.Issued issued, String accountName) {
+    record(AuthenticationEventType.ENROLMENT_SECRET_ISSUED, accountName);
+    // The one place the secret is turned into text, on its way out of this process and onto the
+    // screen it is read off. Nothing keeps what this returns.
+    return new EnrolmentIssued(issued.secret().text(), issued.expiresAt());
   }
 
   /**

@@ -33,5 +33,12 @@
   <Button fx:id="admit" text="Acceder" onAction="#onAdmit" defaultButton="true"
           maxWidth="Infinity"/>
 
+  <!--
+    For somebody who has a one-time code and has never had a password. Without it they would have
+    to type a password they do not have, be refused, and be sent to the same screen.
+  -->
+  <Button fx:id="enrolInstead" text="Tengo un código de un solo uso" onAction="#onEnrolInstead"
+          maxWidth="Infinity"/>
+
   <Label fx:id="message" styleClass="message" wrapText="true"/>
 </VBox>

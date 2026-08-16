@@ -179,6 +179,59 @@ class CredentialStoreSchemaTest {
   }
 
   /**
+   * V005 rewrites the accounts table so that a password may be absent. An upgrade that lost an
+   * Account, or that refused to carry one across because it had no enrolment beside it, would be an
+   * Administrator locked out of their own product by a release note.
+   */
+  @Test
+  void anAccountFromAnEarlierSchemaKeepsItsPasswordThroughTheRebuild() {
+    Path storeFile = ServiceHarness.storeFileIn(directory);
+    createStoreAtTheInitialSchema(storeFile);
+
+    try (CredentialStore store = CredentialStore.openOrCreate(storeFile)) {
+      assertEquals(
+          Optional.of("not-verified-here"),
+          store.findByName("wren.holloway").orElseThrow().passwordHash());
+      assertEquals(Optional.empty(), store.enrolmentOf("wren.holloway"));
+    }
+  }
+
+  /**
+   * The invariant the rebuild exists to hold: an Account has a password or an outstanding enrolment,
+   * never both and never neither. Written into the schema rather than only into Java, so that a
+   * later build cannot quietly create an Account nobody can use and no Administrator can rescue.
+   */
+  @Test
+  void theSchemaRefusesAnAccountWithNeitherAPasswordNorAnEnrolment() {
+    Path storeFile = ServiceHarness.storeFileIn(directory);
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+
+    assertThrows(
+        SQLException.class,
+        () ->
+            execute(
+                storeFile,
+                "INSERT INTO accounts (name, role, created_at)"
+                    + " VALUES ('finch.mercer', 'OPERATOR', '2026-01-01')"));
+    assertThrows(
+        SQLException.class,
+        () ->
+            execute(
+                storeFile,
+                "UPDATE accounts SET enrolment_secret_hash = 'abc', enrolment_issued_at ="
+                    + " '2026-01-01T00:00:00Z' WHERE name = 'wren.holloway'"));
+  }
+
+  private static void execute(Path storeFile, String sql) throws SQLException {
+    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate(sql);
+    }
+  }
+
+  /**
    * There is no periodic password expiry, per current OWASP guidance. This guards the shape rather
    * than the behaviour: a rotation that nothing stores a due date for cannot be enforced.
    */

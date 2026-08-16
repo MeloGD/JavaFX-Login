@@ -1,11 +1,16 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.session.Session;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.fxml.FXML;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
+import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.StackPane;
 
@@ -18,9 +23,26 @@ import javafx.scene.layout.StackPane;
  */
 public final class SessionController {
 
+  /**
+   * Story 29, and every string here moves to a ResourceBundle when the interface learns a second
+   * language. It says who did it and when, because those are the two things that let the person tell
+   * a reset they were expecting from one they were not.
+   */
+  private static final String PASSWORD_WAS_RESET =
+      "Tu contraseña fue restablecida por la administración el %s. Si no lo habías pedido,"
+          + " comunícalo.";
+
+  /**
+   * The moment as this machine writes moments. The audit log's own format is ISO-8601 because it is
+   * read by tools; this one is read by a person over their own shoulder.
+   */
+  private static final DateTimeFormatter WHEN =
+      DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault());
+
   @FXML private BorderPane root;
   @FXML private StackPane protectedFeature;
   @FXML private Button logOut;
+  @FXML private Label notice;
 
   private LoginGate gate;
   private Session session;
@@ -28,14 +50,23 @@ public final class SessionController {
   private SessionGuard guard;
   private boolean over;
 
-  /** Puts the host's view inside, and sets a guard watching everything done to it. */
-  void hold(LoginGate gate, Session session, Parent view, Consumer<String> handBack) {
+  /**
+   * Puts the host's view inside, sets a guard watching everything done to it, and says the one thing
+   * the service said only once.
+   */
+  void hold(LoginGate gate, Admitted admitted, Parent view, Consumer<String> handBack) {
     this.gate = Objects.requireNonNull(gate, "gate");
-    this.session = Objects.requireNonNull(session, "session");
     this.handBack = Objects.requireNonNull(handBack, "handBack");
+    Objects.requireNonNull(admitted, "admitted");
+    this.session = admitted.session();
 
+    admitted.passwordResetAt().ifPresent(resetAt -> notice.setText(sentenceFor(resetAt)));
     protectedFeature.getChildren().add(Objects.requireNonNull(view, "view"));
     guard = SessionGuard.watching(root, gate, session, this::theSessionEnded);
+  }
+
+  private static String sentenceFor(Instant resetAt) {
+    return PASSWORD_WAS_RESET.formatted(WHEN.format(resetAt));
   }
 
   /**

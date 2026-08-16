@@ -1,12 +1,17 @@
 package com.javafxlogin.ui.login;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.session.Session;
 import com.javafxlogin.core.session.SessionEndedReason;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
@@ -158,6 +163,38 @@ class SessionWindowTest extends ApplicationTest {
   }
 
   // --- driving the windows -----------------------------------------------------------------
+
+  /**
+   * Story 29: an Operator whose password an Administrator reset is told so, and told when. This is
+   * the first window they see afterwards — the login screen the service said it on has already
+   * closed — so if it is not said here it is not said at all.
+   */
+  @Test
+  void anOperatorIsToldTheirPasswordWasResetAndWhen() {
+    Instant resetAt = Instant.parse("2026-03-01T09:00:00Z");
+    gate.withAPasswordResetAt(resetAt);
+
+    admitAnOperator();
+
+    String notice = lookup("#notice").queryAs(Label.class).getText();
+    assertFalse(notice.isBlank(), "nothing said about a reset the Operator did not ask for");
+    // Written as this machine writes a moment rather than as ISO-8601, which is the audit log's
+    // format and is read by tools. This one is read by a person over their own shoulder.
+    assertTrue(
+        notice.contains(
+            DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+                .withZone(ZoneId.systemDefault())
+                .format(resetAt)),
+        () -> "no moment to read in: " + notice);
+  }
+
+  /** And an ordinary login says nothing, rather than a banner nobody has a reason to read. */
+  @Test
+  void anOrdinaryLoginIsToldNothing() {
+    admitAnOperator();
+
+    assertEquals("", lookup("#notice").queryAs(Label.class).getText());
+  }
 
   private void admitAnOperator() {
     clickOn("#accountName").write(OPERATOR);

@@ -1,6 +1,7 @@
 package com.javafxlogin.core.store;
 
 import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.Enrolment;
 import com.javafxlogin.core.account.FailedAuthentications;
 import com.javafxlogin.core.account.LockoutPolicy;
 import com.javafxlogin.core.account.PasswordStrength;
@@ -39,6 +40,9 @@ public final class CredentialStore implements AutoCloseable {
   private static final String FAILURES_THAT_LOCK = "lockout.failures_that_lock";
 
   private static final String LOCKOUT_LASTS_FOR = "lockout.lasts_for";
+
+  /** How long an enrolment secret stays usable, as V005 writes it. */
+  private static final String ENROLMENT_SECRET_LASTS_FOR = "enrolment.secret_lasts_for";
 
   private final Path file;
   private final Connection connection;
@@ -99,7 +103,7 @@ public final class CredentialStore implements AutoCloseable {
             new Account(
                 results.getString("name"),
                 Role.valueOf(results.getString("role")),
-                results.getString("password_hash"),
+                Optional.ofNullable(results.getString("password_hash")),
                 PasswordStrength.valueOf(results.getString("password_strength"))));
       }
     } catch (SQLException e) {
@@ -108,9 +112,12 @@ public final class CredentialStore implements AutoCloseable {
   }
 
   /**
-   * Records a new Account.
+   * Records a new Account that has a password of its own, which is the Administrator's and no other:
+   * every Operator is created awaiting enrolment.
    *
-   * @throws CredentialStoreException if the name is taken, or a second Administrator was attempted
+   * @throws CredentialStoreException if the name is taken, a second Administrator was attempted, or
+   *     the Account has no password — the schema refuses an Account with neither a password nor an
+   *     outstanding enrolment, and so an Account nobody could ever use never reaches the file
    */
   public void insert(Account account) {
     Objects.requireNonNull(account, "account");
@@ -120,13 +127,169 @@ public final class CredentialStore implements AutoCloseable {
                 + " VALUES (?, ?, ?, ?, ?)")) {
       statement.setString(1, account.name());
       statement.setString(2, account.role().name());
-      statement.setString(3, account.passwordHash());
+      statement.setString(3, account.passwordHash().orElse(null));
       statement.setString(4, account.passwordStrength().name());
-      statement.setString(5, ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+      statement.setString(5, createdNow());
       statement.executeUpdate();
     } catch (SQLException e) {
       throw new CredentialStoreException("could not record an Account in " + file, e);
     }
+  }
+
+  /**
+   * Records a new Account with no password at all and the one-time secret that will let the person
+   * who uses it choose one.
+   *
+   * <p>One statement and not two, because an Account with neither a password nor an enrolment is an
+   * Account nobody can use and no Administrator can rescue. The schema refuses that row, so writing
+   * it in two steps would be writing a row the store would not take.
+   *
+   * @throws CredentialStoreException if the name is taken or a second Administrator was attempted
+   */
+  public void insertAwaitingEnrolment(String name, Role role, Enrolment enrolment) {
+    Objects.requireNonNull(name, "name");
+    Objects.requireNonNull(role, "role");
+    Objects.requireNonNull(enrolment, "enrolment");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO accounts"
+                + " (name, role, enrolment_secret_hash, enrolment_issued_at, created_at)"
+                + " VALUES (?, ?, ?, ?, ?)")) {
+      statement.setString(1, name);
+      statement.setString(2, role.name());
+      statement.setString(3, enrolment.secretHash());
+      statement.setString(4, enrolment.issuedAt().toString());
+      statement.setString(5, createdNow());
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not record an Account in " + file, e);
+    }
+  }
+
+  /**
+   * The enrolment an Account is waiting on, or empty where it has a password instead — which is
+   * also the answer for a name no Account holds.
+   *
+   * @throws CredentialStoreException if the moment it was issued is not one this build wrote
+   */
+  public Optional<Enrolment> enrolmentOf(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT enrolment_secret_hash, enrolment_issued_at FROM accounts WHERE name = ?")) {
+      statement.setString(1, accountName);
+      try (ResultSet results = statement.executeQuery()) {
+        String secretHash = results.next() ? results.getString("enrolment_secret_hash") : null;
+        if (secretHash == null) {
+          return Optional.empty();
+        }
+        return Optional.of(
+            new Enrolment(secretHash, Instant.parse(results.getString("enrolment_issued_at"))));
+      }
+    } catch (SQLException | DateTimeParseException e) {
+      throw new CredentialStoreException(
+          "could not read what an Account is enrolling with in " + file, e);
+    }
+  }
+
+  /**
+   * Takes an Account's password away and gives it an enrolment to replace it, in the one statement
+   * that does both.
+   *
+   * <p>The password goes first and immediately, which is the whole of ASVS 5.0 §6.4.6 as this system
+   * implements it: a reset that left the old hash working until the new password arrived would be a
+   * reset an Administrator can start and quietly abandon, and the Operator would never know it
+   * happened.
+   *
+   * @param passwordResetAt when the password this replaces was taken away, for the Operator to be
+   *     told at their next login; empty where there was no password to take — a secret re-issued to
+   *     an Account still awaiting its first enrolment is not news anybody is owed, and whatever the
+   *     Account was already owed is left where it was
+   */
+  public void awaitEnrolment(
+      String accountName, Enrolment enrolment, Optional<Instant> passwordResetAt) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(enrolment, "enrolment");
+    Objects.requireNonNull(passwordResetAt, "passwordResetAt");
+    // COALESCE rather than two statements or two spellings of one: given nothing, it leaves
+    // whatever the Account was already owed exactly where it was.
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "UPDATE accounts SET password_hash = NULL, password_strength = 'WEAK',"
+                + " enrolment_secret_hash = ?, enrolment_issued_at = ?,"
+                + " password_reset_at = COALESCE(?, password_reset_at)"
+                + " WHERE name = ?")) {
+      statement.setString(1, enrolment.secretHash());
+      statement.setString(2, enrolment.issuedAt().toString());
+      statement.setString(3, passwordResetAt.map(Instant::toString).orElse(null));
+      statement.setString(4, accountName);
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not issue an enrolment in " + file, e);
+    }
+  }
+
+  /**
+   * Records the password an Operator chose for themselves, and consumes the secret that let them.
+   *
+   * <p>One statement again, and for the sharper of the two reasons: the secret is one-time, and a
+   * build that wrote the password first and cleared the secret afterwards would leave a window in
+   * which the secret is still good and the password already works.
+   */
+  public void completeEnrolment(
+      String accountName, String passwordHash, PasswordStrength strength) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(passwordHash, "passwordHash");
+    Objects.requireNonNull(strength, "strength");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "UPDATE accounts SET password_hash = ?, password_strength = ?,"
+                + " enrolment_secret_hash = NULL, enrolment_issued_at = NULL"
+                + " WHERE name = ?")) {
+      statement.setString(1, passwordHash);
+      statement.setString(2, strength.name());
+      statement.setString(3, accountName);
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not complete an enrolment in " + file, e);
+    }
+  }
+
+  /**
+   * When an Administrator last took this Account's password away, where the Operator has not yet
+   * been told about it.
+   *
+   * @throws CredentialStoreException if the moment is not one this build wrote
+   */
+  public Optional<Instant> passwordResetAt(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    try (PreparedStatement statement =
+        connection.prepareStatement("SELECT password_reset_at FROM accounts WHERE name = ?")) {
+      statement.setString(1, accountName);
+      try (ResultSet results = statement.executeQuery()) {
+        String resetAt = results.next() ? results.getString("password_reset_at") : null;
+        return Optional.ofNullable(resetAt).map(Instant::parse);
+      }
+    } catch (SQLException | DateTimeParseException e) {
+      throw new CredentialStoreException("could not read what an Account is owed in " + file, e);
+    }
+  }
+
+  /** The Operator has been told their password was reset: it is news, and news is said once. */
+  public void forgetPasswordReset(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "UPDATE accounts SET password_reset_at = NULL WHERE name = ?")) {
+      statement.setString(1, accountName);
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not record what an Account was told in " + file, e);
+    }
+  }
+
+  private static String createdNow() {
+    return ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
   }
 
   /**
@@ -174,9 +337,36 @@ public final class CredentialStore implements AutoCloseable {
       return new LockoutPolicy(
           Integer.parseInt(setting(FAILURES_THAT_LOCK)),
           Duration.parse(setting(LOCKOUT_LASTS_FOR)));
-    } catch (IllegalArgumentException e) {
+      // Duration.parse refuses with a DateTimeParseException, which is not an
+      // IllegalArgumentException. Both are the same thing here: a setting nobody in this build
+      // wrote, which is said as one rather than escaping as whichever library refused it.
+    } catch (IllegalArgumentException | DateTimeParseException e) {
       throw new CredentialStoreException("could not read the Lockout policy in " + file, e);
     }
+  }
+
+  /**
+   * How long a one-time enrolment secret stays usable, as this deployment has it configured. Read
+   * again every time it is needed, as the LockoutPolicy is, so that an Administrator who shortens it
+   * shortens the secrets already in somebody's pocket.
+   *
+   * @throws CredentialStoreException if the setting is missing, is not a period this build wrote,
+   *     or is no time at all — a secret that expires the moment it is issued is not a policy, it is
+   *     an enrolment nobody can complete
+   */
+  public Duration enrolmentSecretLastsFor() {
+    Duration lastsFor;
+    try {
+      lastsFor = Duration.parse(setting(ENROLMENT_SECRET_LASTS_FOR));
+    } catch (IllegalArgumentException | DateTimeParseException e) {
+      throw new CredentialStoreException(
+          "could not read how long an enrolment secret lasts in " + file, e);
+    }
+    if (lastsFor.isZero() || lastsFor.isNegative()) {
+      throw new CredentialStoreException(
+          "an enrolment secret lasts some time, and " + file + " says " + lastsFor, null);
+    }
+    return lastsFor;
   }
 
   /**

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.EnrolmentSecret;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.auth.Argon2Parameters;
@@ -14,17 +15,22 @@ import com.javafxlogin.core.auth.Authenticator;
 import com.javafxlogin.core.authentication.ServiceProcess;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.BoundListeningChannelSource;
+import com.javafxlogin.core.ipc.CreateAccount;
 import com.javafxlogin.core.ipc.DeniedReason;
+import com.javafxlogin.core.ipc.EnrolmentIssued;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.machine.MachineAdministrators;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.Session;
 import com.javafxlogin.core.session.SessionEndedReason;
+import com.javafxlogin.core.session.SessionToken;
 import com.javafxlogin.core.store.CredentialStore;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
@@ -65,6 +71,11 @@ class ServiceLoginGateTest {
   private static final String OPERATOR_PASSWORD = "Another-Horse-2";
   private static final String ADMINISTRATOR = "wren.holloway";
   private static final String ADMINISTRATOR_PASSWORD = "Correct-Horse-1";
+
+  /** Somebody who has been given a code and has never had a password. */
+  private static final String NEWCOMER = "rosalind.sanders";
+
+  private static final String NEWCOMER_PASSWORD = "A-Third-Horse-3";
 
   @TempDir Path runtimeDirectory;
 
@@ -221,7 +232,11 @@ class ServiceLoginGateTest {
         new BoundListeningChannelSource(socketPath), storeFile, CHEAP, administrators);
   }
 
-  /** Nothing creates an Operator yet — enrolment is its own ticket — so the store is written to. */
+  /**
+   * An Operator with a password already, written straight into the store: this suite is about what
+   * the gate carries, and reaching that state through the service would be an Administrator Session
+   * and two more requests in every test. What enrolment does over the wire is asserted below.
+   */
   private void provisionOperator() {
     String hash = new Authenticator(CHEAP).hash(OPERATOR_PASSWORD.toCharArray());
     try (CredentialStore store = CredentialStore.openOrCreate(storeFile)) {
@@ -343,5 +358,89 @@ class ServiceLoginGateTest {
     assertThrows(
         ServiceUnreachableException.class,
         () -> gate.createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+  }
+
+  // --- enrolment ------------------------------------------------------------------------------
+
+  /**
+   * The whole of what a person does at the enrolment screen, against the real service: the Account
+   * that has no password says so in its own words, the secret becomes a password, and that password
+   * is the one that admits them. Seam 3's fake answers all three; this is where it is checked.
+   */
+  @Test
+  void carriesAnEnrolmentThroughToTheService() {
+    createTheAdministrator();
+    String secret = issueASecretFor(NEWCOMER);
+    LoginGate gate = gate();
+
+    assertEquals(
+        NotAdmitted.because(DeniedReason.ENROLMENT_REQUIRED),
+        gate.admit(NEWCOMER, "Nothing-Yet-1".toCharArray()));
+    assertInstanceOf(
+        Enrolled.class,
+        gate.completeEnrolment(NEWCOMER, secret.toCharArray(), NEWCOMER_PASSWORD.toCharArray()));
+
+    assertInstanceOf(Admitted.class, gate.admit(NEWCOMER, NEWCOMER_PASSWORD.toCharArray()));
+  }
+
+  /** A secret that is not the one comes back as a refusal, and never as an exception. */
+  @Test
+  void refusesASecretThatIsNotTheOneItIssued() {
+    createTheAdministrator();
+    issueASecretFor(NEWCOMER);
+
+    EnrolmentOutcome outcome =
+        gate()
+            .completeEnrolment(
+                NEWCOMER,
+                EnrolmentSecret.generate(new SecureRandom()).text().toCharArray(),
+                NEWCOMER_PASSWORD.toCharArray());
+
+    assertEquals(EnrolmentRefused.because(DeniedReason.AUTH_FAILED), outcome);
+  }
+
+  /** The rules are the service's here too, and every one that was broken comes back. */
+  @Test
+  void carriesBackEveryRuleThePolicyRefusedTheChosenPasswordFor() {
+    createTheAdministrator();
+    String secret = issueASecretFor(NEWCOMER);
+
+    EnrolmentOutcome outcome =
+        gate().completeEnrolment(NEWCOMER, secret.toCharArray(), "short".toCharArray());
+
+    PolicyRefusal refusal = assertInstanceOf(PolicyRefusal.class, outcome);
+    assertTrue(
+        refusal.violations().contains(PolicyViolation.PASSWORD_TOO_SHORT),
+        () -> "the short password was allowed through: " + refusal.violations());
+  }
+
+  @Test
+  void saysSoWhenThereIsNoServiceToEnrolAgainst() {
+    LoginGate gate = LoginGate.toService(runtimeDirectory.resolve("nothing-listens-here.sock"));
+
+    assertThrows(
+        ServiceUnreachableException.class,
+        () -> gate.completeEnrolment(NEWCOMER, "K7QF".toCharArray(), "x".toCharArray()));
+  }
+
+  /**
+   * Creates an Account awaiting enrolment the way an Administrator will once there is a panel to do
+   * it from: over the wire, from an Administrator Session, and with the machine handed back
+   * afterwards so that the enrolment below is not refused for a Session somebody left open.
+   */
+  private String issueASecretFor(String accountName) {
+    try (ServiceClient client = ServiceClient.connect(socketPath)) {
+      Response admitted =
+          client.send(
+              new Authenticate(
+                  ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray(), Role.ADMINISTRATOR));
+      SessionToken administrator = assertInstanceOf(Granted.class, admitted).token();
+      Response issued =
+          client.send(new CreateAccount(administrator, accountName, Role.OPERATOR));
+      client.send(new Logout(administrator));
+      return assertInstanceOf(EnrolmentIssued.class, issued).secret();
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
   }
 }

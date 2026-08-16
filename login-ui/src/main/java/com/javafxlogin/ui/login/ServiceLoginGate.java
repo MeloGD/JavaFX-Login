@@ -6,6 +6,7 @@ import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
+import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
@@ -67,7 +68,8 @@ final class ServiceLoginGate implements LoginGate {
     Objects.requireNonNull(password, "password");
     Response response = ask(new Authenticate(accountName, password, Role.OPERATOR));
     return switch (response) {
-      case Granted granted -> new Admitted(new Session(granted.token()));
+      case Granted granted ->
+          new Admitted(new Session(granted.token()), granted.passwordResetAt());
       case Denied denied -> new NotAdmitted(denied.reason(), denied.lockedFor());
       // A readable answer that does not answer this question — a store the service cannot open,
       // say. It is not a refusal, and showing it as one would send the person to retype a
@@ -134,6 +136,25 @@ final class ServiceLoginGate implements LoginGate {
     };
   }
 
+  @Override
+  public synchronized EnrolmentOutcome completeEnrolment(
+      String accountName, char[] secret, char[] password) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(secret, "secret");
+    Objects.requireNonNull(password, "password");
+
+    Response response = ask(new CompleteEnrolment(accountName, secret, password));
+    return switch (response) {
+      case Ok ignored -> new Enrolled();
+      case PolicyRefused refused -> new PolicyRefusal(refused.violations());
+      case Denied denied -> new EnrolmentRefused(denied.reason(), denied.lockedFor());
+      // A Session for a screen that asked for none, or an answer to a question nobody put here.
+      // Showing one as a refusal would send the person back to whoever gave them the secret over
+      // something that was never about the secret.
+      default -> throw unexpected("an enrolment", response);
+    };
+  }
+
   private FirstRunOutcome refusalOf(ErrorResponse error) {
     return switch (error.code()) {
       case ADMINISTRATOR_EXISTS -> new FirstRunRefused(FirstRunRefusedReason.ADMINISTRATOR_EXISTS);
@@ -145,11 +166,16 @@ final class ServiceLoginGate implements LoginGate {
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach its CredentialStore");
       // Every one of these is answered to a request made from an Administrator's Session — about
-      // an Account that already exists, or about a file to copy the record into. The first run is
-      // neither: it carries no Session at all, being what creates the Account that can hold one,
-      // and it asks for nothing to be written anywhere. Reaching here means the service answered a
-      // question nobody asked.
-      case NOT_ADMINISTRATOR, NO_SUCH_ACCOUNT, EXPORT_DESTINATION_REFUSED, EXPORT_FAILED ->
+      // an Account, or about a file to copy the record into. The first run is neither: it carries
+      // no Session at all, being what creates the Account that can hold one, and it asks for
+      // nothing to be written anywhere. Reaching here means the service answered a question nobody
+      // asked.
+      case NOT_ADMINISTRATOR,
+              NO_SUCH_ACCOUNT,
+              ACCOUNT_EXISTS,
+              CANNOT_ENROL_THE_ADMINISTRATOR,
+              EXPORT_DESTINATION_REFUSED,
+              EXPORT_FAILED ->
           throw unexpected("an attempt to create the Administrator", error);
     };
   }

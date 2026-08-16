@@ -5,6 +5,9 @@ A JavaFX login window.
 ## Coding Style
 Google style guide: https://google.github.io/styleguide/javaguide.html
 
+## Additional behaviour
+The Code_review.md file is a report where every issues posts its findings. Dont delete previosu work releated to previous issues on this file, just add your findings to it. This file will be used on a final review stage.
+
 ## Agent skills
 
 ### Issue tracker

@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
@@ -185,6 +186,100 @@ class MessageCodecTest {
     Granted received = (Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent));
 
     assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+  }
+
+  /** The one thing an admission carries besides the token, and the reason it is not a refusal. */
+  @Test
+  void carriesTheResetAnOperatorIsOwedBeingToldAbout() {
+    Granted sent =
+        new Granted(
+            SessionToken.generate(new SecureRandom()),
+            Optional.of(Instant.parse("2026-03-01T09:00:00Z")));
+
+    Granted received = (Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertEquals(sent.passwordResetAt(), received.passwordResetAt());
+  }
+
+  /** Nothing to tell is written as an explicit null, as everything optional here is. */
+  @Test
+  void carriesAnAdmissionWithNothingToTellAsSomethingRatherThanAsNothing() {
+    Granted sent = new Granted(SessionToken.generate(new SecureRandom()));
+
+    assertTrue(
+        new String(MessageCodec.encode(sent), StandardCharsets.UTF_8)
+            .contains("\"passwordResetAt\":null"));
+    assertEquals(
+        Optional.empty(),
+        ((Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent))).passwordResetAt());
+  }
+
+  @Test
+  void refusesAnAdmissionWhoseResetIsNotAMoment() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes(
+                    "{\"type\":\"Granted\",\"token\":\""
+                        + Base64.getEncoder()
+                            .encodeToString(SessionToken.generate(new SecureRandom()).copyOfBytes())
+                        + "\",\"passwordResetAt\":\"last Tuesday\"}")));
+  }
+
+  @Test
+  void carriesACreateAccountUnchanged() {
+    CreateAccount sent =
+        new CreateAccount(SessionToken.generate(new SecureRandom()), "finch.mercer", Role.OPERATOR);
+
+    CreateAccount received = (CreateAccount) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.accountName(), received.accountName());
+    assertEquals(Role.OPERATOR, received.role());
+  }
+
+  @Test
+  void carriesAnInitiateResetUnchanged() {
+    InitiateReset sent =
+        new InitiateReset(SessionToken.generate(new SecureRandom()), "finch.mercer");
+
+    InitiateReset received = (InitiateReset) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.accountName(), received.accountName());
+  }
+
+  @Test
+  void carriesACompleteEnrolmentUnchanged() {
+    CompleteEnrolment sent =
+        new CompleteEnrolment(
+            "finch.mercer", "K7QF-9M2X-3WBR".toCharArray(), "Another-Horse-2".toCharArray());
+
+    CompleteEnrolment received =
+        (CompleteEnrolment) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertEquals(sent.accountName(), received.accountName());
+    assertArrayEquals(sent.secret(), received.secret());
+    assertArrayEquals(sent.password(), received.password());
+  }
+
+  @Test
+  void carriesAnEnrolmentIssuedUnchanged() {
+    EnrolmentIssued sent =
+        new EnrolmentIssued("K7QF-9M2X-3WBR-8ZDN-5YCG-VJH2-P4", Instant.parse("2026-03-04T09:00:00Z"));
+
+    assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+  }
+
+  /** A secret that runs out at no moment is a secret that never runs out, and there is no such one. */
+  @Test
+  void refusesAnEnrolmentIssuedThatExpiresAtNoMoment() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"EnrolmentIssued\",\"secret\":\"K7QF\",\"expiresAt\":null}")));
   }
 
   @Test
@@ -479,6 +574,22 @@ class MessageCodecTest {
     assertFalse(
         printed.contains(Base64.getEncoder().encodeToString(token.copyOfBytes())),
         () -> "leaked the token: " + printed);
+  }
+
+  /** The one message that carries a secret the service will never say again prints none of it. */
+  @Test
+  void printingAnEnrolmentPrintsNeitherTheSecretNorThePassword() {
+    String offered =
+        new CompleteEnrolment(
+                "finch.mercer", "K7QF-9M2X".toCharArray(), "Another-Horse-2".toCharArray())
+            .toString();
+    String issued =
+        new EnrolmentIssued("K7QF-9M2X", Instant.parse("2026-03-04T09:00:00Z")).toString();
+
+    assertFalse(offered.contains("K7QF"), () -> "leaked the secret: " + offered);
+    assertFalse(offered.contains("Another-Horse-2"), () -> "leaked the password: " + offered);
+    assertFalse(offered.contains("finch.mercer"), () -> "leaked the Account name: " + offered);
+    assertFalse(issued.contains("K7QF"), () -> "leaked the secret: " + issued);
   }
 
   private static byte[] bytes(String json) {

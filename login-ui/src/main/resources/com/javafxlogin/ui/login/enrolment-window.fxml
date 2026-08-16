@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  The enrolment screen: where somebody turns the one-time code they were handed into a password
+  nobody else has ever known.
+
+  The code box is a plain field and not a password field, deliberately. It is not a secret the
+  person is keeping — they were just handed it, on paper or across a desk — and they are copying it
+  character by character off something else. Hiding it behind dots is how a transcription error
+  becomes three failed attempts and a Lockout.
+
+  The password is asked for twice for the opposite reason: it is hidden, nobody else will ever know
+  it, and there is no recovery key. A typo here costs another trip to whoever administers the
+  application.
+
+  Nothing is prefilled but the name, and only where the person arrived from the login screen having
+  typed it there.
+
+  Every string here moves to a ResourceBundle when the interface learns a second language.
+-->
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.PasswordField?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.javafxlogin.ui.login.EnrolmentController"
+      styleClass="login" spacing="8.0" prefWidth="420.0">
+
+  <padding>
+    <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
+  </padding>
+
+  <Label text="Establecer contraseña" styleClass="title"/>
+
+  <Label styleClass="explanation" wrapText="true" text="Esta cuenta todavía no tiene contraseña. Escribe el código de un solo uso que te han dado y elige tu contraseña: nadie más la conocerá, ni siquiera quien administre la aplicación."/>
+
+  <Label styleClass="warning" wrapText="true" text="Esta contraseña no se puede recuperar. Si la pierdes, tendrán que darte otro código para volver a establecerla. Guárdala en un gestor de contraseñas antes de continuar."/>
+
+  <Label text="Nombre de cuenta" styleClass="field-label"/>
+  <TextField fx:id="accountName"/>
+
+  <Label text="Código de un solo uso" styleClass="field-label"/>
+  <TextField fx:id="secret"/>
+
+  <Label text="Contraseña" styleClass="field-label"/>
+  <PasswordField fx:id="password"/>
+
+  <Label text="Repite la contraseña" styleClass="field-label"/>
+  <PasswordField fx:id="repeatedPassword"/>
+
+  <Button fx:id="enrol" text="Establecer la contraseña" onAction="#onEnrol"
+          defaultButton="true" maxWidth="Infinity"/>
+
+  <Label fx:id="enrolmentMessage" styleClass="message" wrapText="true"/>
+</VBox>

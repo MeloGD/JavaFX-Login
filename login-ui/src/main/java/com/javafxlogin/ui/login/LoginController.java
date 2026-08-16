@@ -1,7 +1,5 @@
 package com.javafxlogin.ui.login;
 
-import com.javafxlogin.core.session.Session;
-import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.fxml.FXML;
@@ -34,33 +32,43 @@ public final class LoginController {
   private static final String SESSION_ALREADY_LIVE =
       "Ya hay una sesión abierta en este equipo. Ciérrala antes de iniciar otra.";
 
-  /**
-   * Said with the time left in it, because a person who is not told how long simply keeps trying.
-   * It names no Account and offers no way out: the wait is the point, and an Administrator is who
-   * shortens it.
-   */
-  private static final String LOCKED_OUT =
-      "La cuenta está bloqueada temporalmente tras varios intentos fallidos."
-          + " Vuelve a intentarlo dentro de %s.";
-
   @FXML private TextField accountName;
   @FXML private PasswordField password;
   @FXML private Button admit;
   @FXML private Label message;
 
   private LoginGate gate;
-  private Consumer<Session> onAdmitted;
+  private Consumer<Admitted> onAdmitted;
+  private Consumer<String> onEnrolmentRequired;
 
   /**
-   * Wires the window to the gate behind it, and to whatever opens once someone is admitted.
+   * Wires the window to the gate behind it, and to the two screens it can hand somebody on to.
    *
+   * @param onEnrolmentRequired given the name that was typed, and expected to show the enrolment
+   *     screen. Sending them there is the whole point of the service answering that refusal apart
+   *     from the others: an Account with no password cannot be reached by typing a better one.
    * @param saying what the window says before anyone has typed anything, which is where someone
-   *     returned here by a Session ending is told why
+   *     returned here by a Session ending, or by finishing an enrolment, is told why
    */
-  void admitWith(LoginGate gate, Consumer<Session> onAdmitted, String saying) {
+  void admitWith(
+      LoginGate gate,
+      Consumer<Admitted> onAdmitted,
+      Consumer<String> onEnrolmentRequired,
+      String saying) {
     this.gate = Objects.requireNonNull(gate, "gate");
     this.onAdmitted = Objects.requireNonNull(onAdmitted, "onAdmitted");
+    this.onEnrolmentRequired = Objects.requireNonNull(onEnrolmentRequired, "onEnrolmentRequired");
     message.setText(Objects.requireNonNull(saying, "saying"));
+  }
+
+  /**
+   * The other way to the enrolment screen: somebody who was handed a code and has never had a
+   * password to try. Without this they would have to type a password they do not have, be refused,
+   * and be sent there — which works, and reads as the application not knowing what it wants.
+   */
+  @FXML
+  private void onEnrolInstead() {
+    onEnrolmentRequired.accept(accountName.getText());
   }
 
   @FXML
@@ -75,28 +83,27 @@ public final class LoginController {
 
   private void showOutcome(Admission admission) {
     switch (admission) {
-      case Admitted admitted -> onAdmitted.accept(admitted.session());
-      case NotAdmitted notAdmitted -> failed(sentenceFor(notAdmitted));
+      case Admitted admitted -> onAdmitted.accept(admitted);
+      case NotAdmitted notAdmitted -> refused(notAdmitted);
     }
   }
 
-  private static String sentenceFor(NotAdmitted notAdmitted) {
-    return switch (notAdmitted.reason()) {
-      case AUTH_FAILED -> REFUSED;
-      case SESSION_ALREADY_LIVE -> SESSION_ALREADY_LIVE;
-      // Present because the refusal is a Lockout, which is the record's own rule.
-      case LOCKED_OUT -> LOCKED_OUT.formatted(waitOf(notAdmitted.lockedFor().orElseThrow()));
-    };
-  }
-
   /**
-   * The wait, in whole minutes and never in none: rounded up so that a screen saying "one minute"
-   * is never a screen someone is refused after, and floored at one so that the shortest wait is
-   * still a wait rather than a zero to argue with.
+   * Three of the four refusals are a sentence and the fourth is a window.
+   *
+   * <p>An Account awaiting enrolment is the fourth, and it is the reason the service answers that
+   * refusal apart from the others: the person cannot fix it by typing a better password, because
+   * there is no password to be better than. They are handed to the screen where the code they were
+   * given is worth something, and the name goes with them so that they do not type it twice.
    */
-  private static String waitOf(Duration remaining) {
-    long minutes = Math.max(1, (remaining.toSeconds() + 59) / 60);
-    return minutes == 1 ? "1 minuto" : minutes + " minutos";
+  private void refused(NotAdmitted notAdmitted) {
+    switch (notAdmitted.reason()) {
+      case AUTH_FAILED -> failed(REFUSED);
+      case SESSION_ALREADY_LIVE -> failed(SESSION_ALREADY_LIVE);
+      // Present because the refusal is a Lockout, which is the record's own rule.
+      case LOCKED_OUT -> failed(LockoutText.forA(notAdmitted.lockedFor().orElseThrow()));
+      case ENROLMENT_REQUIRED -> onEnrolmentRequired.accept(accountName.getText());
+    }
   }
 
   private void failed(String reason) {
