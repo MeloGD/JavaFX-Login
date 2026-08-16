@@ -1,3 +1,1280 @@
+# Code review — the wire (issue #2, Seam 2)
+
+Written for a final reviewing agent. It records what was built, what a two-axis
+review found, what was acted on, and — more usefully — what was **not**, so the
+next reviewer spends its effort on open ground rather than re-deriving settled
+ground.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `wire-transport` (pushed to `origin`) |
+| Commits | `0ed4d22` (implementation), `5d23a42` (review fixes) |
+| Base / fixed point | `5879e5c`, the tip of `worktree-design-docs` |
+| Diff to review | `git diff 5879e5c...HEAD` |
+| Package | `com.javafxlogin.core.ipc` in `login-core` |
+| Build | `mvn -o test` → 44 tests, 0 failures, 1 skipped by an OS guard |
+
+**Branch base is not `main`.** `wire-transport` was cut from
+`worktree-design-docs`, not from `main` or `dev-login`, because the Maven
+skeleton, `CONTEXT.md` and the ADRs exist only there. `main` and `dev-login` are
+still at `49535c6` with no Java in them. Any review that diffs against `main`
+will see the design docs as part of this change; they are not.
+
+## 2. What the ticket asked for
+
+Issue #2, "The wire: length-prefixed framing and AF_UNIX transport" — the channel
+the unprivileged client and the privileged `AuthenticationService` talk over, and
+nothing else. Parent spec is issue #1; the binding decision is ADR-0003
+(`docs/adr/0003-unix-domain-socket-transport.md`) and the measurements in
+`docs/spikes/linux-service-activation.md`.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Round trip over `AF_UNIX` in a temp dir | met | `TransportTest.completesARequestResponseRoundTripOverAUnixDomainSocket` |
+| Over-cap rejected **without its body being read**, connection closed | met | `TransportTest.refusesAnOversizedDeclarationWithoutWaitingForTheBodyBehindIt` (declares over-cap, then sends real body bytes) + `…WithoutReadingItsBodyAndClosesTheConnection` + `FrameCodecTest.rejectsADeclaredLengthAboveTheCapAsSoonAsThePrefixArrives` |
+| Frame split across several reads | met | `FrameCodecTest.reassemblesAFrameSplitAcrossSeveralReads` (byte at a time), `TransportTest.reassemblesARequestSplitAcrossSeveralWrites` |
+| Several frames in one read | met | `FrameCodecTest.separatesSeveralFramesArrivingInASingleRead`, `…WhenAReadStraddlesTheBoundary`, `TransportTest.separatesSeveralRequestsArrivingInASingleWrite` |
+| Malformed or truncated closes the connection | met | `TransportTest.closesTheConnectionOnAMalformedFrame`, `…OnATruncatedFrameRatherThanGuessingAtIt` |
+| Concurrent connections isolated | met | `TransportTest.servesConcurrentConnectionsWithoutEitherSeeingTheOthersTraffic`, `…UnderLoad` (8 clients × 20 round trips) |
+| Close produces the Session-ending signal, fakeable by Seam 1 | met | `ConnectionHandle` (2 methods); `TransportTest.signalsTheHandleWhenTheClientDisappears…`, `…RegisteredAfterTheConnectionAlreadyClosed`, `…WhenTheServerItselfStops` |
+| Acquisition behind its own component; Linux adopts, Windows unimplemented | met | `ListeningChannelSource`; `ListeningChannelSourceTest`, Windows case `@EnabledOnOs(OS.WINDOWS)` so it **skips on Linux rather than passing** |
+| Headless, no display, no privileges | met | verified by running the suite as uid 1000 with `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` unset |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **Payloads are opaque bytes.** The transport promises whole, capped, ordered
+  frames; it does not parse JSON. ADR-0003 says "Messages are JSON", so *this
+  clause is deliberately deferred* to the ticket that introduces the message
+  types, along with Jackson. Consequence today: "malformed" means
+  length-malformed only, and arbitrary non-JSON reaches the handler. **This is
+  the largest open question in the change** — see §5.
+- **Thread per connection, on virtual threads.** Keeps a Session and its
+  connection in step and keeps two clients' traffic apart by construction.
+  Requests on one connection are serialised; `RequestHandler` implementations
+  must be thread-safe across connections.
+- **`ConnectionHandle` is the Seam 1 / Seam 2 join.** The handler receives the
+  request together with the connection it arrived on, so Seam 1 can hand the
+  service a handle it closes by hand, while Seam 2 proves a real socket closing
+  fires the same signal. Deliberately two methods, so faking it is trivial.
+- **`ListeningChannelSource.release()`** exists so the source that *created* a
+  socket file removes it, while the inherited (systemd) source deliberately does
+  nothing — the socket unit stays listening after the service exits, and deleting
+  the file would break the next activation.
+- **The inherited path refuses rather than falling back.** No channel, an unbound
+  channel, a non-listening channel, or a TCP channel all raise
+  `ListeningChannelUnavailableException`. Quietly binding its own socket would
+  produce one whose mode came from `umask` — exactly what the declarative systemd
+  socket exists to prevent.
+
+## 4. Two-axis review: what was found and what was done
+
+Reviewed by two independent agents (standards axis, spec axis) against
+`5879e5c...HEAD` at commit `0ed4d22`.
+
+### Acted on, in `5d23a42`
+
+1. **The cap's central promise was under-proven.** The over-cap test sent a
+   prefix and *no body*, making "the body was not read" vacuous, and the
+   no-allocation test declared a *legal* length. Added a test that declares
+   over-cap and puts real bytes behind it. Verified it bites: with the cap
+   broken, the server hangs waiting for a body that never comes.
+2. **Overflow in `FrameDecoder.makeRoomFor`.** It computed `copyOfRange`'s end
+   index as `start + capacity`, which can wrap to a negative index near 2 GiB —
+   in the one method whose comment claimed overflow safety. Now an explicit
+   `new byte[capacity]` + `System.arraycopy`. Unreachable while the 1 MiB cap
+   holds; fixed because the comment claimed otherwise. Growth with a consumed
+   prefix is now covered by a test.
+3. **`hasPartialFrame()` had no caller in `src/main`** and a truncated frame is
+   indistinguishable from a clean goodbye to the peer, so no observable
+   behaviour rode on it. Deleted; its tests now assert that nothing partial is
+   ever delivered. `FrameTooLargeException.declaredLength()` went with it, and
+   the exception now reports the cap **in force** rather than always the 1 MiB
+   constant.
+4. **A false claim in a class comment.** "its body is neither read nor buffered"
+   overstated it: whatever shared the prefix's read is held, bounded by the read
+   buffer, then discarded with the connection. The comment now says that.
+
+### Deliberately not acted on — open for the next reviewer
+
+| Finding | Axis | Why it was left |
+|---|---|---|
+| **JSON framing unimplemented** (ADR-0003 "Messages are JSON") | Spec | Layering call, not an oversight. Needs an explicit accept-or-reject; if rejected, ADR-0003 or the next ticket should record where JSON validation lands. |
+| **`BoundListeningChannelSource` ships in `src/main`** though only Seam 2 tests use it, and it is effectively the Windows mechanism where the criterion says "left unimplemented" | Spec (scope creep) | Test-only production code is a real smell. Options: move to test scope, or keep and document it as the Windows seed. Not decided. |
+| **Client-side cap + close-on-unreadable-answer; 50 ms accept-retry pause** | Spec (scope creep) | Added as hardening during implementation, before the review flagged them as unasked-for. Both are defensible (the ADR-0003 rule is symmetric; an EMFILE storm would otherwise spin the accept loop) but neither was requested. Reviewer's call. |
+| **`CONTEXT.md` lists `server` under AuthenticationService's `_Avoid_`**, and `TransportServer` plus test prose use it | Standards | Judgement call. `TransportServer` names a transport role, not the domain component, and its Javadoc says "the service". But this is the first Java in the repo and sets precedent. |
+| **Duplicated write-until-drained and read-and-drain loops** (4× and 3× across `TransportServer`, `TransportClient`, `TransportTest`), duplicated `READ_BUFFER_BYTES`, `closeQuietly`, and `lengthPrefix` | Standards | Real duplication. Extracting it across a main/test boundary needs a decision about where a shared helper would live. |
+| **`PlatformListeningChannelSource` is a static factory, not a `ListeningChannelSource`** — the suffix misleads | Standards | Cheap rename, left because it was outside the three fixes agreed with the user. |
+| **`TransportServer` (221 lines) changes for three reasons** — accept loop, connection lifecycle, frame I/O | Standards | Possible Divergent Change. Splitting was judged premature at this size. |
+| **`FrameDecoder.append(byte[])` overloads are used only by tests**; production uses the `ByteBuffer` one | Standards | Kept: coherent decoder API and the tests are real consumers. Flagging for a second opinion. |
+| **Nothing asserts the headless/unprivileged criterion** | Spec | Verified by hand (uid 1000, no display vars). Arguably unassertable in-process. |
+
+### One finding was verified false
+
+The standards axis reported `.gitkeep` still tracked alongside the sources. It is
+not — it appears as `D` in `0ed4d22` and is absent from `git ls-files`. The agent
+read the `| 0` in the diffstat (an empty file being deleted) as presence. **A
+reviewer should not re-raise it.**
+
+## 5. What a final reviewer should attack first
+
+1. **The JSON question.** ADR-0003's framing clause is only half-implemented and
+   that is a conscious choice nobody has signed off. Decide where JSON validation
+   lands and record it.
+2. **`BoundListeningChannelSource`'s home.** Production code whose only
+   production caller is a future platform.
+3. **Whether the unasked-for hardening stays.** Three separate additions, all
+   defensible, none requested.
+
+## 6. Honest limits on what the green build means
+
+- **A green build here is evidence about Linux only.** The Windows acquisition
+  path is designed and unbuilt; `PlatformListeningChannelSource.forCurrentPlatform()`
+  throws there, and its test is OS-guarded so it *skips* on Linux rather than
+  passing. This is per issue #1's rule that a test which never runs and reports
+  green is worse than no test.
+- **systemd socket activation is not tested and cannot be.** What is tested is
+  the *adoption logic* — given what systemd would hand over, the service takes
+  it; given anything else, it refuses. The activation mechanism itself is covered
+  by the manual checklist and the measurements in
+  `docs/spikes/linux-service-activation.md`.
+- **Stability was checked, not assumed.** The suite was run 10× consecutively
+  with zero failures after the fixes.
+
+## 7. A trap in this repo's test loop
+
+`mvn -o -pl login-core surefire:test` **does not recompile**. A harness that used
+it reported a phantom flaky failure for two rounds: the stack trace pointed at a
+line that, in the edited source, was a `try {`. Use `mvn -o -pl login-core test`.
+The failure it was masking was real and is fixed — the server can close so fast
+after an over-cap prefix that the client's body write gets `EPIPE`, which the
+test now treats as the property arriving early rather than as an error.
+
+## 8. Reproducing
+
+```bash
+# from the worktree root, on branch wire-transport
+mvn -o test                      # whole reactor
+mvn -o -pl login-core test       # Seam 2 only — 44 tests, 1 OS-guarded skip
+```
+
+---
+
+# Code review — the CredentialStore and the Authenticator (issue #3, Seam 1)
+
+Written for the same final reviewing agent, in the same shape as the wire report
+above. It records what was built, what **two** review passes found, what was acted
+on, and — more usefully — what was deliberately left open, so the next reviewer
+spends its effort on unsettled ground.
+
+**Read §7 first if you are the one merging this.** It is the only section that is
+about neither standards nor spec, and it is where the surprises are.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `worktree-issue-3-credential-store` (pushed to `origin`) |
+| Commits | `ae0697b` (implementation), `2579235` (review pass 1), `699ea41` + `a8edb22` (review pass 2), `c63658a` (formatting) |
+| Base / fixed point | `5879e5c`, the tip of `worktree-design-docs` |
+| Diff to review | `git diff 5879e5c...HEAD` |
+| Packages | `core.account`, `core.auth`, `core.authentication`, `core.ipc`, `core.session`, `core.store` in `login-core` |
+| Build | `mvn clean verify` → 35 tests, 0 failures, 0 skipped on Linux |
+
+**Branch base is neither `main` nor `dev-login`.** It was cut from
+`worktree-design-docs` because the Maven skeleton, `CONTEXT.md` and the ADRs
+existed only there. Since then `dev-login` has moved to `2c73169` and now carries
+the wire (#2), `CLAUDE.md` and `docs/agents/` — **none of which this branch has
+ever seen**. That asymmetry is not cosmetic; it produced the largest open finding
+in this report (§4, "Google Java Style"). See §7.
+
+## 2. What the ticket asked for
+
+Issue #3, "CredentialStore and the Authenticator" — somewhere to keep Accounts and
+the only component permitted to verify a password, in process, driven by request
+objects, **no socket**. It establishes **Seam 1**: a harness that builds an
+`AuthenticationService` with its store in a temporary directory and hands it
+requests. Issue #3 also restates the naming rule: `AuthenticationService` is the
+privileged process, the class that verifies a password is the `Authenticator`,
+and the former must not be reused for the latter.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| `Bootstrap` creates the single `Administrator`, refused when one exists | met | `BootstrapTest` (5 tests), incl. `theRefusalSurvivesAServiceRestart` and `theSecondAdministratorIsNotCreatedByTheRefusedAttempt`. Enforced by a partial unique index in the schema, not only in code |
+| `Granted` + opaque 128-bit `SessionToken` on a correct password, `Denied` on a wrong one | met | `AuthenticationTest.aCorrectPasswordIsGranted`, `theGrantedTokenIs128Bits`, `everyAuthenticationIssuesAFreshToken`, `aWrongPasswordIsDenied` |
+| `Denied` reveals nothing about whether the Account exists | met | `theDenialRevealsNothingAboutWhetherTheAccountExists` asserts the two `Denied` values are `assertEquals`, plus `anAccountWhoseStoredHashCannotBeReadIsDeniedLikeAnyOther` for the damaged-hash case |
+| An absent Account costs the same time as a real one | met, with a residue | `AbsentAccountCostsTheSameTest` — interleaved A/B sampling, medians, 25% tolerance. Residue in §4 |
+| Argon2id via Password4j at OWASP minimums, stored as PHC strings | met | `ProductionHashingTest` (6 tests) incl. reading `password_hash` back through JDBC |
+| A test pins **production** parameters; other tests use cheap ones on the identical path | met | `theProductionParametersMeetTheOwaspMinimums` pins against literals `19*1024 / 2 / 1`; `cheapAndProductionHashesAreVerifiedByTheSamePath` proves the path is shared both ways |
+| Schema versioned, numbered migrations, reserved `SecondFactor` column | met | `CredentialStoreSchemaTest` (6 tests); `second_factor` asserted present via `PRAGMA table_info` |
+| Refuses to start against a newer schema | met | `theServiceRefusesToStartAgainstANewerSchemaThanItUnderstands` sets `user_version = latest+1` and asserts `SchemaTooNewException` with the right found/understood values |
+| Store file created owner-only | met on Linux only | `StoreFilePermissionsTest` (2 tests, `@EnabledOnOs({LINUX, MAC})`), incl. reasserting the mode when an existing store is reopened after being chmod'ed world-readable. Windows path in §6 |
+| `SessionToken` never written to disk, never logged | **partial** | `SessionTokenTest.isNeverWrittenToDisk` + two `toString()` assertions. Its limits are a live finding — see §4 |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **Equal cost comes from a reference hash built at construction.** The
+  `Authenticator` hashes a 32-character random password it then throws away, and
+  verifies against that whenever the named Account does not exist. This is the
+  standard approach; its residue is in §4.
+- **Parameters travel inside the PHC string**, so verification reads its cost
+  from the stored hash and not from the `Authenticator`'s configuration. That is
+  what lets the whole suite provision Accounts at `(256,1,1,32)` while still
+  exercising the code that ships.
+- **The migration list is written out, not classpath-scanned.** The order
+  upgrades run in must not depend on how a packaged runtime enumerates resources.
+- **Owner-only permissions are applied before SQLite touches the file.** A file
+  SQLite creates itself inherits the umask, so the store is created empty and
+  restricted first, and the mode is reasserted on every open.
+- **One Administrator is a schema constraint**, `CREATE UNIQUE INDEX
+  one_administrator ON accounts (role) WHERE role = 'ADMINISTRATOR'`, so the rule
+  survives a code path that forgets to ask.
+- **`SessionToken` has no `equals`, no `hashCode`, no `of`.** Private `byte[]`,
+  `copyOfBytes()` returns a clone, `toString()` is exactly `SessionToken[redacted]`.
+  Value-object reflexes are what put tokens into logs and maps.
+- **Journal mode is left at the default rollback journal**, not WAL, with
+  `synchronous = FULL`. A credential store trades throughput for durability, and
+  WAL would add sidecar files whose permissions would each need the same care.
+- **`ErrorCode.STORE_UNAVAILABLE` is beyond the spec's named set.** Added because
+  the contract is that every request is answered; a store that cannot be read has
+  to become a response rather than an exception thrown at the transport.
+
+## 4. Two review passes: what was found and what was done
+
+Reviewed twice by two independent agents each (standards axis, spec axis) against
+`5879e5c...HEAD`.
+
+### Pass 1 — acted on in `2579235`
+
+1. **Package `daemon` is on `CONTEXT.md`'s `_Avoid_` list** for
+   AuthenticationService, and three new test files had chosen it. Renamed main
+   and test to `core.authentication`.
+2. **`closeQuietly` could replace a migration failure with a close failure.**
+   Replaced with `closeAfter(...)`, which attaches the close error as suppressed.
+3. **Unused API removed**: `CredentialStore.schemaVersion()`,
+   `Authenticator.parameters()`, `CredentialStoreException(String)`,
+   `SessionToken.of`/`equals`/`hashCode`.
+4. **`Argon2Parameters.PRODUCTION` had no main-code caller** — the pinning test
+   pinned a constant nothing used. Added `AuthenticationService.open(Path)`
+   defaulting to it, plus a test that reads the stored hash column back.
+5. **A tautological test.** `theMigrationsAreNumberedFromOneWithoutGaps` asserted
+   over a list generated by `IntStream.rangeClosed` and could not fail. Rewritten
+   to assert the resource *file name* encodes its version and is on the classpath.
+6. **`restrictWithoutPosix` threw when the platform refused** — which on Windows
+   is always, so the service would not have started at all. Made best-effort and
+   non-throwing.
+7. **A speculative `Clock` parameter** removed; `Denied` given a redaction test;
+   `CONTEXT.md` given the missing `Authenticator` and `SecondFactor` entries.
+
+### Pass 2 — acted on in `699ea41` and `a8edb22`
+
+1. **An unreadable stored hash escaped as an exception.** `Authenticator.verify`
+   called `Argon2Function.getInstanceFromHash`, which throws
+   `BadParametersException` on a hash that is not a readable Argon2id PHC string;
+   `AuthenticationService.handle` catches only `CredentialStoreException`. A real
+   Account with a damaged hash therefore produced a *different outcome* from an
+   absent one — exactly what the denial must not reveal. Verify now falls back to
+   the same reference-hash work, so the damaged Account is denied, denied
+   identically, and denied after spending the same time. A bare `false` was
+   rejected as a fix: it closes the outcome difference and opens a timing one.
+   The fallback deliberately does not route back through `verify`, so an
+   unreadable reference hash cannot become unbounded recursion.
+   Test: `anAccountWhoseStoredHashCannotBeReadIsDeniedLikeAnyOther`, written
+   first and observed failing with the real `BadParametersException`.
+2. **`TOTP` in the schema comment**, against `CONTEXT.md`'s
+   `SecondFactor _Avoid_: 2FA, MFA, TOTP, one-time code`. Beyond the word: the
+   column is reserved for *whichever* second factor is chosen, and naming one in
+   the schema is where a later reader takes the decision as already made. The
+   comment now says no mechanism is named on purpose.
+3. **Two unearned accessors.** `ServiceHarness.directory()` had no caller at all
+   and was deleted; `storeFile()` had none outside the class and is private.
+   `SchemaMigrations.resourceNames()` was public solely for one assertion while
+   its neighbours are package-private for exactly that reason; it is now
+   package-private too, and the test reaches it unchanged.
+
+### Pass 3 — acted on in `c63658a`
+
+**Google Java Style was not followed, in any of the 28 files.** `CLAUDE.md` names
+the Google Java Style Guide as this repo's standard; the wire's code follows it —
+2-space indent, static imports first, then one unsplit ASCII-sorted block — and
+this branch used 4-space indent, non-static imports first, and blank lines
+splitting the import block.
+
+**Neither review pass could have found this**: `CLAUDE.md` does not exist at this
+branch's base (`5879e5c`), only on `dev-login`. It surfaced while writing §7 of
+this report, by comparing the two branches' sources directly. Fixed with
+google-java-format 1.22.0 rather than by hand; whitespace, wrapping and import
+order only, and the 35 tests pass unchanged.
+
+No formatter plugin was added to the build. Whether the standard should be
+mechanically enforced from now on is a project decision, not this ticket's, and
+it is worth taking: nothing currently stops the next branch from diverging the
+same way this one did.
+
+### Deliberately not acted on — open for the next reviewer
+
+| Finding | Axis | Why it was left |
+|---|---|---|
+| **`Granted` carries a `Role`.** The spec asks only for "`Granted` with an opaque 128-bit `SessionToken`"; handing the client a capability set is #5's business. The `role` column on `Account` is needed for Bootstrap; returning it over the seam was not asked for | Spec (scope creep) | Genuinely useful and genuinely unrequested. Reviewer's call |
+| **`SessionTokenTest.isNeverWrittenToDisk` scans only for the raw 16 bytes.** A regression that persisted or logged the token hex- or Base64-encoded — the form anything would actually write — passes untouched | Spec | Real gap in a criterion the ticket states outright. The test does guard against vacuity (it asserts the file list is non-empty first), but it guards the wrong encoding |
+| **"Never logged" rests on two `toString()` assertions.** No logging framework is wired up, so nothing pins the property against a future logger | Spec | Arguably unassertable until #6 introduces logging. Worth an explicit decision |
+| **Equal cost holds only while stored Accounts carry the current parameters.** If parameters are later raised, an Account still hashed at the old cost is measurably cheaper than the absent-Account reference until it logs in once | Spec | Mechanism kept: it is the standard approach, and there is no Account to read parameters from when the name matches nothing. Residue documented in `verifyAgainstAbsentAccount`'s javadoc. The leaking case is untested |
+| **`CredentialStore.restrictWithoutPosix` ships untested**, and its own javadoc calls it "designed, unbuilt and unverified" | Spec (scope creep) | The POSIX path satisfies the criterion on its own. Whether a best-effort Windows fallback belongs in `src/main` before anyone can run it is a real question |
+| **The second-`Bootstrap` race returns the wrong code.** Only the `hasAdministrator()` pre-check yields `ADMINISTRATOR_EXISTS`; if the `one_administrator` unique index is what fires, it surfaces as `STORE_UNAVAILABLE` | Spec | Unreachable today — Seam 1 is single-threaded and #2's transport serialises per connection — but it is a real ordering bug waiting for concurrency |
+| **`core.auth` and `core.authentication` split one glossary area**, and `auth` is an abbreviation the glossary never sanctions, shading toward `_Avoid_: auth server / auth helper` | Standards | Judgement call. `core.auth` came from the pre-existing skeleton, not from this work |
+| **Six dead `.gitkeep` placeholders** remain in packages that now hold real sources: `account`, `auth`, `authentication`, `ipc`, `session`, `store`. The wire branch deleted its own | Standards | Left because the user scoped the last round to three fixes. A one-line `git rm`; note `authentication/.gitkeep` will collide with dev-login's `daemon/.gitkeep` — §7 |
+| **Duplication across tests**: `PRAGMA user_version` read in three places, `OWNER_ONLY` spelled as a `fromString` in main and rebuilt by hand as `Set.of(...)` in the test, and `DriverManager.getConnection("jdbc:sqlite:" + …)` hand-rolled in three test classes | Standards | Real, and the permissions one can drift silently. Extracting across the main/test boundary needs a decision about where a shared helper lives |
+| **Primitive Obsession on the account name** — a bare `String` in `Account`, `Authenticate`, `Bootstrap`, `CredentialStore.findByName`. ADR-0002 makes the name a secret with normalisation and blocklist rules, which currently have nowhere to live | Standards | Ties directly to #4. A type wanting to be born, but #4 should be the one to deliver it |
+| **Account names match case-sensitively** (SQLite default), documented by `anAccountNameIsMatchedExactly` | Spec (undecided) | The spec decides nothing here. #4 owns naming rules and should settle it explicitly rather than inherit it |
+| **`CONTEXT.md`'s `SecondFactor` entry claims "the administration UI shows the option visibly disabled"** — a UI assertion with nothing behind it | Spec | Written by this branch. Either #5 honours it or the sentence should go |
+| Typo: `ProductionHashingTest.openingTheServiceAsProductionDoesStoresAnOwaspGradePhcHash` | Standards | Cosmetic |
+
+### One finding should not be re-raised
+
+The standards axis reported, in both passes, that **ADR-0002's blocklist of
+predictable names (`admin`, `root`, `sa`, matched case-insensitively after
+normalising separators and digit-for-letter substitutions) is not enforced**, and
+it is not. But issue #4, "Password policy and Account naming rules", claims it
+verbatim in its own acceptance criteria — including the full name list, the
+normalisation rules and the requirement that the blocklist be a resource rather
+than code. **It is scheduled work in another ticket, not a gap in #3.**
+
+## 5. What a final reviewer should attack first
+
+1. **The token-on-disk test.** The criterion is stated outright in the ticket and
+   the test checks the one encoding nothing would ever use.
+2. **Whether `Granted` keeps its `Role`.** Cheap to remove now, load-bearing for
+   #5 later, and it decides how much the client is trusted to know.
+3. **The `Bootstrap` race's error code**, if #2's transport is going to serve
+   concurrent connections against one service instance.
+4. **Whether the style standard gets mechanical enforcement.** This branch
+   diverged from it silently for four commits, and nothing yet stops the next one.
+
+## 6. Honest limits on what the green build means
+
+- **A green build here is evidence about Linux only.** Ubuntu is the only
+  validation machine. The Windows permission path is designed, unbuilt and
+  unverified: `restrictWithoutPosix` is best-effort and never throws, and the
+  permission tests are `@EnabledOnOs({LINUX, MAC})` so they *skip* on Windows
+  rather than passing. Nothing here should be reported as working on Windows.
+- **The timing criterion is statistical, and was made to bite.** Its teeth were
+  checked twice by mutation — replacing the equal-cost branch with
+  `.orElse(false)` failed at 19.7 ms vs 0.09 ms, and again at 17.8 ms vs 0.29 ms
+  after the sampling changed. The code was restored both times.
+- **The 25% tolerance is not slack, it is load tolerance.** An earlier version
+  measured the two branches in separate phases and failed 1 run in 5 on a machine
+  building several projects at once — machine load drifting between phases read
+  as a branch difference. Samples are now interleaved, which makes drift hit both
+  equally; 8 consecutive runs then passed. **If this test ever flakes, suspect the
+  sampling before the mechanism**, and re-run the mutation check before believing
+  the mechanism is fine.
+
+## 7. The merge into `dev-login` — what actually happened
+
+`dev-login` (`2c73169`) was merged into this branch and the result pushed. Before
+that merge the two branches had never been compiled against each other. **They
+now have: 79 tests, 0 failures, 1 skipped by the Windows OS guard.** What follows
+records what the merge cost, including the two places this section previously
+predicted wrong.
+
+- **One textual conflict, this file.** `dev-login` already carried the wire's
+  `Code_review.md`; this branch's copy was that file *plus* this section, so the
+  resolution was to take this branch's — a strict superset. Nothing was lost.
+- **`com.javafxlogin.core.ipc` is being written from both ends.** `dev-login` has
+  the transport there (`FrameCodec`, `FrameDecoder`, `TransportServer`,
+  `TransportClient`, `RequestHandler`, `ConnectionHandle`,
+  `ListeningChannelSource` and friends); this branch adds the message types
+  (`Request`, `Response`, `Bootstrap`, `Authenticate`, `Granted`, `Denied`, `Ok`,
+  `ErrorResponse`, `ErrorCode`, `DeniedReason`) to the same package. No file
+  names collided, so git merged them silently — it compiles precisely because the
+  two halves do not reference each other at all.
+- **The two halves do not join yet, and nobody owns the join.** The wire's seam is
+  `byte[] handle(byte[] request, ConnectionHandle connection)`; this branch's is
+  `Response handle(Request request)`. Nothing maps between them. That gap is
+  precisely the "JSON framing unimplemented" question the wire report calls its
+  largest open item (§3 and §5 of that report). **The merge did not close it — it
+  made it the next thing that has to happen.** A green build on `dev-login` now
+  means two halves that each work alone, not a service anyone can talk to. Writing
+  that adapter, and deciding where JSON validation lives, is the first real task
+  on top of this merge.
+- **`core/daemon/.gitkeep` did *not* come back — this section predicted wrong.**
+  Git followed the rename to `authentication` and `dev-login`'s untouched copy
+  merged into it cleanly, so no forbidden empty package was resurrected. The six
+  stale placeholders listed in §4 are still there and still worth deleting.
+- **`CLAUDE.md` and `docs/agents/` existed only on `dev-login`.** They arrived
+  cleanly, and they are the reason for the style finding in §4: this branch was
+  written without them.
+- **`dev-login` has three worktrees committed as gitlinks, and that is a bug
+  nobody has noticed.** `.claude/worktrees/design-docs`,
+  `.claude/worktrees/issue-3-credential-store` and `.claude/worktrees/wire` are
+  tracked at mode `160000` — submodule entries, with no `.gitmodules` behind
+  them, each pinned to a stale commit (this branch's entry points at `2579235`,
+  four commits behind). They predate this merge and arrived through it untouched;
+  nothing here created them and nothing here removed them, because deleting
+  another branch's content was outside what was asked. **They should be deleted
+  and `.claude/worktrees/` added to `.gitignore`** — a repo that tracks its own
+  scratch worktrees will keep re-pinning stale commits into every merge.
+
+## 8. Reproducing
+
+```bash
+# from the worktree root, on branch worktree-issue-3-credential-store
+mvn clean verify                                    # whole reactor
+mvn -pl login-core test                             # Seam 1 only — 35 tests
+mvn -pl login-core test -Dtest=AuthenticationTest   # the denial rules, 10 tests
+```
+
+To re-check that the timing test still has teeth, replace the absent-Account
+branch in `AuthenticationService.authenticate` with `.orElse(false)`, run
+`AbsentAccountCostsTheSameTest`, and confirm it fails by roughly two orders of
+magnitude before restoring it.
+
+---
+
+# Code review — the password policy and the Account naming rules (issue #4)
+
+Written for a final reviewing agent, in the shape the two sections above use:
+what was built, what the two-axis review found, what was acted on, and — more
+usefully — what was **not**.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commit | `e084430` (implementation and every review fix folded in) |
+| Base / fixed point | `1f4f705` |
+| Diff to review | `git diff 1f4f705..e084430` |
+| Package | `com.javafxlogin.core.policy` in `login-core` |
+| Build | `mvn -o test` → 144 tests, 0 failures, 1 skipped by the Windows OS guard |
+
+The review ran against the work while it was staged, so its findings are not a
+follow-up commit — they are inside `e084430`. Section 4 says which is which.
+
+## 2. What the ticket asked for
+
+Issue #4, "Password policy and Account naming rules". Blocked by #3, which is
+closed; the rules are enforced at the service boundary and tested through the
+Seam 1 harness that ticket established. The binding decision is ADR-0002, which
+already required the name blocklist and says why.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Shorter than 12 or longer than 64 refused | met | `PasswordPolicyTest.aPasswordShorterThanTwelveCharactersIsRefused`, `…LongerThanSixtyFour…`, `…aPasswordAtEitherBoundaryIsAccepted` (12 and 64 both accepted) |
+| No uppercase, number or special character refused (Passay) | met | `PasswordPolicyTest.aPasswordWithoutAnUppercaseLetterIsRefused`, `…ANumber…`, `…ASpecialCharacter…` |
+| Bundled breach list, no network lookup ever | met | `PasswordPolicyTest.aPasswordOnTheBundledBreachListIsRefused`, `…theBreachListSeesThroughCase`; the list is `policy/breached-passwords.txt` and nothing in `login-core/src/main` opens a socket for it |
+| Strength estimate returned, informative, never blocking (nbvcxz) | met | `PolicyEnforcementTest.assessReturnsAStrengthEstimateForDisplay`, `PasswordPolicyTest.aWeakEstimateDoesNotRefuseAPassword`, `…aRefusedPasswordIsStillEstimated` |
+| Only a coarse band stored | met | `PolicyEnforcementTest.onlyTheCoarseStrengthBandIsStored`, `CredentialStoreSchemaTest.theAccountsTableRecordsTheCoarseStrengthBand`; `V002` constrains the column to the three names |
+| No periodic expiry | met, weakly | `CredentialStoreSchemaTest.nothingInTheSchemaExpiresAPassword` — it guards the shape, not the behaviour |
+| The thirteen names and the product's own refused | met | `AccountNamePolicyTest.aPredictableNameIsRefused` (parameterised over all thirteen), `…theProductsOwnNameIsRefused` |
+| Case, separators, digit substitutions | met | `…matchingIsCaseInsensitive`, `…separatorsAreNormalisedAway`, `…digitForLetterSubstitutionsAreSeenThrough` |
+| Whole name, not substring | met | `…aNameThatMerelyContainsABlockedOneIsAccepted` (`rosalind.sanders`, `testa.mercer`) |
+| Blocklist extensible without a rebuild | met | `…aDeploymentExtendsTheBlocklistWithAFile`, `PolicyEnforcementTest.aDeploymentBlocklistBesideTheStoreIsEnforced` |
+| Every refusal carries a reason | met | `PolicyEnforcementTest.aRefusalCarriesEveryReasonAtOnce`; `PolicyRefused` refuses to exist with an empty list |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **`Assess` is a new request the ticket did not ask for.** The estimate has to
+  reach the person typing, and `Bootstrap` answers `Ok`. The alternative was a
+  client-side copy of the rules, which would drift from the ones that decide.
+  It reads no Account, so it is not an oracle for which names are taken.
+- **The canonical fold goes towards the digits, not away.** There is no answer
+  to whether `1` is `i` or `l`, so both letters and the digit become `1` and the
+  blocklist entries are folded the same way. Consequences, both accepted: the
+  literal name `54` is refused because `sa` folds onto it, and `6` folds to `9`
+  so `6uest` is refused too.
+- **40 and 60 bits are this project's thresholds, not nbvcxz's.** nbvcxz's own
+  top score starts at 35 bits, which is a floor for a login answering over a
+  network and not for a store an attacker holds a copy of.
+- **`V002` rather than an edit to `V001`.** No installation exists to migrate,
+  so amending `V001` was available and was refused: it would have left any store
+  already at version 1 stranded, and it is the second migration that first
+  proves `applyTo` loops at all.
+- **The band is not a score.** `strengthOf` reads bits and returns one of three
+  names; nothing keeps the number.
+
+## 4. Two-axis review: what was found and what was done
+
+### Acted on, inside `e084430`
+
+- Two test lines at 101 columns. Fixed by running `google-java-format 1.36.1`
+  over every changed file — the same treatment `c63658a` gave the repo. It also
+  rewrapped four hunks this work had wrapped by hand.
+- `ipc.Assessed` was a field-for-field copy of `policy.Assessment`. `Assessed`
+  now carries the `Assessment`, and `AuthenticationService.assess` stopped
+  unpacking it.
+- `AccountPolicy.bundled()` was public and used only by tests → package-private.
+  `PasswordRules.MINIMUM_LENGTH` / `MAXIMUM_LENGTH` were package-private and
+  used only inside the class → private.
+- `PolicyResource.linesOf` did not say where it read from → `linesOfBundledList`.
+- The field `PasswordValidator validator` used a name `CONTEXT.md` lists under
+  _Avoid_ → `characterAndLengthRules`.
+- `6uest` was accepted, because `g` folded to `9` and `6` folded to nothing.
+  `6` now folds too, with a case in the parameterised test.
+- `breached-passwords.txt` claimed a deployment could replace it — which needs a
+  rebuild, unlike the name blocklist. The header now says so.
+- `PolicyResource.linesOfFileIfPresent` catching only `NoSuchFileException` was
+  an accident; it is now a documented decision. A deployment list that exists
+  and cannot be read stops the service rather than quietly applying a weaker
+  policy than the one configured.
+- The schema test concatenated an Account name into SQL → bound parameter.
+
+### Deliberately not acted on — open for the next reviewer
+
+- **No ADR was written.** The offline breach list is the ticket's constraint
+  rather than a decision this work made, and the thresholds are argued at the
+  constants. A reviewer who thinks 40/60 deserves `docs/adr/0008-…` is not
+  wrong; it was left because the choice is one line to change and lives beside
+  its reasoning.
+- **`ACCEPTABLE_ENTROPY_BITS` and `STRONG_ENTROPY_BITS` say "entropy"**, which
+  `CONTEXT.md` lists under `PasswordStrength`'s _Avoid_. Kept: they name the
+  estimator's own quantity, not the band. Overturnable.
+- **A space is not a special character.** `EnglishCharacterData.Special` is
+  Passay's set and excludes `0x20`, so `Aa1 zzzzzzzz` is refused while
+  `Aa1£zzzzzzzz` passes. Passphrases are penalised. Kept because the criterion
+  names Passay, and the deployment's stated policy is the one in the ticket.
+- **Three rules are wider than the ticket asked.** `ACCOUNT_NAME_BLANK` (no
+  criterion asks for it, and without it an Account could be named `""`); the
+  fold covers `@ $ ! | +` as well as digits; breach matching ignores case.
+- **The breach list is a seed of 76 entries**, not a corpus. Every entry recurs
+  across public breach lists, and most are refused by the length rule first.
+- **Nothing in `login-ui` consumes any of this.** No band is displayed and no
+  refusal is worded; that is a later ticket, and the estimate currently reaches
+  a seam and stops.
+
+## 5. What a final reviewer should attack first
+
+1. **The band mapping.** 40 and 60 bits are invented, and every Account's stored
+   band depends on them. `Correct-Horse-1` estimates 34.5 bits and is therefore
+   `WEAK` — check whether that is the message the wizard should send.
+2. **The one password copy that cannot be zeroed.** `nbvcxz.estimate` takes a
+   `String`. Everything else in this package works on `char[]` or a `CharBuffer`
+   over it; that one `new String(password)` is the exception, and it is per
+   keystroke if a UI calls `Assess` as the person types.
+3. **`V002`'s `NOT NULL DEFAULT 'WEAK'`.** A row written before the column
+   existed gets a band nobody estimated. The alternative was a nullable column
+   and an `Optional` on `Account`; the conservative lie was chosen.
+4. **Whether `Assess` belongs in the protocol.** It is the largest thing here
+   the ticket did not ask for.
+5. **The fold's collisions**, in both directions — a legitimate name that folds
+   onto an entry is refused with no way to appeal.
+
+## 6. Honest limits on what the green build means
+
+- Every policy test provisions with the harness's cheap Argon2id parameters. The
+  policy never touches hashing, so this is orthogonal — but it means no test
+  here runs at production cost.
+- The deployment blocklist is read once, at start-up. `…BesideTheStoreIsEnforced`
+  proves it by restarting the harness; nothing proves what an edit does to a
+  running service, because the answer is "nothing until it restarts".
+- Nothing tests `Assess` under concurrency, though `TransportServer` serves
+  connections on virtual threads. `Nbvcxz` is constructed per estimate over an
+  immutable `Configuration`, and the Passay rules are stateless — that is
+  reasoning, not evidence.
+- `mvn -o` is offline by flag, which is not the same as proving no code path
+  would reach the network. The claim rests on reading the two libraries' use,
+  not on a sandbox that would have caught a call.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o test                                            # whole reactor, 144 tests
+mvn -o -pl login-core test -Dtest=PolicyEnforcementTest # Seam 1, the rules as enforced
+mvn -o -pl login-core test -Dtest='*PolicyTest'         # the rules as units
+```
+
+To check the naming test still has teeth, delete the `case 'i', 'l', …` arm of
+`AccountNameRules.folded` and confirm `digitForLetterSubstitutionsAreSeenThrough`
+fails on `Adm1n` before restoring it.
+
+---
+
+# Code review — the walking skeleton (issue #5, Seams 1+2 joined and Seam 3)
+
+Written for a final reviewing agent, in the same shape as the sections above:
+what was built, what the two-axis review found, what was acted on and — more
+usefully — what was **not**.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commits | `316482a` (implementation), `25bb670` (review fixes) |
+| Base / fixed point | `0c22a2e`, the tip of `dev-login` before this ticket |
+| Diff to review | `git diff 0c22a2e...HEAD` — 44 files, +2198 / −39 |
+| Packages | `…core.ipc`, `…core.authentication`, `…core.session` in `login-core`; `…ui.login` in `login-ui`; `…feature` in `protected-feature` |
+| Build | `mvn -o test` → 200 tests, 0 failures, 1 skipped by the Windows OS guard |
+
+## 2. What the ticket asked for
+
+Issue #5, "Walking skeleton: authenticate and open the ProtectedFeature" — the
+first thing a human can watch work, and the join of everything #2 and #3 built.
+Parent spec is issue #1; the binding decisions are ADR-0002 (privileged
+service), ADR-0003 (AF_UNIX and length-prefixed JSON) and ADR-0007 (no JPMS).
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| An Operator authenticates through the window and the ProtectedFeature opens | met | `LoginWindowTest.anOperatorAuthenticatesAndTheProtectedFeatureOpens` |
+| The login stage closes rather than lingering behind the feature | met | `LoginWindowTest.theLoginStageClosesOnceAccessIsGranted` |
+| A wrong password reveals nothing about whether the Account exists | met | `LoginWindowTest.aRefusalSaysNothingAboutWhetherTheAccountExists` (two refusals, identical text), `AuthenticationTest.theDenialRevealsNothingAboutWhetherTheAccountExists` |
+| An Administrator is refused, **by the service** | met | `RoleEnforcementTest` (5 tests), `ServiceOverTheSocketTest.deniesTheAdministratorTheOperatorsRoleOverTheSocket`, `ServiceLoginGateTest.refusesTheAdministratorEvenWithTheRightPassword` — see §3 for how far it goes |
+| A host reaches everything through `LoginGate`, handing over a view it knows nothing about | met | `LoginGate` (one abstract method, one default); `LoginWindowTest.handsTheHostTheSessionThatAdmittingSomeoneProduced`, `…nothingBehindTheGateIsBuiltUntilSomeoneIsAdmitted`; `ProtectedFeatureApplication` is one line |
+| The client talks to the service over the real socket from #2 | met | `ServiceOverTheSocketTest` (7 tests), `ServiceLoginGateTest` (6 tests) |
+| UI tests headless on Monocle against a fake `LoginGate` | met | `LoginWindowTest` extends `ApplicationTest`; `FakeLoginGate`; verified with `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` unset |
+| `login-core` still has no JavaFX on its classpath | met | `NoJavaFxOnTheCoreClasspathTest` asks for `javafx.stage.Stage` and expects not to find it |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The Role moved into the request.** `Authenticate` now carries the Role the
+  client asks to act in, and `Granted` no longer echoes one back. This is the
+  ticket's load-bearing decision and the alternative was a Session registry in
+  the service, which is #7's work. **Consequence for #12:** one login screen
+  serving both Roles cannot know which Role the person holds before
+  authenticating, so it must offer the choice — "one way in" becomes one screen
+  with an explicit administration affordance, which story 38 arguably wants
+  anyway. A reviewer who dislikes this should say so before the admin panel is
+  built on it.
+- **A Role mismatch is `Denied(AUTH_FAILED)`, indistinguishable from a wrong
+  password.** Telling them apart would confirm which name is the Administrator
+  — the one Account whose Role an attacker can guess. The check runs *after*
+  the Argon2id verification so the refusal costs the same.
+- **How far the exclusion goes today, exactly.** No Session for an Operator is
+  ever issued against an Administrator's password. A patched client can still
+  ask to act as an Administrator, be granted a Session, and draw the feature's
+  window over a SecretVault that will not open for it (ADR-0005: no wrapped
+  DataKey). That paragraph is in `ServiceLoginGate`'s Javadoc rather than only
+  here, because it is exactly what a reader will otherwise overestimate.
+- **The codec is hand-built, not annotation-driven.** The tree is read as data
+  and every message is constructed by name against a closed set, so nothing the
+  peer writes chooses a class to instantiate inside the privileged process.
+  ADR-0003 refused RMI for this reason; Jackson databind is used only for its
+  tree API, with `FAIL_ON_TRAILING_TOKENS` and `STRICT_DUPLICATE_DETECTION` on.
+- **An unreadable payload costs the connection.** `MalformedMessageException` is
+  unchecked so it can leave `RequestHandler.handle`, and the transport drops the
+  connection — ADR-0003's rule one layer up. `TransportServer`'s comment about a
+  throwing handler was amended to stop claiming that can only be a defect.
+- **`AuthenticationService.handle` is now synchronised**, and `close()` with it.
+  `RequestHandler` requires thread-safety across connections and the
+  CredentialStore holds one JDBC connection. Serialising a single-desktop
+  privileged process costs nothing worth having.
+- **The gate keeps one connection.** A Session is bound to its connection, so
+  `ServiceLoginGate` opens one lazily and keeps it; a dead one costs the attempt
+  in flight and the next attempt reconnects (`reconnectsAfterTheServiceHasBeenRestarted`).
+- **`ProtectedFeatureLauncher` exists because of ADR-0007.** JavaFX refuses to
+  start from the classpath when the main class is an `Application` subclass. Any
+  host product copying this module needs the same trick, so it is in the
+  reference rather than in a footnote.
+
+## 4. Two-axis review: what was found and what was done
+
+Both axes ran as parallel sub-agents against `0c22a2e...HEAD`.
+
+### Acted on
+
+| Axis | Finding | What was done |
+|---|---|---|
+| Spec | The host never obtains a Session, though `CONTEXT.md` defines `LoginGate` as what a host calls to obtain one | `protect` now takes `Function<Session, Parent>`; the view is built from the Session. Test: `handsTheHostTheSessionThatAdmittingSomeoneProduced` |
+| Standards | Speculative generality: the `Consumer<Session>` discarded its argument | Same change, from the other end — the argument is now consumed |
+| Spec | Any `RuntimeException` other than `ServiceUnreachableException` left the window disabled with nothing said | Every failure re-enables the window and says something |
+| Spec | Story 39 holds only halfway and nothing said so | The paragraph in `ServiceLoginGate` described in §3 |
+| Spec | `account.orElseThrow()` leaned on an implicit invariant | `!verified \|\| account.isEmpty()` states it |
+| Standards | Import order in `PolicyEnforcementTest` (Google style §3.3.3) — the only hard violation found | Fixed |
+| Standards | `MessageCodec` and a test cited ADR-0003 for a message catalogue the ADR does not contain | Citation narrowed to what ADR-0003 actually decided; the `Error` name now cites `ErrorResponse` |
+| Standards | Mysterious names: `finished`, `waiting`, `boundTo` | `showOutcome`, `showWaiting`, `boundToTheSocketNamedIn` |
+| Standards | Two hunks wrapped where the formatter would join them | Joined |
+| — (own) | `close()` could race a request in flight | Synchronised with `handle` |
+
+### Not acted on, deliberately
+
+- **`ServiceProcess.main` and the README recipe are scope creep (Spec).** True
+  to the letter of the acceptance criteria. Kept, because "the first thing a
+  human can watch work" is the ticket's own framing and a skeleton nobody can
+  start is not one. #15 replaces the channel source, not the class. The
+  installed path `/run/javafx-login/authentication.sock` is a constant with a
+  Javadoc saying the installer owns it — **the most defensible thing to delete
+  if a reviewer disagrees.**
+- **`Assess`/`Assessed`/`PolicyRefused` encoding serves #6 (Spec).** A codec
+  covering part of a closed set is a trap for whoever adds the next message. The
+  types already existed; only their encoding is new.
+- **The provisioning helper is duplicated across the module boundary
+  (Standards).** `ServiceHarness.provisionOperatorIn` and
+  `ServiceLoginGateTest.provisionOperator` are the same four lines, because
+  `login-ui`'s tests cannot see `login-core`'s. Closing it means a test-jar in
+  the build; four lines of test fixture did not seem worth that, and #10 deletes
+  both when enrolment exists.
+- **`(String accountName, char[] password)` is a data clump (Standards).**
+  Agreed, and there is no term in `CONTEXT.md` for the pair a person types.
+  Logged here as a glossary gap rather than fixed by inventing vocabulary — see
+  §5.
+- **`ServiceClient` and `ServiceEndpoint` are light Middle Men (Standards).**
+  Both are seams named in ADR-0003 and the Seams section of #1; delegation is
+  what they are for.
+
+## 5. What a final reviewer should attack first
+
+1. **The Role in the request.** §3's first bullet. Everything downstream of the
+   login screen inherits it, and #12 is the ticket that pays if it is wrong.
+2. **Whether the exclusion paragraph is honest enough.** It claims the refusal
+   is worth something before the SecretVault exists. Read it against ADR-0005
+   and disagree loudly if it oversells.
+3. **The codec's refusals.** 27 tests say what it will not read. Look for a
+   payload that is neither accepted nor refused — a shape that reaches a field
+   accessor before the type is checked would be the bug worth finding.
+4. **The gate's single connection.** It survives a service restart at the cost
+   of one attempt. Whether *that* attempt should retry transparently rather than
+   report an unreachable service is a real question, and it becomes #7's
+   problem when a Session hangs off the same connection.
+5. **A glossary gap:** no term for the name-and-password pair a person offers.
+
+## 6. Honest limits on what the green build means
+
+- **Nothing creates an Operator.** Both suites that need one write to the
+  CredentialStore directly and say so. Run by hand, the pair therefore refuses
+  every attempt — correctly — until #6 and #10 land. The README says this
+  plainly rather than implying a demo that does not exist.
+- **The end-to-end path is proven in two halves, not one.** #5 requires UI tests
+  to drive a fake gate, so no test types a password into a window and reaches a
+  real Argon2id hash. `ServiceLoginGateTest` covers gate-to-service and
+  `LoginWindowTest` covers window-to-gate; the seam between them is an
+  interface, not a test.
+- **The window was watched by a human exactly once**, launched by hand against a
+  running service. The 12 seconds it stayed up is the whole of the manual
+  evidence.
+- **`Session` carries a token and nothing else.** No expiry, no logout, no
+  binding to the connection in code — all #7.
+- **JavaFX warns "Unsupported JavaFX configuration: classes were loaded from
+  'unnamed module'"** on every run. That is ADR-0007 being what it is, not a
+  fault, and it will be in every log a host product ever reads.
+- **Passwords become Strings.** `PasswordField.getText()` and the JSON encoding
+  both make one; the `char[]` the window holds is blanked, the String is not.
+  ADR-0003 accepts the password crossing in the clear, which is the same
+  concession one layer down.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o test                                              # whole reactor, 200 tests
+mvn -o -pl login-core test -Dtest=RoleEnforcementTest    # the Administrator's exclusion, Seam 1
+mvn -o -pl login-core test -Dtest=ServiceOverTheSocketTest  # Seams 1+2 joined
+mvn -o -pl login-ui -am test -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dtest=LoginWindowTest                                 # Seam 3, headless
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY mvn -o test   # proves the display claim
+```
+
+To check Seam 3 still has teeth, make `LoginWindow.openProtectedFeature` skip
+`loginStage.close()` and confirm `theLoginStageClosesOnceAccessIsGranted` fails
+before restoring it.
+
+---
+
+# Code review — the first-run wizard (issue #6, Seams 1–3)
+
+Written for a final reviewing agent. It records what was built, what a two-axis
+review found, what was acted on, and — more usefully — what was **not**, so the
+next reviewer spends its effort on open ground rather than re-deriving settled
+ground.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commits | `88e50b6` (implementation), `a422741` (review fixes) |
+| Base / fixed point | `0140a7e`, the tip after issue #5's review record |
+| Diff to review | `git diff 0140a7e...HEAD` |
+| Packages | `com.javafxlogin.core.ipc`, `com.javafxlogin.core.machine`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o test` → 248 tests, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0008 (`docs/adr/0008-first-run-is-authorised-by-peer-credentials.md`) |
+
+## 2. What the ticket asked for
+
+Issue #6, "First-run wizard: create the single Administrator" — the screen a
+person sees the very first time the product runs, and the two guards behind it.
+Parent spec is issue #1; it was blocked by #4 (the policy) and #5 (the walking
+skeleton), both of which had landed.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Wizard appears instead of the login screen where there is no `Administrator` | met | `FirstRunWindowTest.theWizardOpensInsteadOfTheLoginScreenWhereThereIsNoAdministrator`; the choice is `LoginGate.protect` on `firstRunNeeded()` |
+| Refused if an `Administrator` already exists | met | `BootstrapTest.isRefusedOnceAnAdministratorExists`, `…theRefusalSurvivesAServiceRestart`, `ServiceLoginGateTest.refusesASecondAdministrator` |
+| Refused if the peer is not an operating-system administrator | met | `BootstrapTest.isRefusedWhenThePeerDoesNotAdministerTheMachine`, `…WhenTheOperatingSystemWillNotNameThePeer`, and over a real socket in `ServiceOverTheSocketTest.refusesToCreateTheAdministratorForAPeerTheMachineDoesNotAdminister` |
+| Name field empty, nothing prefilled, placed or suggested | met | `FirstRunWindowTest.theAccountNameFieldIsEmptyAndSuggestsNothing` (asserts `promptText` too), `…thePasswordFieldIsEmpty…` |
+| The rules from #4 applied; a refusal explains itself | met | `ServiceLoginGateTest.carriesBackEveryRuleThePolicyRefusedTheNameAndPasswordFor`, `FirstRunWindowTest.aPolicyRefusalNamesEveryRuleThatWasBrokenInWordsAPersonReads` (asserts no constant reaches the screen) |
+| Warned the password cannot be recovered, with a password manager suggested | met | `FirstRunWindowTest.warnsThatThePasswordCannotBeRecoveredAndSaysWhereToKeepIt` |
+| No recovery key, backup code or backdoor issued | met | `BootstrapTest.issuesNothingAlongsideTheAdministratorItCreated`, `ServiceLoginGateTest.issuesNothingAlongsideTheAdministratorItCreated` |
+| After completion the login screen appears, and the `Administrator` can authenticate | **partial — see §5** | first half: `FirstRunWindowTest.theLoginScreenReplacesTheWizardOnceTheAdministratorExists`; second half: `ServiceLoginGateTest.theAdministratorTheWizardCreatesCanAuthenticate` — at the service, not through that screen |
+
+Also verified by hand, which no test covers: the pair run as the README
+describes, with the **real** `PosixMachineAdministrators` reading `/etc/group`
+rather than an injected one — wizard needed, policy refusal with five named
+violations, `Ok`, wizard no longer needed, second attempt `ADMINISTRATOR_EXISTS`,
+`Administrator` granted a Session as an `Administrator` and denied one as an
+`Operator`.
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The peer is named by the kernel, at accept time.** `SO_PEERCRED` is read
+  once in `TransportServer.Connection`'s constructor and cached, because the
+  credentials are fixed at `connect()` and a handle asked after the peer died
+  would answer nothing. `ConnectionHandle.peer()` returns `Optional<Peer>`;
+  empty means the platform will not say, and is refused rather than trusted.
+- **Policy and fact are split.** The handle reports who the peer is;
+  `MachineAdministrators` decides whether that peer administers the machine, and
+  is injected into `AuthenticationService`. That split is what lets both answers
+  be tested: a suite cannot arrange real group membership, and one asserting
+  against the real `/etc/group` would be asserting about the developer.
+- **Two tests were passing by accident before this change.**
+  `ServiceOverTheSocketTest` and `ServiceLoginGateTest` bootstrap over a real
+  socket, and would have passed or failed on whether the developer happens to be
+  in `sudo`. They now name the machine's administrators themselves, and name them
+  by the account running the suite — so what is admitted is exactly what
+  `SO_PEERCRED` reported about that very process, which is a stronger join of
+  Seams 1 and 2 than a blanket "everyone".
+- **Guard order: who before what.** `Bootstrap` settles the peer before it looks
+  at the store, so a peer with no business here is told the same thing on a fresh
+  install as on one set up years ago.
+- **`AskIfBootstrapNeeded` is answered to anyone.** A client must choose a window
+  before it knows anything else, and a fresh install reveals the answer the
+  moment it draws one. `BootstrapTest.aPeerToldTheBootstrapIsNeededIsStillRefusedTheBootstrap`
+  pins that being told is not being allowed.
+- **The wire says `Bootstrap`; everything above says first run.** `Bootstrap`
+  predates this ticket and is `core.ipc`'s settled name. `CONTEXT.md`'s term is
+  `FirstRunWizard`, so `LoginGate`, the outcomes and the windows use it, and
+  `ServiceLoginGate` is the one place the two vocabularies meet. Renaming the
+  wire message was judged churn beyond this ticket.
+- **The wizard takes the login window's stage and hands it back.** This is the
+  first of two screens rather than a second window, so nothing is left behind and
+  nobody has to go and find another window in order to log in.
+- **`protect` asks which window to open on the JavaFX application thread.** One
+  round trip, no hashing, and nothing has been drawn yet, so there is no window
+  to freeze. On Linux the first connect is what socket-activates the service, so
+  this is where a cold start is paid.
+
+## 4. What the two-axis review found and what was done
+
+**Standards axis.** No hard ADR violation. Acted on:
+
+- `Peer` was load-bearing new language missing from `CONTEXT.md` while the same
+  commit added `MachineAdministrator` and `FirstRunWizard`. Added.
+- The `Bootstrap`/`FirstRun` split described above — `LoginGate` was offering
+  `bootstrapNeeded()` beside a private `firstRunIsNeeded()`, and `WizardRefused`
+  beside `FirstRunOutcome`. Unified as above.
+- `FirstRunController` was `LoginController` retyped: the same virtual-thread
+  block down to the verbatim comment, the same unreachable sentence, and a
+  constant called `INTERRUPTED` catching a `RuntimeException`. Extracted to
+  `GateAttempt`; the constant is now `UNANSWERED`.
+- A `MessageCodec` comment saying "peer" where it meant "message", now that a
+  `Peer` type shares the package.
+
+**Spec axis.** Acted on:
+
+- Nothing pinned that no recovery key is issued — true only because nobody had
+  added a field. Now asserted on both sides of the socket.
+- Nothing pinned the unreachable-at-startup branch. `NoServiceAtStartupTest`
+  does, asked of its own stage.
+
+## 5. Open ground — judge these rather than assume them
+
+- **AC8's second half is met at the service, not through the screen the person
+  is left looking at.** `ServiceLoginGate.admit` asks to act as an `Operator`,
+  and the service refuses the `Administrator` there by design (issue #5, stories
+  38–39). So the `Administrator` just created cannot log in through the window
+  that replaces the wizard; they can authenticate, and are proven to, over the
+  wire. The screen that will ask on their behalf is the administration UI, which
+  is a later ticket. The README says this plainly rather than leaving someone to
+  discover it. **This is the largest open question in the change**: either the
+  criterion means what is built, or issue #6 wanted an administration entry point
+  that its own body never describes.
+- **`STORE_UNAVAILABLE` reaches the person as "could not contact the service".**
+  A store the privileged process cannot read is shown with the wording for a
+  service that is not running, so the remedy named is the wrong one. This was
+  *not* changed: the pre-existing `admit` path already maps it the same way, and
+  `ServiceUnreachableException`'s javadoc records that ADR-0002's three
+  distinguishable startup failures are their own ticket. Fixing the wording here
+  would invent a fourth vocabulary ahead of that ticket.
+- **The group database is the machine's own local file.** ADR-0008 §Consequences
+  states the limit: administrators from a directory service are not found, and
+  `id -nG` was rejected rather than spawn a subprocess from a process running as
+  root. If a reviewer disagrees, that is the paragraph to argue with.
+- **`FirstRunRefusedReason` restates two of three `ErrorCode` constants.** Kept
+  deliberately: `STORE_UNAVAILABLE` cannot reach the window, and a type carrying
+  only what can happen means the controller's switch has no unreachable arm. A
+  reviewer who wants `ErrorCode` passed through instead should say so.
+- **No password confirmation field.** The ticket does not ask for one, and it was
+  not added. Given that the password cannot be recovered and is typed once,
+  blind, it is worth a ticket of its own — flagged rather than smuggled in.
+- **`showWaiting(boolean)` is still written twice**, once per controller. The
+  shape is shared but the controls are not, and a helper taking three nodes and a
+  label read worse than the six lines it replaced.
+- **Windows.** `MachineAdministrators.forCurrentPlatform()` throws there, as
+  `PlatformListeningChannelSource` already does. `SO_PEERCRED` does not exist on
+  that platform either, so `peer()` would be empty and the wizard refused. Both
+  belong to the unbuilt Windows service ticket, and neither pretends otherwise.
+
+---
+
+# Code review — the Session lifecycle (issue #7, Seams 1–3)
+
+Written for a final reviewing agent. It records what was built, what a two-axis
+review found, what was acted on, and — more usefully — what was **not**, so the
+next reviewer spends its effort on open ground rather than re-deriving settled
+ground.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Base / fixed point | `3db4193`, the tip after issue #6's review record |
+| Diff to review | `git diff 3db4193...HEAD` |
+| Packages | `com.javafxlogin.core.session`, `…core.authentication`, `…core.audit`, `…core.ipc`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o test` → 317 tests, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0009 (`docs/adr/0009-session-expiry-is-decided-when-someone-asks.md`) |
+
+## 2. What the ticket asked for
+
+Issue #7, "Session lifecycle: activity, expiry, logout and clock jumps" —
+everything that ends a `Session`. Parent spec is issue #1, stories 45–54; it was
+blocked by #5 (the walking skeleton), which had landed.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| A `Session` expires after a configured period without activity; the stage closes and returns to the login screen | met | `SessionExpiryTest.aSessionEndsAfterThePeriodWithoutActivity`, `…aSessionSurvivesUpToTheLastMomentOfThePeriod`; `SessionWindowTest.theWindowClosesAndTheLoginScreenReturnsWhenTheSessionEnds`, `…theLoginScreenSomeoneComesBackToIsEmpty` |
+| `Operator` activity resets the countdown | met | `SessionExpiryTest.activityBuysAnotherWholePeriod`, `SessionLifecycleTest.activityStartsTheCountdownAgain`, `…askingAboutASessionIsNotActivity`, `SessionWindowTest.whatTheOperatorDoesIsReportedToTheService` |
+| The `Administrator` can change the period globally, and disable expiry entirely | **partial — see §5** | `InactivityPeriodConfigurationTest` (seven tests, including `expiryCanBeSwitchedOffEntirely` and `theChangeSurvivesAServiceRestart`) — at the service, with no screen to do it from |
+| An `Operator` can log out manually | met | `SessionLifecycleTest.anOperatorCanLogOut`, `…loggingOutTwiceIsNotAnOk`, `SessionWindowTest.loggingOutEndsTheSessionAndHandsThePersonBack` |
+| A closed connection ends the `Session` immediately, with no heartbeat | met | `ServiceOverTheSocketTest.endsTheSessionOfAClientThatDisappears` (real socket, real client), `SessionLifecycleTest.aSessionEndsWithTheConnectionItWasGrantedOn` |
+| Expiry is evaluated against both monotonic and wall-clock time | met | `SessionExpiryTest.aClockSetBackwardsDoesNotLengthenASession`, `…timeTheMonotonicClockDidNotCountStillCountsAgainstTheSession` |
+| A wall-clock jump beyond tolerance expires the `Session` and records an `AuthenticationEvent` | met | `…aWallClockJumpBeyondToleranceEndsTheSession`, `…BackwardsBeyondToleranceEndsTheSessionToo`, `…aCorrectionSmallerThanTheToleranceIsNotAJump`, `…aClockJumpIsRecordedAsAnAuthenticationEvent` |
+| A second `Authenticate` while a `Session` is live is refused, and the existing one kept | met | `SessionLifecycleTest.aSecondAuthenticationIsRefusedWhileASessionIsLive`, `…theRefusalIsMadeWithoutLookingAtAnyAccount`, `ServiceOverTheSocketTest.refusesASecondSessionOverTheSocket`, `LoginWindowTest.aSessionAlreadyOpenIsNotShownAsAWrongPassword` |
+| The `SessionToken` still never touches disk | met | pre-existing `SessionTokenTest.isNeverWrittenToDisk` walks the whole directory, so it now covers the new event log too; `SessionExpiryTest.nothingRecordedAboutASessionCarriesItsToken` |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **Expiry is lazy, and that is ADR-0009.** No timer in the privileged process:
+  every request carrying a `SessionToken` first asks whether the live `Session`
+  has run out. Nothing acts on an expired `Session` until a client asks, and the
+  client asks anyway. The ADR records the four rejected alternatives, including
+  the heartbeat and `CLOCK_BOOTTIME`.
+- **A resumed machine and a clock someone set are the same event here.** Both
+  make the wall clock run ahead of the monotonic one, and a JVM cannot tell them
+  apart. Both end the `Session` as `CLOCK_JUMPED`, and `SessionEndedText` words
+  it as both possibilities rather than guessing between them.
+- **The tolerance is not the security control.** Taking the *longer* of the two
+  measures is: a clock set backwards shortens the wall measure and leaves the
+  monotonic one untouched, so it buys nothing. One minute is only where drift
+  stops being ordinary.
+- **The guard asks once per countdown, at the moment the service named.** Every
+  answer carries how long is left, so the guard never computes a deadline. Its
+  reporting cadence is a quarter of that, capped at twenty seconds — so an
+  `InactivityPeriod` shorter than the cap cannot coalesce away the activity of
+  someone who is working.
+- **A `SessionToken` is not a bearer credential.** It names a `Session` only on
+  the connection that `Session` was granted on; presented on another it is
+  `NO_SUCH_SESSION`, which is also what an unknown token gets.
+- **`Sessions` has its own monitor, not the service's.** The close listener runs
+  on whichever thread noticed the connection go and must not queue behind an
+  Argon2id hash. The monitor is held long enough to read two clocks.
+- **The gate owns the window an `Operator` works in.** `SessionWindow` places the
+  host's view untouched inside a `BorderPane` with one control above it. Two
+  things have to happen there that no host should write and none should be able
+  to forget: somewhere to log out, and closing when the service says the
+  `Session` is over. `login.css` rules are all scoped, so the gate's stylesheet
+  cannot restyle what the host handed over.
+- **`admit` returns `Admission` rather than `Optional<Session>`.** Story 54's
+  refusal has a different remedy from a wrong password, and `DeniedReason`'s
+  javadoc always said the set grows when the client must act differently. The
+  refusal reveals nothing: no Account is read to produce it, and a live `Session`
+  is visible to anyone who can see the screen it is open on.
+- **The audit log is a seam with the smallest honest thing behind it.** #9 owns
+  the HMAC chain, rotation and export, and `AuthenticationEventLog`'s javadoc
+  says so. What is here writes one flushed CSV line per event and swallows what
+  it cannot write, because story 81 says a full disk must not lock everyone out.
+
+## 4. What the two-axis review found and what was done
+
+**Standards axis.** No ADR contradiction; ADR-0009 honoured point for point.
+Acted on:
+
+- `timeout` — the first entry on the new `InactivityPeriod` `_Avoid_` list — had
+  reached a test's javadoc. Reworded.
+- `GateWindow`'s javadoc still said the login screen "is replaced by nothing".
+  This change puts it back. Corrected.
+- Repeated `switch` over `SessionOutcome` in four `AuthenticationService`
+  methods, with one arm written three times. Gathered into
+  `onTheSessionNamedBy`, which is now the shape of every request only a live
+  `Session` may make.
+- `expireAnySessionThatIsDue()` returned a value its name never mentioned. Split
+  into `theConfiguredPeriod()` and a void `expireAnySessionThatIsDue(period)`.
+- Three lines wrapped where they fit inside 100 columns.
+
+**Spec axis.** Every acceptance criterion checked one by one; the table in §2 is
+its verdict. Acted on:
+
+- The `SessionGuard`'s twenty-second coalescing was a constant, while
+  `InactivityPeriod.of` accepts any positive duration — so a period of ten
+  seconds would have expired someone who was working. The cadence now follows
+  what the service says the `Session` has left.
+- `Sessions.open` registered a close listener per admission, so a client logging
+  in and out on one connection accumulated them. One per connection now.
+- A window closed with its own decoration left the guard asking. `setOnHidden`
+  stops it.
+
+## 5. Open ground — judge these rather than assume them
+
+- **The `Administrator` can configure the period, but has nowhere to do it
+  from.** `ChangeInactivityPeriod` is complete and tested at Seams 1 and 2, and
+  unreachable from the shipped client: `ServiceLoginGate.admit` asks to act as an
+  `Operator`, and the service refuses the `Administrator` there by design. This
+  is the *same* open question issue #6's review recorded as its largest, and it
+  resolves the same way — the administration entry point is issue #12, whose
+  first acceptance criterion is that the panel is reachable only by an
+  `Administrator` `Session`. Adding a gate method and a second login path here
+  would be building #12 ahead of #12. **Flagged rather than smuggled in**: if a
+  reviewer thinks #7 owned that entry point, this is the paragraph to argue with.
+- **`AuthenticationEventType.CONFIGURATION_CHANGED` is early.** #7 only requires
+  the clock jump to be recorded. `CONTEXT.md` has always called a configuration
+  change an `AuthenticationEvent`, and this ticket introduces the only one that
+  exists, so it is recorded. A reviewer who wants the audit ticket to own every
+  event type should say so.
+- **`Admission` and `SessionStatus` are not in `CONTEXT.md`.** They are host-
+  facing and `public`, which is the argument for adding them. They were not,
+  because `FirstRunOutcome` and its three implementations — equally public,
+  equally host-facing — are not there either: the glossary holds the domain's
+  nouns, and these are the closed sets of answers a window switches on.
+  `InactivityPeriod`, which *is* a domain noun, was added.
+- **The end-of-`Session` sentence travels as a `String`**, from `SessionGuard`
+  through to `LoginController`, with `""` meaning "nothing to say". A type was
+  considered and refused: the value is a label's text at every hop, and a
+  `Label` with no text is already how "nothing to say" is spelt in JavaFX.
+- **One listener per connection is not one listener per lifetime.** Two clients
+  taking turns on two connections still add a listener to each on every turn.
+  Bounded by successful authentications, each of which costs an Argon2id
+  verification, so it is untidiness rather than an exposure — but it is not zero.
+- **Closing the feature window does not log out.** It stops the guard; the
+  `Session` then expires as any unattended one does, or ends with the connection
+  when the process exits. Sending a logout from an `onHidden` handler was judged
+  worse than relying on the mechanism this ticket exists to build.
+- **A kiosk `Session` is not ended by a clock jump.** Switching expiry off
+  switches off both rules, deliberately: a kiosk that logged itself out because
+  the machine's time was corrected is a kiosk nobody could keep running.
+  ADR-0009 §Consequences states it.
+- **`Sessions` holds one slot, and `Authenticate` refuses rather than replaces.**
+  The alternative — the newest authentication wins — would let anyone who can
+  type a password throw out the person working. Story 54 says which one is kept
+  and this follows it, but it is a product decision worth seeing.
+
+---
+
+# Code review — Lockout (issue #8, Seams 1 and 3)
+
+Written for a final reviewing agent. It records what was built, what a two-axis
+review found, what was acted on, and — more usefully — what was **not**, so the
+next reviewer spends its effort on open ground rather than re-deriving settled
+ground.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Base / fixed point | `2c3b1d7`, the tip after issue #7's review record |
+| Diff to review | `git diff 2c3b1d7...HEAD` |
+| Packages | `com.javafxlogin.core.account`, `…core.authentication`, `…core.store`, `…core.ipc`, `…core.audit`, `com.javafxlogin.ui.login` |
+| Build | `mvn -o test` → 351 tests, 0 failures, 1 skipped by an OS guard |
+| New decision | ADR-0010 (`docs/adr/0010-lockout-is-persisted-and-says-so.md`) |
+| New migration | `V004__lockout.sql` — two columns on `accounts`, two `configuration` rows |
+
+**How this review was run.** The two axes were meant to run as parallel
+sub-agents, as issues #6 and #7 did. Both were killed by a session limit before
+they read anything, so the review below was carried out in one context instead.
+A final reviewer should weigh that: the axes did not check each other, and the
+same agent that wrote the code judged it.
+
+## 2. What the ticket asked for
+
+Issue #8, "Lockout that survives a service restart" — parent spec issue #1,
+stories 40–44, plus story 89 (no rate-limiting state in memory). It was blocked
+by #5 (the walking skeleton), which had landed.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| An Account that fails authentication a configured number of times enters `Lockout` | met | `LockoutTest.theConfiguredNumberOfFailuresLocksTheAccount`, `…theNumberOfFailuresThatLocksIsWhateverTheStoreSays`, `ConfigurationTest.aFreshStoreLocksAnAccountOutAfterFiveFailuresForAQuarterOfAnHour` |
+| `Lockout` survives a restart of the `AuthenticationService` | met | `LockoutTest.theLockoutSurvivesARestartOfTheService` (closes the service and reopens it against the same files) |
+| A locked Account receives a distinct refusal saying so and for how long | met | `LockoutTest.aLockedAccountIsToldSoAndForHowLong`, `…theRefusalSaysWhatIsLeftOfTheLockoutRatherThanItsWholeLength`; over a real socket, `ServiceLoginGateTest.carriesALockoutBackWithTheWaitTheServiceDecided`; as a person meets it, `LoginWindowTest.aLockedAccountIsToldHowLongItHasToWait` |
+| `Lockout` state is in the store the service owns and is unreachable by an unprivileged process | met | `LockoutTest.everyFileTheLockoutIsWrittenToIsOwnerOnly` walks the whole directory after a Lockout; `StoreFilePermissionsTest` still asserts the mode on create and reopen |
+| Every write is flushed, since the service does not run continuously | met | `LockoutTest.theLockoutIsWrittenToTheStoreAtOnceRatherThanWhenTheServiceStops` reads the row over a second JDBC connection while the service still holds its own; `PRAGMA synchronous = FULL` and autocommit are what make that true |
+| The `Administrator` can clear a `Lockout` | met at the service | `LockoutTest.anAdministratorCanClearALockout`, `…clearingALockoutLeavesNothingCountedAgainstTheAccount`, `…anOperatorsSessionCannotClearALockout`, `…clearingALockoutForAnAccountThatDoesNotExistIsRefused`, `…aTokenThatNamesNoSessionClearsNothing` — **no screen, see §5** |
+| Entering and clearing each record an `AuthenticationEvent` | met | `LockoutTest.enteringALockoutIsRecorded`, `…clearingALockoutIsRecorded` |
+| A successful authentication resets the failure count | met | `LockoutTest.aSuccessfulAuthenticationForgetsTheFailuresBeforeIt`, `…theFailuresBeforeASuccessfulAttemptNeverAddUpToALockout` |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The state is two columns on the Account, and that is ADR-0010.** The service
+  stops after five idle minutes (ADR-0002), so a counter in memory is one an
+  attacker clears by waiting — story 89 says so outright. It is in the
+  `CredentialStore` rather than a file of its own because that buys the same
+  directory, owner and mode without a second thing to keep consistent with the
+  Accounts it is about.
+- **Nothing is remembered about a name no Account holds.** Counting failures
+  against whatever was typed would close the oracle below, and would pay with a
+  row in the privileged store for every string ever typed at a login screen —
+  one of which is eventually somebody's password in the wrong box, which is the
+  reasoning story 77 already applies to the audit log.
+  `LockoutTest.aNameNoAccountHoldsIsNeverLockedOutAndIsNeverWrittenDown` reads
+  the store's bytes and asserts the name is not in them.
+- **`LOCKED_OUT` is an oracle, deliberately, and it is priced.** It is the one
+  answer this service gives that says something about an Account. Five wrong
+  guesses at a name confirm the name is real — at the cost of one Argon2id
+  verification per guess, the Account locked for a quarter of an hour, and an
+  `ACCOUNT_LOCKED_OUT` line in the audit log. Story 43 asks for it, because the
+  alternative is a person retyping a correct password for fifteen minutes at a
+  screen insisting it is wrong. ADR-0010 states the trade and the six options it
+  beat, including the two that would remove the leak.
+- **The Lockout is applied after the Argon2id verification, not instead of it.**
+  Every refusal therefore costs the same — locked, wrong and absent alike — so
+  the stopwatch ADR-0002 keeps away from the account list is kept away from the
+  list of locked Accounts too. Skipping the work would save nothing: an attempt
+  costs one hash whatever name it names. This is why
+  `AbsentAccountCostsTheSameTest` still passes, and why it now raises the policy
+  out of its own way rather than switching Lockout off (see §4).
+- **A correct password in the wrong Role counts as a failure.** An Account that
+  could never be locked out would be the one an attacker picks out of the list
+  by failing at it all afternoon — and the Account whose Role is guessable is
+  the Administrator's. `LockoutTest.aRightPasswordInTheWrongRoleCountsTowardsTheLockout`.
+- **Timed by the wall clock alone, and never outlasting its configured length.**
+  A monotonic reading is a count from an origin the process chose and means
+  nothing after a restart, so ADR-0009's second clock cannot be used here. A
+  Lockout that claims to end further away than the configured length is read as
+  over: whoever set the clock back is a MachineAdministrator who can rewrite the
+  file directly, so it costs nothing already lost, and the alternative is
+  refusing a person until a date a clock error invented.
+- **`Denied` grew one optional field rather than the wire growing a response.**
+  `DeniedReason`'s javadoc had always said the set grows when a client must act
+  differently, and issue #1's protocol sketch names `LOCKED_OUT` there. The
+  record refuses to be built any other way: a Lockout always says how long, and
+  nothing else ever does — enforced in the compact constructor and at the codec
+  (`MessageCodecTest.refusesARefusalWhoseReasonAndWaitDoNotAgree`).
+- **`Lockouts` is a sibling of `Sessions`, and package-private.** Four methods —
+  `refusalOf`, `failed`, `succeeded`, `clear` — and the service turns what they
+  answer into responses and events, exactly as it does for `Sessions`. It is not
+  `public` because nothing outside the package has any business with it.
+
+## 4. What the two-axis review found and what was done
+
+**Standards axis.** No ADR contradiction; ADR-0002 and ADR-0009 honoured, and
+ADR-0010 written for the decisions this ticket had to make itself. `CONTEXT.md`'s
+`_Avoid_` list for `Lockout` (ban, throttle, block) is respected throughout, and
+`LockoutPolicy` was added to the glossary because it is new load-bearing
+language. Acted on:
+
+- The Role guard was written twice once `ClearLockout` arrived — the same
+  `live.role() != ADMINISTRATOR` cascade in two methods. Gathered into
+  `onlyAnAdministrator`, which is now the shape of every request only an
+  Administrator may make, as `onTheSessionNamedBy` is for every request only a
+  live Session may make.
+- The codec had `expiresInMillis` read and written by hand, and `lockedForMillis`
+  would have been the second copy of it. Both now go through one pair of
+  `millis` helpers, so "an absent duration is an explicit null" is written once.
+- `CredentialStore.inactivityPeriod()` and the new `lockoutPolicy()` would have
+  duplicated the settings lookup. Extracted `setting(name)`; the missing-setting
+  and not-a-value behaviour `ConfigurationTest` already pinned is unchanged.
+- Five lines wrapped where they exceeded 100 columns, and one test's imports
+  re-sorted.
+
+**Spec axis.** Every acceptance criterion checked one by one; the table in §2 is
+its verdict. Acted on:
+
+- Criterion 4 ("not reachable by an unprivileged process") had only indirect
+  evidence — `StoreFilePermissionsTest` asserts the store's mode, but nothing
+  asserted that a Lockout does not write anywhere else.
+  `LockoutTest.everyFileTheLockoutIsWrittenToIsOwnerOnly` now walks the whole
+  directory after a Lockout, so a later build that put this state in a file of
+  its own fails rather than shipping a Lockout an Operator can delete.
+- The upgrade path was untested for this migration.
+  `CredentialStoreSchemaTest.anAccountFromAnEarlierSchemaHasFailedNothing`
+  builds a store at V001, migrates it, and asserts the Account comes out having
+  failed nothing — a migration that left it counted as anything else would lock
+  someone out on the strength of a number nobody counted.
+- `AbsentAccountCostsTheSameTest` fails at one Account twenty times, so at the
+  shipped policy it would have been locked out halfway through the warm-up and
+  every later sample would have timed a refusal an absent name can never
+  receive. It now raises the number of failures out of the measurement's way,
+  with the reason written where it is done. **This is a real interaction worth a
+  reviewer's eye**: the equal-cost property is now asserted only for the
+  attempts before a Lockout, which is the only window in which it can be
+  asserted at all.
+
+## 5. Open ground — judge these rather than assume them
+
+- **The `Administrator` can clear a `Lockout`, but has nowhere to do it from.**
+  `ClearLockout` is complete and tested at Seam 1, and unreachable from the
+  shipped client: `ServiceLoginGate.admit` asks to act as an `Operator`, and the
+  service refuses the `Administrator` there by design. This is the *same* open
+  question issues #6 and #7 recorded, and it resolves the same way — the
+  administration panel is issue #12. **Flagged rather than smuggled in.**
+- **The single `Administrator` can lock themselves out, and only they can clear
+  it.** Five failed attempts at the Administrator's own name — including the
+  correct password offered at the login screen, which asks for the Operator Role
+  — refuse them for fifteen minutes, and the request that would release them
+  needs an Administrator Session nobody can obtain in the meantime. It ends by
+  itself, and the alternative (an Account that never locks) is the oracle §3
+  refuses. A reviewer who wants the Administrator exempted should argue with
+  this paragraph rather than assume it was missed.
+- **Nothing in this build changes the `LockoutPolicy`.** The migration writes
+  five failures and fifteen minutes; the store reads them again on every
+  decision, so the screen that will change them is a change of caller, not of
+  shape. No setter was added, because a setter nobody calls is a constant with
+  extra steps — the suite writes the `configuration` row directly instead
+  (`ServiceHarness.lockoutPolicyIs`), which is what a deployment would do today.
+- **`Denied` and `NotAdmitted` carry the same invariant twice.** The UI keeps its
+  own vocabulary — `NotAdmitted` has always carried the service's `DeniedReason`
+  rather than being the wire type — and the duplicated rule is what makes
+  `lockedFor().orElseThrow()` honest in `LoginController`. Considered and kept;
+  worth disagreeing with if you think the client should carry the `Denied`.
+- **A Lockout is not extended by attempts made during it.** Nothing is counted
+  while an Account is refused, because nothing is verified. Someone hammering a
+  locked Account gets the same fifteen minutes rather than an ever-growing one,
+  which is deliberate: the alternative lets anyone who can reach the login
+  screen keep an Operator out indefinitely.
+- **The wait a person reads is rounded up to whole minutes, floored at one.**
+  Fourteen and a half minutes reads as fifteen. A screen that said "one minute"
+  and then refused someone would be worse than a screen that overstates by
+  thirty seconds; `LoginController.waitOf` is where to argue.
+- **`FailedAuthentications` is not in `CONTEXT.md`.** It is the store's record of
+  what leads to a `Lockout` rather than a domain noun of its own, and the
+  glossary holds the nouns. `LockoutPolicy` was added, because a deployment
+  configures it and ADR-0010 rests on it.
+- **The event log names the Account, not the Administrator who cleared it.**
+  `AuthenticationEvent` carries one subject, there is exactly one Administrator,
+  and the Account released is the name a reader is looking for. If the audit
+  ticket (#9) gives events an actor, `LOCKOUT_CLEARED` is the first that wants
+  one.
+- **Nothing here slows an offline attack on a stolen hash.** That is Argon2id's
+  job at the parameters ADR-0002 pins, and reading a Lockout as protection
+  against it would be reading it as a strength it does not have. The ticket says
+  this in its own words, and so does `LockoutPolicy`'s javadoc.
+
+---
+
 # Code review — Audit log (issue #9)
 
 Written for a final reviewing agent. It records what was built, what a two-axis
