@@ -1,37 +1,33 @@
 package com.javafxlogin.core.store;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.List;
 
 /**
  * The CredentialStore's numbered migrations.
  *
- * <p>The migration list is written out rather than discovered by scanning the classpath, because
- * the order upgrades run in is exactly the thing that must not depend on how a packaged runtime
- * happens to enumerate resources. The version of a store is SQLite's {@code user_version}, set in
- * the same transaction as the migration that raised it.
+ * <p>The list lives here and the machinery that applies it lives in {@link NumberedMigrations},
+ * which the SecretVault's own set uses too. What is specific to this store is the list and nothing
+ * else: the two files are separate by ADR-0004 and their version numbers are separate with them.
  */
 public final class SchemaMigrations {
 
-  private static final List<String> MIGRATIONS =
-      List.of(
-          "db/migration/V001__initial_schema.sql",
-          "db/migration/V002__password_strength.sql",
-          "db/migration/V003__configuration.sql",
-          "db/migration/V004__lockout.sql",
-          "db/migration/V005__enrolment.sql");
+  private static final NumberedMigrations MIGRATIONS =
+      NumberedMigrations.of(
+          "the CredentialStore",
+          List.of(
+              "db/migration/V001__initial_schema.sql",
+              "db/migration/V002__password_strength.sql",
+              "db/migration/V003__configuration.sql",
+              "db/migration/V004__lockout.sql",
+              "db/migration/V005__enrolment.sql"));
 
   private SchemaMigrations() {}
 
   /** The highest schema version this build understands. */
   public static int latestVersion() {
-    return MIGRATIONS.size();
+    return MIGRATIONS.latestVersion();
   }
 
   /**
@@ -39,7 +35,7 @@ public final class SchemaMigrations {
    * outside this package migrates a store, and the schema test lives alongside it.
    */
   static List<String> resourceNames() {
-    return MIGRATIONS;
+    return MIGRATIONS.resourceNames();
   }
 
   /**
@@ -48,48 +44,10 @@ public final class SchemaMigrations {
    * @throws SchemaTooNewException if the store was written by a build that understood more
    */
   static void applyTo(Connection connection) throws SQLException {
-    int current = userVersionOf(connection);
-    if (current > latestVersion()) {
-      throw new SchemaTooNewException(current, latestVersion());
-    }
-    for (int version = current + 1; version <= latestVersion(); version++) {
-      apply(connection, version);
-    }
-  }
-
-  private static void apply(Connection connection, int version) throws SQLException {
-    String sql = read(MIGRATIONS.get(version - 1));
-    boolean autoCommit = connection.getAutoCommit();
-    connection.setAutoCommit(false);
-    try (Statement statement = connection.createStatement()) {
-      statement.executeUpdate(sql);
-      // PRAGMA user_version takes no bind parameters; the value is an int this class chose.
-      statement.execute("PRAGMA user_version = " + version);
-      connection.commit();
-    } catch (SQLException e) {
-      connection.rollback();
-      throw e;
-    } finally {
-      connection.setAutoCommit(autoCommit);
-    }
+    MIGRATIONS.applyTo(connection);
   }
 
   static int userVersionOf(Connection connection) throws SQLException {
-    try (Statement statement = connection.createStatement();
-        ResultSet results = statement.executeQuery("PRAGMA user_version")) {
-      return results.next() ? results.getInt(1) : 0;
-    }
-  }
-
-  private static String read(String resource) {
-    try (InputStream stream =
-        SchemaMigrations.class.getClassLoader().getResourceAsStream(resource)) {
-      if (stream == null) {
-        throw new IllegalStateException("migration missing from the build: " + resource);
-      }
-      return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new IllegalStateException("could not read migration " + resource, e);
-    }
+    return NumberedMigrations.userVersionOf(connection);
   }
 }

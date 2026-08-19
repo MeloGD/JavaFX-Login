@@ -6,8 +6,8 @@ package com.javafxlogin.core.audit;
  * <p>The set grew one ticket at a time, alongside the thing being recorded, so that no build ever
  * had a constant nothing writes. The audit log's own ticket is the one that completed it: story 73
  * names authentication attempts, Lockouts, Account changes, configuration changes and exports, and
- * all five are here. Enrolment has since added the Account changes only it can make. What is still
- * missing is what is still unbuilt — the SecretVault adds its own.
+ * all five are here. Enrolment has since added the Account changes only it can make, and the
+ * SecretVault the two Account changes and the one refusal that are its own.
  *
  * <p>A failed authentication says here why it failed, which is the one place it may be said. The
  * client is told {@code AUTH_FAILED} and nothing more, because telling it apart at the login screen
@@ -35,6 +35,21 @@ public enum AuthenticationEventType {
 
   /** An Administrator took an Account's password away, which is what starts a reset. */
   PASSWORD_RESET_INITIATED,
+
+  /**
+   * An Account holder changed their own password, having offered the one it had. Recorded as the
+   * Account change it is, and not as anything about the SecretVault: the wrapped copy of the DataKey
+   * is rewrapped in the same breath, so a reader who sees this and no revocation beside it knows the
+   * Account kept its access to secrets.
+   */
+  PASSWORD_CHANGED,
+
+  /**
+   * An Administrator deleted an Account, and with it the wrapped copy of the DataKey that Account
+   * held. The two go together and are one event, because a delete that destroyed only one of them
+   * would be the bug this event exists to make visible if it ever happened.
+   */
+  ACCOUNT_DELETED,
 
   /** Somebody offered a valid enrolment secret and chose the password that Account now has. */
   ENROLMENT_COMPLETED,
@@ -107,6 +122,15 @@ public enum AuthenticationEventType {
    * name every time, and the first is the one a reader is looking for.
    */
   LOCKOUT_CLEARED,
+
+  /**
+   * A SecretVault operation arrived from a Session that is not an Operator's, and was refused by the
+   * service. This is the event ADR-0005 leans on: the Administrator's exclusion from the Vault is not
+   * a boundary, and the way round it is to create an Operator and enrol it — so the value of the
+   * refusal is that trying the direct route leaves this line, and the indirect route leaves two
+   * others. It is recorded against the Account whose Session asked, which is the Administrator's own.
+   */
+  VAULT_REFUSED_TO_AN_ADMINISTRATOR,
 
   /**
    * An Administrator copied the record out to read it with their own tools. Recorded after the copy

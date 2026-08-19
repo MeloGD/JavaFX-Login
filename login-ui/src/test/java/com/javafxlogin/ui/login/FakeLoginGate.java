@@ -39,6 +39,9 @@ final class FakeLoginGate implements LoginGate {
 
   private final List<String> enrolments = new CopyOnWriteArrayList<>();
 
+  /** The SecretVault, as far as a window ever needs one: a map with no key anywhere near it. */
+  private final Map<String, String> secrets = new ConcurrentHashMap<>();
+
   private volatile boolean reachable = true;
   private volatile boolean firstRunNeeded;
   private volatile boolean aSessionIsAlreadyLive;
@@ -47,6 +50,9 @@ final class FakeLoginGate implements LoginGate {
   private volatile EnrolmentOutcome nextEnrolmentOutcome = new Enrolled();
   private volatile Instant passwordResetAt;
   private volatile boolean noticeReadFails;
+
+  /** What the Vault answers with instead of a secret, or null where it answers with the secret. */
+  private volatile SecretWithheldReason vaultWithholds;
 
   /** An Account the service says has no password yet, whatever is typed for it. */
   private volatile String awaitingEnrolment;
@@ -107,6 +113,18 @@ final class FakeLoginGate implements LoginGate {
    */
   void cannotBeToldTheNoticeWasRead() {
     noticeReadFails = true;
+  }
+
+  /** A secret this deployment's ProtectedFeature will find in the Vault. */
+  FakeLoginGate holdingTheSecret(String name, String secret) {
+    secrets.put(name, secret);
+    return this;
+  }
+
+  /** A Session that holds no wrapped copy of the DataKey, or one the Vault is not an Operator's. */
+  FakeLoginGate withTheVaultWithholding(SecretWithheldReason reason) {
+    vaultWithholds = reason;
+    return this;
   }
 
   /** What the enrolment screen offered, as {@code name/secret/password}, in order. */
@@ -247,6 +265,38 @@ final class FakeLoginGate implements LoginGate {
       throw new ServiceUnreachableException("There is no AuthenticationService in this test");
     }
     return status;
+  }
+
+  @Override
+  public SecretOutcome secretNamed(Session session, String name) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(name, "name");
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (vaultWithholds != null) {
+      return new SecretWithheld(vaultWithholds);
+    }
+    String secret = secrets.get(name);
+    return secret == null
+        ? new SecretWithheld(SecretWithheldReason.NO_SUCH_SECRET)
+        : new SecretGiven(secret.toCharArray());
+  }
+
+  @Override
+  public SecretKeepingOutcome keepSecret(Session session, String name, char[] secret) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(name, "name");
+    // Copied at once, as every other array handed to this fake is.
+    String kept = new String(secret);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (vaultWithholds != null) {
+      return new SecretWithheld(vaultWithholds);
+    }
+    secrets.put(name, kept);
+    return new SecretKept();
   }
 
   @Override

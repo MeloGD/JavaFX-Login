@@ -15,7 +15,12 @@ _Avoid_: user, profile
 
 **Administrator**:
 The single Account that manages other Accounts and application configuration. An
-Administrator can never read secrets held by the Vault.
+Administrator does not hold access to the SecretVault and cannot obtain it
+without leaving a record: every Vault operation from an Administrator Session is
+refused by the AuthenticationService, so the way to a secret is to create an
+Operator and enrol it, and both of those are AuthenticationEvents. This is least
+privilege and not a barrier — see ADR-0005, and never write that secrets are
+protected _from_ the Administrator.
 _Avoid_: admin user, superuser, root
 
 **Operator**:
@@ -162,14 +167,37 @@ _Avoid_: user database, account table, shadow file
 
 **SecretVault**:
 The named store of secrets a ProtectedFeature needs but must not hold in the
-clear, such as credentials for other systems. Secrets are served one at a time,
-only to an Operator, and only for as long as their Session lasts.
+clear, such as credentials for other systems. Its own file beside the
+CredentialStore, owned by the AuthenticationService. Secrets are served one at a
+time, only to an Operator, and only for as long as their Session lasts — each is
+decrypted at the moment it is asked for, so the plaintext window is one request
+rather than the whole Session.
 _Avoid_: keystore, secret store, credential cache
+
+**UnlockedVault**:
+The SecretVault while one Session holds it open. It is what an Operator's
+password produced when they logged in, it answers for one named secret at a time,
+and it is destroyed by whichever of the four things that end a Session gets there
+first. There is no way to obtain one but to offer a password that unwraps the
+DataKey, which is why nothing about reaching a secret is a check that could be
+patched out.
+_Avoid_: vault session, open vault, unlocked keystore
 
 **DataKey**:
 The single key that encrypts the SecretVault, shared by every Operator and never
-stored unwrapped.
+stored unwrapped. It is wrapped once per Operator, under a key their password
+derives through Argon2id with a salt and parameters of the Vault's own — the
+stored authentication hash is never key material — and once more under the
+MachineKey. Nothing outside the vault package can name it, so no API hands it out.
 _Avoid_: master key, vault key
+
+**KeyEncryptionKey**:
+The thirty-two bytes a password derives, and the only thing that unwraps an
+Operator's copy of the DataKey. Made through Argon2id with a salt and cost
+parameters recorded beside the wrap it opens — never read from the stored
+authentication hash, which is never key material. It exists for one request and is
+overwritten before that request answers.
+_Avoid_: KEK, derived key, password key
 
 **MachineKey**:
 The key, readable only by the AuthenticationService, that holds a second wrapped

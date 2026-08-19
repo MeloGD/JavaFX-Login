@@ -1771,3 +1771,196 @@ cheaper than being told never, about a password somebody else took away.
 that throws, so adding a token-carrying request compiled and passed incrementally
 and failed under `mvn -o clean test`. The lesson stands: a green incremental suite
 is not evidence when a sealed type has grown.
+
+---
+
+# Code review — SecretVault (issue #11, Seams 1–3)
+
+Branch `dev-login`. Stories 55 to 63, ADR-0004 (two stores and cryptographic
+unlock), ADR-0005 (the Administrator's exclusion is least privilege), ADR-0006
+(no machine binding).
+
+## 1. Where the code is
+
+| Concern | File |
+|---|---|
+| The Vault itself | `login-core/.../vault/SecretVault.java` |
+| The Vault while a Session holds it | `login-core/.../vault/UnlockedVault.java` |
+| The DataKey, unnameable from outside | `login-core/.../vault/DataKey.java` |
+| The key a password derives | `login-core/.../vault/KeyEncryptionKey.java` |
+| The machine's copy's key | `login-core/.../vault/MachineKey.java` |
+| AES-256-GCM, HKDF-Expand, UTF-8 without a String | `vault/AesGcm.java`, `vault/Hkdf.java`, `vault/Utf8.java` |
+| The Vault's schema | `login-core/src/main/resources/db/vault/V001__secret_vault.sql` |
+| Migration machinery, now shared by two files | `login-core/.../store/NumberedMigrations.java` |
+| Unlocking, refusing, wrapping, rewrapping, destroying | `login-core/.../authentication/AuthenticationService.java` |
+| The key's lifetime tied to the Session's | `login-core/.../authentication/Sessions.java` |
+| New messages | `ipc/ReadSecret`, `ipc/KeepSecret`, `ipc/SecretRevealed`, `ipc/ChangeOwnPassword`, `ipc/DeleteAccount` |
+| What a host product calls | `login-ui/.../LoginGate.java`, `SecretOutcome`, `SecretGiven`, `SecretKept`, `SecretWithheld` |
+| Tests | `vault/SecretVaultTest` (19), `authentication/SecretVaultAccessTest` (21), additions to `MessageCodecTest`, `StoreFilePermissionsTest`, `ServiceLoginGateTest` |
+
+## 2. What the ticket asked for
+
+### Acceptance criteria against evidence
+
+| Criterion | Where it is met | Proof |
+|---|---|---|
+| A ProtectedFeature requests a named secret and receives it | `LoginGate.secretNamed` → `ReadSecret` → `UnlockedVault.secretNamed` | `ServiceLoginGateTest.aProtectedFeatureKeepsASecretAndAsksForItByName` (real socket, real service), `SecretVaultAccessTest.aProtectedFeatureAsksForANamedSecretAndReceivesIt` |
+| Decrypted one at a time at the moment of use | `UnlockedVault.secretNamed` derives a key per name and opens one row | `SecretVaultTest.unlockingDecryptsNoSecretAtAll` — a ciphertext nothing opens sits beside a good one, and the unlock does not notice |
+| The raw DataKey is never exposed through the API | `DataKey` is package-private; no public method returns `byte[]` | `SecretVaultTest.nothingPublicHandsOutKeyMaterial` — a test about types, so a later convenient getter has to argue with it |
+| Enrolment wraps under a KEK from the chosen password, salt and parameters separate from the auth hash | `AuthenticationService.completeEnrolment` → `SecretVault.wrapFor`; `KeyEncryptionKey` reads neither the PHC string nor its salt | `SecretVaultAccessTest.theVaultsSaltIsNotTheOneInsideTheAuthenticationHash` compares the two files' salts; `completingAnEnrolmentIsWhatGivesAnOperatorAWrappedCopy`, `SecretVaultTest.wrappingAgainReplacesTheWrapAndSaltsItAfresh` |
+| `ChangeOwnPassword` rewraps | `UnlockedVault.rewrapUnder`, through the key the Session already holds | `changingAPasswordRewrapsRatherThanLosingTheSecrets` at both seams |
+| Deleting an Operator destroys their wrapped copy | `deleteFor` destroys the wrap **before** the row | `SecretVaultAccessTest.deletingAnOperatorDestroysTheirWrappedCopy` |
+| Every Vault operation from an Administrator Session refused by the service | `onlyAnOperator`, which also records the attempt | `everyVaultOperationFromAnAdministratorIsRefusedByTheService`, `theRefusalIsWrittenToTheRecord` |
+| Nothing claims secrets are protected *from* the Administrator | `CONTEXT.md` corrected, `README.md` says it plainly, `ServiceLoginGate`'s javadoc rewritten | `SecretVaultAccessTest.anAdministratorReachesTheVaultByCreatingAnOperator` — the detour is asserted to **work**, and to leave two events |
+| A separate file from the CredentialStore, owned by the service | `secrets.db` and `secrets.key` beside the store, both owner-only | `theVaultIsItsOwnFileBesideTheCredentialStore`, `StoreFilePermissionsTest.theSecretVaultAndItsMachineKeyAreCreatedOwnerOnly` |
+
+**The claim in `CONTEXT.md` was false and is now fixed.** The glossary said "An
+Administrator can never read secrets held by the Vault", which contradicts
+ADR-0005 and criterion 8. It now says what is true: no Vault access, and no way to
+obtain it without leaving a record.
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The unlock has no boolean in it.** `SecretVault.unlockFor(name, password)`
+  derives Argon2id over the wrap's own salt and parameters and tries to open an
+  AES-GCM ciphertext. A wrong password fails the tag. There is nothing here for a
+  patched build to skip, and
+  `SecretVaultAccessTest.aSessionGrantedWithoutTheRealPasswordOpensNoVault` proves
+  it the hard way: the stored hash is replaced so that a different password
+  authenticates, the service answers `Granted`, and the Vault stays shut.
+- **The key's lifetime is the Session's, enforced in `Sessions`.** All four ways a
+  Session ends already funnel through that class, so the `UnlockedVault` is closed
+  there rather than in the service. A DataKey outliving its Session is the one bug
+  in this design nobody at the keyboard could see, so it is made structural.
+- **`SessionOutcome.Live` carries the Vault.** A request reaches a secret by
+  presenting a token the service granted *and* finding the key that token's
+  password unwrapped. Putting it in the outcome rather than in a lookup by name is
+  ADR-0004's arrangement expressed in one field.
+- **Login now costs two Argon2id derivations for an Operator.** One verifies, one
+  derives the KEK; that is the price of the two being cryptographically separate.
+  Only a *successful* authentication pays it, so the equality between a wrong
+  password and a name nobody holds — one derivation each — is untouched.
+- **A per-secret key, not the DataKey.** `Hkdf.expand(dataKey, name, 32)`. Expand
+  and not extract, because the DataKey is already uniform (RFC 5869 §3.3). It buys
+  name binding: a row moved between names fails its tag.
+- **The DataKey is made when the file is made**, not at the first enrolment, so
+  every later operation has one shape and there is no first Operator who is
+  special.
+- **A reset destroys the wrap.** The old password stops opening the Vault at the
+  moment it stops authenticating, which is ASVS 5.0 §6.4.6 applied to the Vault.
+  Enrolment writes a new wrap from the machine's copy, so nothing is lost.
+- **Delete destroys the wrap first, then the row.** The other order leaves Vault
+  access reachable again by creating an Account with the same name.
+- **A wrong current password at `ChangeOwnPassword` is counted like any other
+  failure**, on the enrolment screen's argument: leaving it uncounted would make
+  this the one place where guessing is free. The cost is that a mistyped old
+  password can lock somebody out of their next login.
+- **Reading a secret is not activity.** It goes through the same
+  `onTheSessionNamedBy` path as every other question, so a ProtectedFeature that
+  polls for a credential cannot keep alive the Session of somebody who walked away.
+  Pinned by `readingASecretIsNotActivity`.
+- **Secret reads are not audited.** Story 73 lists what the record holds —
+  authentication attempts, Lockouts, Account changes, configuration changes,
+  exports — and a working Operator's reads are none of those. What is recorded is
+  `VAULT_REFUSED_TO_AN_ADMINISTRATOR`, `PASSWORD_CHANGED` and `ACCOUNT_DELETED`.
+  Arguable; see §5.
+- **`NumberedMigrations` was extracted rather than copied.** The Vault needed the
+  same numbered-migration machinery; `SchemaMigrations` keeps its list and its
+  static API and delegates. `SchemaTooNewException` now names which file it is
+  about, because there are two.
+
+## 4. Scope taken deliberately, and why
+
+- **`KeepSecret` is not in the ticket.** No story asks for a write path, and
+  without one the Vault cannot be populated by anything but a test's back door —
+  criterion 1 would be unreachable in a real deployment. It is an Operator's
+  request and the Administrator is refused on both sides, so it costs ADR-0005
+  nothing.
+- **A reset destroys the wrap.** Not among the nine criteria, and named here
+  because it is a Vault write made on an Administrator's behalf. It is what makes
+  the reset honest — the old password stops opening the Vault at the moment it
+  stops authenticating — and it is ADR-0004's "rewrap after a password reset" half
+  built. It gives the Administrator nothing: destroying a wrap cannot read one.
+- **`ChangeOwnPassword` and `DeleteAccount` exist at the service and have no
+  screen.** Criteria 5 and 6 name both, and the windows that reach them are issue
+  #12's. Same position as clearing a Lockout and exporting the record.
+- **The Administrator branch of the gate's error mapping is not covered at seam
+  3.** `LoginGate.admit` asks to act as an Operator, so this client cannot obtain
+  an Administrator Session at all; the refusal is asserted at seam 1 instead. The
+  mapping exists for a patched client, which is the only thing that can reach it.
+
+## 5. Open ground — judge these rather than assume them
+
+- **Nothing records that a secret was read.** A deployment auditing which
+  credentials are pulled and when would want it, and the argument against is
+  story 73's list plus the record being bounded at a megabyte. A reviewer may
+  reasonably decide the other way.
+- **`char[]` in, `String` on the wire.** `SecretRevealed` carries an array, and
+  `MessageCodec` turns it into a JSON string on the way out — the same copy
+  ADR-0003 already accepts for passwords. The array is worth having at the ends,
+  and worth nothing in the middle.
+- **A secret's plaintext is not overwritten by the gate.** `SecretGiven` hands the
+  array to the host product and says so; how long the product keeps it is the one
+  part of this the gate cannot decide.
+- **`DataKey.isDestroyed()` reads "all zeroes".** A key that was legitimately all
+  zeroes would be misread, at probability 2⁻²⁵⁶. Stated rather than defended.
+- **The MachineKey does not rotate, by design**, and a key file that is replaced
+  makes provisioning impossible for ever after — asserted in
+  `aVaultWhoseMachineKeyHasBeenReplacedRefusesToProvision`. Existing Operators keep
+  working, which is the right failure, but nothing warns anybody.
+- **The Vault is not in the backup**, per ADR-0006 and story 84 — and issue #14 has
+  not landed, so there is nothing yet to exclude it from.
+- **`TransportTest.refusesAnOversizedDeclarationWithoutWaitingForTheBodyBehindIt`
+  failed once during this work and passed on every rerun**, including twice in
+  isolation. It touches nothing this ticket changed (a socket race in the
+  transport's own test), but it is flaky and somebody should look at it.
+
+## 6. What the two-axis review found and what was done
+
+Both axes ran against the staged diff, against `HEAD` as the fixed point.
+
+### Acted on
+
+| Axis | Finding | What was done |
+|---|---|---|
+| Spec | **The MachineKey's mode was set at creation and never reasserted**, unlike the store and the Vault — on the one file that unwraps the DataKey with no password at all, and whose own javadoc says the mode is all that protects it. A stray `chmod` survived every restart. | `MachineKey.readOrCreate` now reasserts owner-only on an existing file. `StoreFilePermissionsTest.thePermissionsOfTheMachineKeyAreReassertedWhenItIsReopened` |
+| Spec | **`ChangeOwnPassword`'s ordering claim was false.** The comment argued that wrapping first avoids "an Operator who can log in and read nothing", and the order produced exactly that: a store failure after the rewrap left the old hash beside a wrap under the new password. | `rewrapAndRecord` writes the store first and **puts the old hash back** if the Vault refuses the rewrap, which is as close to a transaction across two files as this gets. The comment now says what happens instead of what was hoped. |
+| Spec | **Criterion 2 was claimed, not asserted.** The cited tests proved per-name key derivation, not that unlocking decrypts nothing. | `SecretVaultTest.unlockingDecryptsNoSecretAtAll`: a ciphertext nothing opens sits beside a good one; a build that decrypted at unlock fails at the unlock. |
+| Spec | **Criterion 4's separation was structural only** — no test compared the two salts. | `SecretVaultAccessTest.theVaultsSaltIsNotTheOneInsideTheAuthenticationHash` reads the PHC salt out of `accounts` and the `kdf_salt` out of `data_key_wraps`. |
+| Standards | **Duplicated Code** — `changePasswordFor` re-implemented `authenticate`'s verify sequence, carried a dead `verifyAgainstAbsentAccount` branch, and checked the Lockout **before** the verification, which is the opposite of what `authenticate` documents at length. | One `verified(account, password)` used by both, and the Lockout read after the verification as it is on the login path. |
+| Standards | **Speculative Generality** — one `SecretOutcome` served both operations, so every reader had to handle `SecretKept`. The README's own example showed the wart. | Split into `SecretOutcome` (given \| withheld) and `SecretKeepingOutcome` (kept \| withheld); `SecretWithheld` implements both, because it is the same refusal either way. |
+| Standards | **`KeyEncryptionKey` was not in the glossary**, sitting at the same level as `DataKey` and `MachineKey`, which both are. | Added to `CONTEXT.md`, with the `_Avoid_` list `docs/agents/domain.md` asks for. |
+| Standards | `DataKey.isDestroyed()` inferred destruction from all-zero bytes with no prose; `VaultException` forced `new VaultException("…", null)`; `String what` was a message fragment. | The heuristic and its 2⁻²⁵⁶ cost are now written down; a cause-less constructor added; renamed to `fileMigrated` / `fileFound`. |
+
+### Deliberately not acted on
+
+- **"Three key wrappers duplicate each other" (Standards).** `DataKey`,
+  `KeyEncryptionKey` and `MachineKey` do share a shape. They are three different
+  glossary terms with three different lifetimes — one per Vault, one per request,
+  one per machine — and merging them into a `KeyMaterial` would trade three names
+  the domain uses for one the domain does not. The inconsistency the reviewer spotted
+  is real, though: the MachineKey alone is never destroyed, because it is held for
+  the service's lifetime by design.
+- **"`SchemaMigrations` is now a Middle Man" (Standards).** Every member does
+  delegate, but what the class holds is the CredentialStore's migration *list*, and
+  that list is the thing worth having a name and a test for.
+- **"`KeepSecret` is scope creep" (Spec).** Agreed that no story asks for it, and
+  it stays: without a write path the Vault cannot be populated by anything but a
+  test's back door, so criterion 1 would be unreachable in a real deployment. See
+  §4.
+- **"A reset destroying the wrap sits awkwardly beside criterion 7" (Spec).**
+  Criterion 7 is about an Administrator *reaching* the Vault. Destroying a wrap
+  reads nothing and gives them nothing; it is what stops a reset from leaving the
+  old password able to open the Vault. Recorded in §4 as scope taken deliberately.
+
+### Left open
+
+- **`SessionOutcome.Live` is a public record carrying `Optional<UnlockedVault>`**,
+  so anything in-process holding a `Live` reaches `keep` and `secretNamed` without
+  passing `onlyAnOperator`. Nothing does — the only producer is `Sessions` and the
+  only consumer is the service, and every client is on the far side of a socket —
+  but narrowing `SessionOutcome` to its package would touch the Session lifecycle
+  ticket's code and was left for whoever reviews both.
+- **The rollback in `rewrapAndRecord` is untested.** Forcing a `VaultException`
+  between two writes needs a seam this service does not have. The path is four
+  lines and stated; a reviewer should decide whether that is enough.

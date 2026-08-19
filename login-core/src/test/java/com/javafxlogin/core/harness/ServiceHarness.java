@@ -181,6 +181,11 @@ public final class ServiceHarness implements AutoCloseable {
    * @BeforeEach}. What enrolment does to an Account is asserted where enrolment is tested. The store
    * is opened and closed again around the insert, so the service's own connection keeps owning the
    * file for the rest of the test.
+   *
+   * <p>An Operator provisioned this way holds <em>no wrapped copy of the DataKey</em>, because
+   * nothing but an enrolment writes one. That is not a shortcoming of this method: it is exactly the
+   * state of an Account that existed before the SecretVault did, and a test that needs Vault access
+   * enrols through the service the way a person does.
    */
   public void provisionOperator(String name, String password) {
     provisionOperatorIn(directory, parameters, name, password);
@@ -221,6 +226,16 @@ public final class ServiceHarness implements AutoCloseable {
   /** Where the AuthenticationEvents the service recorded are written. */
   public static Path eventLogIn(Path directory) {
     return directory.resolve("authentication-events.csv");
+  }
+
+  /** Where the SecretVault lives, which is beside the store and not inside it. */
+  public static Path vaultFileIn(Path directory) {
+    return directory.resolve("secrets.db");
+  }
+
+  /** Where the MachineKey lives, for the tests about what a Vault can be provisioned from. */
+  public static Path machineKeyFileIn(Path directory) {
+    return directory.resolve("secrets.key");
   }
 
   @Override

@@ -85,6 +85,46 @@ the reasoning, including what the chain is and is not worth. The request exists
 at the service and no screen reaches it yet, for the same reason as clearing a
 `Lockout`: that screen is the administration panel.
 
+## The secrets behind the feature
+
+A `ProtectedFeature` usually needs credentials of its own — for the systems it
+connects to — and those have to survive on disk on a machine whose owner must not
+read them. That is the `SecretVault`: its own file beside the `CredentialStore`,
+owner-only like everything else the service writes, and reached through the same
+`LoginGate` a host product already holds:
+
+```java
+switch (gate.secretNamed(session, "warehouse.database.password")) {
+  case SecretGiven given -> connectWith(given.secret());
+  case SecretWithheld withheld -> tellSomebody(withheld.reason());
+}
+```
+
+**It does not unlock because authentication succeeded.** That boolean is exactly
+what a patched binary would flip. It unlocks because the password the `Operator`
+typed derives, through Argon2id with a salt and cost parameters of the Vault's
+own, the key that unwraps the `DataKey` — and the stored authentication hash is
+never reused as key material. A build with every check removed still cannot
+produce those bytes. The `DataKey` is shared by every `Operator`, wrapped once per
+`Operator` and once more under the `MachineKey`, which is what lets the service
+provision somebody or rewrap after a reset with nobody present. Secrets are
+decrypted one at a time at the moment of use, and the raw `DataKey` is not a type
+anything outside the vault package can even name. ADR-0004 has the reasoning.
+
+Completing an enrolment wraps the key; changing your own password rewraps it, so
+rotating a password is not destructive; a reset takes it away with the password it
+was under; and deleting an `Operator` destroys their copy, which is what makes
+revocation real.
+
+**The `Administrator` is refused every Vault operation, by the service and not by
+the client — and this is least privilege, not a boundary.** Whoever holds the
+`Administrator` password can create an `Operator`, enrol it, log in as it and read
+every secret. Nothing here prevents that and nothing here claims to. What the
+refusal buys is that the direct route leaves a line in the audit record and the
+route that works leaves two more, on a chain that cannot be edited. ADR-0005 says
+this at length, and neither this file nor the UI may say that secrets are
+protected *from* the `Administrator`.
+
 ## How anybody comes to have a password
 
 The `Administrator`'s own is chosen at the first-run wizard by whoever will use it. Every other
@@ -95,8 +135,9 @@ known, and logs in. Resetting a forgotten password is the same thing again — t
 working the moment the reset is asked for, and its holder is told at their next login that it
 happened and when. ADR-0012 has the reasoning, including what this does and does not protect.
 
-**There is still no screen for the `Administrator`'s half of it.** Creating an `Account` and
-initiating a reset exist at the service and no window reaches them yet, for the same reason as
+**There is still no screen for the `Administrator`'s half of it.** Creating an `Account`,
+initiating a reset, deleting an `Operator` and changing your own password exist at the service and
+no window reaches them yet, for the same reason as
 clearing a `Lockout` and exporting the record: that screen is the administration panel. Until it
 lands, the pair started above shows the login screen and the enrolment screen behind it, and an
 `Operator` to try them with has to be created through the service directly — which is what the test

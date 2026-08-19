@@ -52,6 +52,47 @@ public enum ErrorCode {
   CANNOT_ENROL_THE_ADMINISTRATOR,
 
   /**
+   * A SecretVault request arrived from a Session that is not an Operator's — in practice the
+   * Administrator's, which is the case ADR-0005 is about. Refused here, in the privileged process, so
+   * that a patched client cannot convert an Administrator Session into Vault access directly: the way
+   * in is to create an Operator and enrol it, and those two events are written to a record that
+   * cannot be edited. Said plainly, like {@link #NOT_ADMINISTRATOR}, because the caller
+   * authenticated and is owed which of the two Roles they hold.
+   */
+  NOT_AN_OPERATOR,
+
+  /**
+   * An Operator asked the SecretVault for something and holds no wrapped copy of the DataKey, so
+   * there was no key their password could have derived. It is what an Account provisioned before this
+   * Vault existed looks like, and what one whose password an Administrator has just taken away looks
+   * like until they enrol again. The remedy is a reset and an enrolment, which is why it is said
+   * rather than folded into {@link #VAULT_UNAVAILABLE}.
+   */
+  NO_VAULT_ACCESS,
+
+  /**
+   * Nothing is kept in the SecretVault under the name that was asked for. Said plainly to a Session
+   * the service granted in the Role that reaches the Vault: a ProtectedFeature that is owed a
+   * credential and told nothing would retry forever. It says nothing about what else the Vault holds,
+   * because no request lists that.
+   */
+  NO_SUCH_SECRET,
+
+  /**
+   * The SecretVault could not be read or written, or its key file is not the one it was written
+   * under. Says nothing about which: the caller can only retry or give up either way, exactly as with
+   * {@link #STORE_UNAVAILABLE}.
+   */
+  VAULT_UNAVAILABLE,
+
+  /**
+   * A delete named the single Administrator. There is exactly one, it is what administers the
+   * deployment, and one that could be deleted from a Session would leave nobody able to manage
+   * Accounts — ADR-0005 puts it as administrative access never being silently narrowed or widened.
+   */
+  CANNOT_DELETE_THE_ADMINISTRATOR,
+
+  /**
    * The CredentialStore could not be read or written. Says nothing about why: the caller can only
    * retry or give up either way, and the detail belongs in the service's own record, not in a
    * response an unprivileged client receives.

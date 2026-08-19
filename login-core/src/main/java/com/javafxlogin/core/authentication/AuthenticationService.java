@@ -20,10 +20,12 @@ import com.javafxlogin.core.ipc.AuthenticationEventsExported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
+import com.javafxlogin.core.ipc.ChangeOwnPassword;
 import com.javafxlogin.core.ipc.ClearLockout;
 import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.ConnectionHandle;
 import com.javafxlogin.core.ipc.CreateAccount;
+import com.javafxlogin.core.ipc.DeleteAccount;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.EnrolmentIssued;
@@ -32,12 +34,15 @@ import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.InitiateReset;
+import com.javafxlogin.core.ipc.KeepSecret;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.ReadSecret;
 import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.ipc.SecretRevealed;
 import com.javafxlogin.core.ipc.SessionEnded;
 import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.machine.MachineAdministrators;
@@ -51,6 +56,9 @@ import com.javafxlogin.core.session.SessionToken;
 import com.javafxlogin.core.store.CredentialStore;
 import com.javafxlogin.core.store.CredentialStoreException;
 import com.javafxlogin.core.store.SchemaTooNewException;
+import com.javafxlogin.core.vault.SecretVault;
+import com.javafxlogin.core.vault.UnlockedVault;
+import com.javafxlogin.core.vault.VaultException;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -99,7 +107,21 @@ public final class AuthenticationService implements AutoCloseable {
    */
   private static final String EVENT_LOG_KEY = "authentication-events.key";
 
+  /**
+   * The SecretVault, beside the store rather than inside it: ADR-0004 keeps the two files apart
+   * because they answer different questions, face different attackers and change at different rates.
+   */
+  private static final String SECRET_VAULT = "secrets.db";
+
+  /**
+   * The MachineKey, which holds the second wrapped copy of the DataKey. Beside the Vault for the
+   * reason the chain's key is beside the record — the directory is readable only by the account this
+   * service runs as — and it is what lets an Operator be provisioned with nobody present.
+   */
+  private static final String SECRET_VAULT_KEY = "secrets.key";
+
   private final CredentialStore store;
+  private final SecretVault vault;
   private final Authenticator authenticator;
   private final AccountPolicy policy;
   private final MachineAdministrators administrators;
@@ -114,6 +136,7 @@ public final class AuthenticationService implements AutoCloseable {
 
   private AuthenticationService(
       CredentialStore store,
+      SecretVault vault,
       Authenticator authenticator,
       AccountPolicy policy,
       MachineAdministrators administrators,
@@ -122,6 +145,7 @@ public final class AuthenticationService implements AutoCloseable {
       AuthenticationEventArchive archive,
       Path ownDirectory) {
     this.store = store;
+    this.vault = vault;
     this.authenticator = authenticator;
     this.policy = policy;
     this.administrators = administrators;
@@ -187,6 +211,8 @@ public final class AuthenticationService implements AutoCloseable {
     Objects.requireNonNull(clock, "clock");
 
     CredentialStore store = CredentialStore.openOrCreate(storeFile);
+    SecretVault vault =
+        openTheVaultBeside(store, storeFile, parameters);
     try {
       // One object behind two interfaces, on purpose. Everything that records an event holds the
       // write-only one; only the export holds the one that can read a file back.
@@ -195,6 +221,7 @@ public final class AuthenticationService implements AutoCloseable {
               storeFile.resolveSibling(EVENT_LOG), storeFile.resolveSibling(EVENT_LOG_KEY));
       return new AuthenticationService(
           store,
+          vault,
           new Authenticator(parameters),
           AccountPolicy.bundledExtendedBy(storeFile.resolveSibling(DEPLOYMENT_BLOCKED_NAMES)),
           administrators,
@@ -202,6 +229,27 @@ public final class AuthenticationService implements AutoCloseable {
           log,
           log,
           storeFile.toAbsolutePath().normalize().getParent());
+    } catch (RuntimeException e) {
+      vault.close();
+      store.close();
+      throw e;
+    }
+  }
+
+  /**
+   * Opens the SecretVault, and closes the store again if it will not open.
+   *
+   * <p>A service that started without its Vault would be one that admits Operators to a
+   * ProtectedFeature that cannot reach a single secret, and does so silently. Refusing to start says
+   * it once, where somebody is looking.
+   */
+  private static SecretVault openTheVaultBeside(
+      CredentialStore store, Path storeFile, Argon2Parameters parameters) {
+    try {
+      return SecretVault.openOrCreate(
+          storeFile.resolveSibling(SECRET_VAULT),
+          storeFile.resolveSibling(SECRET_VAULT_KEY),
+          parameters);
     } catch (RuntimeException e) {
       store.close();
       throw e;
@@ -240,9 +288,17 @@ public final class AuthenticationService implements AutoCloseable {
         case InitiateReset reset -> initiateReset(reset, connection);
         case CompleteEnrolment complete -> completeEnrolment(complete);
         case AcknowledgePasswordReset seen -> acknowledgePasswordReset(seen, connection);
+        case ChangeOwnPassword change -> changeOwnPassword(change, connection);
+        case DeleteAccount delete -> deleteAccount(delete, connection);
+        case ReadSecret read -> readSecret(read, connection);
+        case KeepSecret keep -> keepSecret(keep, connection);
       };
     } catch (CredentialStoreException e) {
       return new ErrorResponse(ErrorCode.STORE_UNAVAILABLE);
+    } catch (VaultException e) {
+      // Said as one code, like a store that will not answer: what a client can do about either is
+      // retry or give up, and which file failed is this service's business and not theirs.
+      return new ErrorResponse(ErrorCode.VAULT_UNAVAILABLE);
     }
   }
 
@@ -272,6 +328,10 @@ public final class AuthenticationService implements AutoCloseable {
       return new PolicyRefused(assessment.violations());
     }
     String hash = authenticator.hash(request.password());
+    // Nothing wraps the DataKey for this Account, here or anywhere: the Administrator is the one
+    // Role that never enrols, and enrolment is the only thing that writes a wrap. That absence is
+    // what makes the exclusion from the Vault cryptographic rather than a check — there is no copy
+    // of the DataKey this password could derive the key to.
     store.insert(
         new Account(request.administratorName(), Role.ADMINISTRATOR, hash, assessment.strength()));
     record(AuthenticationEventType.ADMINISTRATOR_CREATED, request.administratorName());
@@ -316,8 +376,7 @@ public final class AuthenticationService implements AutoCloseable {
     // at all would name it as an Account before the answer below says so in words.
     boolean verified =
         account
-            .flatMap(Account::passwordHash)
-            .map(hash -> authenticator.verify(request.password(), hash))
+            .map(found -> verified(found, request.password()))
             .orElseGet(() -> authenticator.verifyAgainstAbsentAccount(request.password()));
 
     // A Lockout is applied after the verification rather than instead of it, so that a refused
@@ -376,8 +435,19 @@ public final class AuthenticationService implements AutoCloseable {
     // next admission, and the one after that, until an AcknowledgePasswordReset says it was read.
     Optional<Instant> passwordResetAt = enrolments.resetToDeclareFor(account.get().name());
 
+    // The moment ADR-0004 is about. The password is still in hand here and nowhere else, and this is
+    // the one place it can derive the key that unwraps this Account's copy of the DataKey. Nothing
+    // below reads the outcome as permission: a Session is granted either way, and what a Session
+    // without a key cannot do is read a secret.
+    //
+    // It costs a second Argon2id derivation on top of the verification above, which is the price of
+    // the two being cryptographically separate. Only a successful authentication pays it, so the
+    // equality between a wrong password and a name nobody holds — one derivation each — is
+    // untouched.
+    Optional<UnlockedVault> unlocked = theVaultOf(account.get(), request.password());
+
     SessionToken token = SessionToken.generate(random);
-    sessions.open(token, account.get().name(), account.get().role(), connection);
+    sessions.open(token, account.get().name(), account.get().role(), connection, unlocked);
 
     // Recorded once the Session exists, not once the password checked out. Everything else here
     // records a refusal, which is over by the time it is written; an admission is not over until
@@ -446,6 +516,11 @@ public final class AuthenticationService implements AutoCloseable {
     }
     boolean thereWasAPasswordToTakeAway = !account.get().isAwaitingEnrolment();
     Enrolments.Issued secret = enrolments.issueFor(account.get());
+    // The wrapped copy of the DataKey goes with the password it was under. A reset that left it
+    // would be a password an Administrator has taken away that still opens the Vault, which is the
+    // half-measure ASVS 5.0 §6.4.6 exists to refuse; the enrolment that follows writes a new one
+    // from the machine's copy, so nothing is lost by destroying this one now.
+    vault.destroyWrapFor(accountName);
     if (thereWasAPasswordToTakeAway) {
       record(AuthenticationEventType.PASSWORD_RESET_INITIATED, accountName);
     }
@@ -490,6 +565,14 @@ public final class AuthenticationService implements AutoCloseable {
       return new PolicyRefused(assessment.violations());
     }
 
+    // Criterion 4: the DataKey is wrapped under a key derived from the password chosen here, with a
+    // salt and parameters of the Vault's own — the stored authentication hash below is never key
+    // material. It is written before the password is, so that an Account which authenticates always
+    // has a wrap: were it the other way round, a failure in between would leave an Operator who can
+    // reach the feature and none of the secrets behind it, and nothing would say so.
+    //
+    // The secret survives a Vault that will not write, because nothing here has consumed it yet.
+    vault.wrapFor(request.accountName(), request.password());
     enrolments.completedBy(
         request.accountName(), authenticator.hash(request.password()), assessment.strength());
     lockouts.succeeded(request.accountName());
@@ -529,6 +612,215 @@ public final class AuthenticationService implements AutoCloseable {
     // The one place the secret is turned into text, on its way out of this process and onto the
     // screen it is read off. Nothing keeps what this returns.
     return new EnrolmentIssued(issued.secret().text(), issued.expiresAt());
+  }
+
+  /**
+   * The SecretVault this Account's password opens, or empty where it opens none.
+   *
+   * <p>An Administrator is not asked about: the DataKey is never wrapped for one, so a derivation
+   * would be a hundred milliseconds spent proving something the file already says. An Operator whose
+   * Account holds no wrap — provisioned before this Vault existed, or reset and not yet enrolled
+   * again — comes back empty too, and is admitted to a feature that cannot read a secret until they
+   * enrol.
+   */
+  private Optional<UnlockedVault> theVaultOf(Account account, char[] password) {
+    if (account.role() != Role.OPERATOR) {
+      return Optional.empty();
+    }
+    return vault.unlockFor(account.name(), password);
+  }
+
+  /**
+   * Hands over one named secret, decrypted for this request and no longer.
+   *
+   * <p>Story 55 for a ProtectedFeature and story 58 for everybody: what is decrypted is what was
+   * asked for, when it was asked for. There is no request here that reads the Vault as a whole, and
+   * none that reads the DataKey, because the type that holds it is not one this module exports.
+   */
+  private Response readSecret(ReadSecret request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> onlyAnOperator(live, () -> reveal(live, request.name())));
+  }
+
+  private Response reveal(SessionOutcome.Live live, String name) {
+    return withTheVaultOf(
+        live,
+        unlocked ->
+            unlocked
+                .secretNamed(name)
+                .<Response>map(SecretRevealed::new)
+                .orElseGet(() -> new ErrorResponse(ErrorCode.NO_SUCH_SECRET)));
+  }
+
+  /** Puts a secret into the Vault, which is the other half of a Vault a ProtectedFeature can use. */
+  private Response keepSecret(KeepSecret request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live ->
+            onlyAnOperator(
+                live,
+                () ->
+                    withTheVaultOf(
+                        live,
+                        unlocked -> {
+                          unlocked.keep(request.name(), request.secret());
+                          return new Ok();
+                        })));
+  }
+
+  /**
+   * Changes the password of the Session's own Account, and rewraps its copy of the DataKey with it.
+   *
+   * <p>Story 63: rotating a password must not cost the secrets. The rewrap goes through the key this
+   * Session already holds, so it cannot hand access to somebody who did not have it, and it happens
+   * before the new hash is recorded — an Account whose password changed and whose wrap did not would
+   * be an Operator who can log in and read nothing.
+   *
+   * <p>The current password is verified again even though a Session is live, and a wrong one is
+   * counted like any other failure. A Session left open on an unattended machine is exactly why ASVS
+   * asks for the password at this moment, and an uncounted guess here would make this the one place
+   * in the system where guessing is free.
+   */
+  private Response changeOwnPassword(ChangeOwnPassword request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(request.token(), connection, live -> changePasswordFor(live, request));
+  }
+
+  private Response changePasswordFor(SessionOutcome.Live live, ChangeOwnPassword request) {
+    Optional<Account> account = store.findByName(live.accountName());
+    if (account.isEmpty()) {
+      // The Account behind a live Session is gone. It cannot be this Session's own doing — an
+      // Administrator cannot delete themselves — so it is a store that changed under the service.
+      return new ErrorResponse(ErrorCode.NO_SUCH_ACCOUNT);
+    }
+    boolean verified = verified(account.get(), request.currentPassword());
+
+    // Read after the verification rather than instead of it, exactly as authenticate does it and
+    // for the same reason: a refusal costs the same whether the Account is locked or wrong.
+    Optional<Duration> refusedFor = lockouts.refusalOf(live.accountName());
+    if (refusedFor.isPresent()) {
+      record(AuthenticationEventType.AUTHENTICATION_REFUSED_LOCKED_OUT, live.accountName());
+      return Denied.lockedFor(refusedFor.get());
+    }
+    if (!verified) {
+      return refuse(account.get(), AuthenticationEventType.AUTHENTICATION_FAILED_WRONG_PASSWORD);
+    }
+    Assessment assessment = policy.assessPassword(request.newPassword());
+    if (!assessment.violations().isEmpty()) {
+      return new PolicyRefused(assessment.violations());
+    }
+    rewrapAndRecord(live, account.get(), request.newPassword(), assessment);
+    lockouts.succeeded(live.accountName());
+    record(AuthenticationEventType.PASSWORD_CHANGED, live.accountName());
+    return new Ok();
+  }
+
+  /**
+   * Writes the new password and rewraps the DataKey under it, or leaves the Account exactly as it
+   * was.
+   *
+   * <p>Two files have to agree and nothing spans both, so this is the closest thing to a transaction
+   * available: the store goes first, and a Vault that will not take the rewrap puts the old hash
+   * back. Either order without that would end the same way — a password that authenticates and a
+   * wrapped key it does not open, an Operator who can log in and read nothing, with no sign of it
+   * until they ask for a secret.
+   *
+   * <p>An Administrator holds no wrapped copy, so for them this is the store write and nothing else.
+   *
+   * @throws VaultException if the rewrap failed, once the old password has been put back
+   */
+  private void rewrapAndRecord(
+      SessionOutcome.Live live, Account account, char[] newPassword, Assessment assessment) {
+    store.recordChosenPassword(
+        account.name(), authenticator.hash(newPassword), assessment.strength());
+    try {
+      live.vault().ifPresent(unlocked -> unlocked.rewrapUnder(newPassword));
+    } catch (VaultException e) {
+      account
+          .passwordHash()
+          .ifPresent(
+              hash -> store.recordChosenPassword(account.name(), hash, account.passwordStrength()));
+      throw e;
+    }
+  }
+
+  /**
+   * Whether that password is this Account's, spending the same Argon2id work either way.
+   *
+   * <p>An Account awaiting enrolment has no hash to be right about, so it costs a verification
+   * against a password nobody holds and is refused. Shared by the login screen and by a password
+   * being changed, so that neither can drift into being the cheaper of the two.
+   */
+  private boolean verified(Account account, char[] password) {
+    return account
+        .passwordHash()
+        .map(hash -> authenticator.verify(password, hash))
+        .orElseGet(() -> authenticator.verifyAgainstAbsentAccount(password));
+  }
+
+  /**
+   * Deletes an Operator, and their wrapped copy of the DataKey with them.
+   *
+   * <p>Story 62, and the order is the point: the wrap goes first, so that a delete which fails
+   * halfway leaves an Account with no Vault access rather than Vault access with no Account. The
+   * second of those would be reachable again by creating a name.
+   */
+  private Response deleteAccount(DeleteAccount request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live -> onlyAnAdministrator(live, () -> deleteFor(request.accountName())));
+  }
+
+  private Response deleteFor(String accountName) {
+    Optional<Account> account = store.findByName(accountName);
+    if (account.isEmpty()) {
+      return new ErrorResponse(ErrorCode.NO_SUCH_ACCOUNT);
+    }
+    if (account.get().role() == Role.ADMINISTRATOR) {
+      return new ErrorResponse(ErrorCode.CANNOT_DELETE_THE_ADMINISTRATOR);
+    }
+    // Nothing needs to end the deleted Operator's Session, because they cannot have one: a machine
+    // holds at most one Session at a time and this request came from the Administrator's.
+    vault.destroyWrapFor(accountName);
+    store.delete(accountName);
+    record(AuthenticationEventType.ACCOUNT_DELETED, accountName);
+    return new Ok();
+  }
+
+  /**
+   * Answers a request only an Operator may make, or refuses it and writes down that it happened.
+   *
+   * <p>This is where ADR-0005 is enforced, and it is enforced here rather than in the client for the
+   * reason that decision turns on: the refusal is not a boundary and is not claimed to be one. An
+   * Administrator who wants a secret creates an Operator and enrols it, which works. What this buys
+   * is that the direct route leaves a line in a record they cannot edit, and the route that works
+   * leaves two more.
+   */
+  private Response onlyAnOperator(
+      SessionOutcome.Live live, Supplier<Response> whenItIsAnOperators) {
+    if (live.role() != Role.OPERATOR) {
+      record(AuthenticationEventType.VAULT_REFUSED_TO_AN_ADMINISTRATOR, live.accountName());
+      return new ErrorResponse(ErrorCode.NOT_AN_OPERATOR);
+    }
+    return whenItIsAnOperators.get();
+  }
+
+  /**
+   * Answers a request that needs this Session's Vault, or says that this Session holds none.
+   *
+   * <p>Holding none is not a refusal of anything: it is an Account with no wrapped copy of the
+   * DataKey, which is what an Operator provisioned before the Vault existed looks like, and what one
+   * whose password has just been taken away looks like until they enrol again. The remedy is an
+   * enrolment, so the caller is told that rather than being told the Vault is broken.
+   */
+  private static Response withTheVaultOf(
+      SessionOutcome.Live live, Function<UnlockedVault, Response> then) {
+    return live.vault()
+        .map(then)
+        .orElseGet(() -> new ErrorResponse(ErrorCode.NO_VAULT_ACCESS));
   }
 
   /**
@@ -757,6 +1049,10 @@ public final class AuthenticationService implements AutoCloseable {
   /** Synchronised with {@link #handle}, so that shutting down waits for the answer in flight. */
   @Override
   public synchronized void close() {
-    store.close();
+    try {
+      vault.close();
+    } finally {
+      store.close();
+    }
   }
 }

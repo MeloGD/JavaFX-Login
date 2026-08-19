@@ -47,6 +47,66 @@ class StoreFilePermissionsTest {
         "the CredentialStore must not be readable by the account the client runs as");
   }
 
+  /**
+   * The Vault and the key that holds the machine's copy of the DataKey are the service's files too,
+   * and the same argument covers both: an unprivileged account that could read either would have the
+   * ciphertexts and, in the second case, the means to unwrap the DataKey without any password.
+   */
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void theSecretVaultAndItsMachineKeyAreCreatedOwnerOnly() throws IOException {
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+
+    assertEquals(
+        OWNER_ONLY,
+        Files.getPosixFilePermissions(ServiceHarness.vaultFileIn(directory)),
+        "the SecretVault must not be readable by the account the client runs as");
+    assertEquals(
+        OWNER_ONLY,
+        Files.getPosixFilePermissions(ServiceHarness.machineKeyFileIn(directory)),
+        "the MachineKey must not be readable by the account the client runs as");
+  }
+
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void thePermissionsOfTheVaultAreReassertedWhenItIsReopened() throws IOException {
+    Path vaultFile = ServiceHarness.vaultFileIn(directory);
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+    Files.setPosixFilePermissions(vaultFile, WORLD_READABLE);
+
+    try (ServiceHarness reopened = ServiceHarness.cheap(directory)) {
+      assertEquals(
+          OWNER_ONLY,
+          Files.getPosixFilePermissions(vaultFile),
+          "an upgrade or a stray chmod must not leave the Vault readable");
+    }
+  }
+
+  /**
+   * The MachineKey unwraps the DataKey with no password at all, and nothing but the mode on the file
+   * protects it. A stray chmod on that one must not survive a restart either.
+   */
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void thePermissionsOfTheMachineKeyAreReassertedWhenItIsReopened() throws IOException {
+    Path machineKey = ServiceHarness.machineKeyFileIn(directory);
+    try (ServiceHarness harness = ServiceHarness.cheap(directory)) {
+      harness.bootstrap("wren.holloway", "Correct-Horse-1");
+    }
+    Files.setPosixFilePermissions(machineKey, WORLD_READABLE);
+
+    try (ServiceHarness reopened = ServiceHarness.cheap(directory)) {
+      assertEquals(
+          OWNER_ONLY,
+          Files.getPosixFilePermissions(machineKey),
+          "an upgrade or a stray chmod must not leave the MachineKey readable");
+    }
+  }
+
   @Test
   @EnabledOnOs({OS.LINUX, OS.MAC})
   void thePermissionsAreReassertedWhenAnExistingStoreIsReopened() throws IOException {

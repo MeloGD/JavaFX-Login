@@ -1,5 +1,6 @@
 package com.javafxlogin.ui.login;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -76,6 +77,11 @@ class ServiceLoginGateTest {
   private static final String NEWCOMER = "rosalind.sanders";
 
   private static final String NEWCOMER_PASSWORD = "A-Third-Horse-3";
+
+  /** What a ProtectedFeature keeps in the SecretVault: a credential for a system it connects to. */
+  private static final String A_SECRETS_NAME = "warehouse.database.password";
+
+  private static final String A_SECRET = "sa/8Xk!connect";
 
   @TempDir Path runtimeDirectory;
 
@@ -421,6 +427,86 @@ class ServiceLoginGateTest {
     assertThrows(
         ServiceUnreachableException.class,
         () -> gate.completeEnrolment(NEWCOMER, "K7QF".toCharArray(), "x".toCharArray()));
+  }
+
+  // --- the SecretVault ------------------------------------------------------------------------
+
+  /**
+   * Criterion 1 of the Vault's ticket, through the interface a host product actually holds: an
+   * Operator is enrolled the way a person is, and the ProtectedFeature behind the gate asks for a
+   * named secret and receives it.
+   */
+  @Test
+  void aProtectedFeatureKeepsASecretAndAsksForItByName() {
+    createTheAdministrator();
+    LoginGate gate = gate();
+    Session session = enrol(gate, NEWCOMER, NEWCOMER_PASSWORD);
+
+    assertEquals(
+        new SecretKept(),
+        gate.keepSecret(session, A_SECRETS_NAME, A_SECRET.toCharArray()));
+
+    SecretGiven given = assertInstanceOf(SecretGiven.class, gate.secretNamed(session, A_SECRETS_NAME));
+    assertArrayEquals(A_SECRET.toCharArray(), given.secret());
+  }
+
+  /** Nothing under that name is an outcome the product can act on, not an exception it must catch. */
+  @Test
+  void saysSoWhenNothingIsKeptUnderThatName() {
+    createTheAdministrator();
+    LoginGate gate = gate();
+    Session session = enrol(gate, NEWCOMER, NEWCOMER_PASSWORD);
+
+    assertEquals(
+        new SecretWithheld(SecretWithheldReason.NO_SUCH_SECRET),
+        gate.secretNamed(session, "nothing.is.kept.here"));
+  }
+
+  /**
+   * An Operator written straight into the store holds no wrapped copy of the DataKey, which is
+   * exactly the state of an Account that existed before the Vault did. They are admitted, and they
+   * reach no secret — the upgrade path must not lock anybody out of the product.
+   */
+  @Test
+  void anOperatorWithNoWrappedCopyIsAdmittedAndReachesNoSecret() {
+    LoginGate gate = gate();
+    Session session =
+        assertInstanceOf(Admitted.class, gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()))
+            .session();
+
+    assertEquals(
+        new SecretWithheld(SecretWithheldReason.NO_VAULT_ACCESS),
+        gate.secretNamed(session, A_SECRETS_NAME));
+  }
+
+  /** A Session that has ended reaches no secret, and the product is told which of the two it is. */
+  @Test
+  void saysSoWhenTheSessionIsOver() {
+    createTheAdministrator();
+    LoginGate gate = gate();
+    Session session = enrol(gate, NEWCOMER, NEWCOMER_PASSWORD);
+    gate.logOut(session);
+
+    assertEquals(
+        new SecretWithheld(SecretWithheldReason.SESSION_OVER),
+        gate.secretNamed(session, A_SECRETS_NAME));
+  }
+
+  /**
+   * Enrols an Account the way a person does — a secret from the Administrator, a password chosen at
+   * the enrolment screen — and logs in with it, which is what unwraps its copy of the DataKey.
+   *
+   * <p>The gate is passed in rather than made here, because a Session is bound to the connection it
+   * was granted on and every gate opens one of its own. A test that admitted on one gate and asked
+   * on another would be a test about two clients.
+   */
+  private Session enrol(LoginGate gate, String accountName, String password) {
+    String secret = issueASecretFor(accountName);
+    assertInstanceOf(
+        Enrolled.class,
+        gate.completeEnrolment(accountName, secret.toCharArray(), password.toCharArray()));
+    return assertInstanceOf(Admitted.class, gate.admit(accountName, password.toCharArray()))
+        .session();
   }
 
   /**

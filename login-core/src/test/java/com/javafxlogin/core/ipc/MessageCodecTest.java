@@ -101,6 +101,85 @@ class MessageCodecTest {
     assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new Logout(token)));
     assertArrayEquals(
         token.copyOfBytes(), tokenOfRoundTripped(new AcknowledgePasswordReset(token)));
+    assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new ReadSecret(token, "a.secret")));
+    assertArrayEquals(
+        token.copyOfBytes(),
+        tokenOfRoundTripped(
+            new ChangeOwnPassword(token, "Correct-Horse-1".toCharArray(), "B".toCharArray())));
+  }
+
+  @Test
+  void carriesAReadSecretUnchanged() {
+    ReadSecret sent =
+        new ReadSecret(SessionToken.generate(new SecureRandom()), "warehouse.database.password");
+
+    ReadSecret received = (ReadSecret) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.name(), received.name());
+  }
+
+  @Test
+  void carriesAKeepSecretUnchanged() {
+    KeepSecret sent =
+        new KeepSecret(
+            SessionToken.generate(new SecureRandom()),
+            "warehouse.database.password",
+            "sa/8Xk!connect".toCharArray());
+
+    KeepSecret received = (KeepSecret) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.name(), received.name());
+    assertArrayEquals(sent.secret(), received.secret());
+  }
+
+  /** A secret that came back changed would be a credential a ProtectedFeature cannot connect with. */
+  @Test
+  void carriesARevealedSecretByteForByte() {
+    SecretRevealed sent = new SecretRevealed("sa/8Xk!connect \u00f1\u20ac".toCharArray());
+
+    SecretRevealed received =
+        (SecretRevealed) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.secret(), received.secret());
+  }
+
+  @Test
+  void carriesAChangeOfOwnPasswordUnchanged() {
+    ChangeOwnPassword sent =
+        new ChangeOwnPassword(
+            SessionToken.generate(new SecureRandom()),
+            "Correct-Horse-1".toCharArray(),
+            "Another-Horse-2".toCharArray());
+
+    ChangeOwnPassword received =
+        (ChangeOwnPassword) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertArrayEquals(sent.currentPassword(), received.currentPassword());
+    assertArrayEquals(sent.newPassword(), received.newPassword());
+  }
+
+  @Test
+  void carriesADeleteAccountUnchanged() {
+    DeleteAccount sent =
+        new DeleteAccount(SessionToken.generate(new SecureRandom()), "finch.mercer");
+
+    DeleteAccount received = (DeleteAccount) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.accountName(), received.accountName());
+  }
+
+  /** Every one of the new codes is a constant a client has to be able to read back. */
+  @Test
+  void carriesEveryErrorCodeThisBuildKnows() {
+    for (ErrorCode code : ErrorCode.values()) {
+      ErrorResponse sent = new ErrorResponse(code);
+
+      assertEquals(sent, MessageCodec.decodeResponse(MessageCodec.encode(sent)));
+    }
   }
 
   @Test
@@ -439,6 +518,8 @@ class MessageCodecTest {
       case AskIfSessionIsLive ask -> ask.token().copyOfBytes();
       case Logout logout -> logout.token().copyOfBytes();
       case AcknowledgePasswordReset seen -> seen.token().copyOfBytes();
+      case ReadSecret read -> read.token().copyOfBytes();
+      case ChangeOwnPassword change -> change.token().copyOfBytes();
       default -> throw new AssertionError("not a request about a Session: " + received);
     };
   }

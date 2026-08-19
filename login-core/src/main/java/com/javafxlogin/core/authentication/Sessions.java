@@ -6,6 +6,7 @@ import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.SessionClock;
 import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
+import com.javafxlogin.core.vault.UnlockedVault;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
@@ -29,6 +30,12 @@ import java.util.Optional;
  * <p>The one thing that does not wait to be asked is the connection going away: a Session is bound
  * to the connection it was granted on, and the kernel closes that connection when the client dies.
  * That is the whole of the crashed-client story — no heartbeat, and no Operator locked out.
+ *
+ * <p>It also holds what the Session holds: the SecretVault the Operator's password unwrapped. That
+ * lives here rather than beside it in the service because this class is the one place that knows all
+ * four ways a Session ends, and the key must be overwritten by whichever of them happens first. A
+ * DataKey outliving the Session it was unwrapped for would be the one bug in this design that nobody
+ * at the keyboard could see.
  *
  * <p>Thread-safe on its own monitor, and the monitor is held only long enough to read two clocks.
  * It is not the service's monitor on purpose: the close listener runs on whichever thread noticed
@@ -87,15 +94,24 @@ public final class Sessions {
    * authentication before reaching here.
    */
   public synchronized void open(
-      SessionToken token, String accountName, Role role, ConnectionHandle connection) {
+      SessionToken token,
+      String accountName,
+      Role role,
+      ConnectionHandle connection,
+      Optional<UnlockedVault> vault) {
     Objects.requireNonNull(token, "token");
     Objects.requireNonNull(accountName, "accountName");
     Objects.requireNonNull(role, "role");
     Objects.requireNonNull(connection, "connection");
+    Objects.requireNonNull(vault, "vault");
 
+    // Any Session still held is replaced, and its key goes with it. The caller has refused a second
+    // authentication before reaching here, so this is belt and braces — and the braces are the half
+    // that matters, because the thing being dropped is key material rather than a token.
+    shutTheVault();
     live =
         new LiveSession(
-            token, accountName, role, connection, clock.monotonicNanos(), clock.wallTime());
+            token, accountName, role, connection, clock.monotonicNanos(), clock.wallTime(), vault);
     if (watched != connection) {
       watched = connection;
       // Runs immediately if the client has already gone, which ends the Session before anything
@@ -127,6 +143,7 @@ public final class Sessions {
     ExpiredSession expired = new ExpiredSession(live.accountName, over.get());
     lastExpired = live.token;
     lastExpiredBecause = over.get();
+    shutTheVault();
     live = null;
     return Optional.of(expired);
   }
@@ -154,6 +171,7 @@ public final class Sessions {
   /** Ends the Session deliberately. Nothing is remembered: the client that asked already knows. */
   public synchronized void end(SessionToken token, ConnectionHandle connection) {
     if (namesTheLiveSession(token, connection)) {
+      shutTheVault();
       live = null;
     }
   }
@@ -178,7 +196,21 @@ public final class Sessions {
 
   private SessionOutcome liveWith(InactivityPeriod period, Duration idleFor) {
     return new SessionOutcome.Live(
-        live.accountName, live.role, period.expiresAfter().map(after -> after.minus(idleFor)));
+        live.accountName,
+        live.role,
+        period.expiresAfter().map(after -> after.minus(idleFor)),
+        live.vault);
+  }
+
+  /**
+   * Overwrites the DataKey the Session held, if it held one. Called on every path that drops the
+   * Session and nowhere else, which is what makes the key's lifetime the Session's lifetime rather
+   * than something four callers each have to remember.
+   */
+  private void shutTheVault() {
+    if (live != null) {
+      live.vault.ifPresent(UnlockedVault::close);
+    }
   }
 
   /**
@@ -225,6 +257,7 @@ public final class Sessions {
 
   private synchronized void endTheSessionOn(ConnectionHandle connection) {
     if (live != null && live.connection == connection) {
+      shutTheVault();
       live = null;
     }
   }
@@ -236,6 +269,7 @@ public final class Sessions {
     private final String accountName;
     private final Role role;
     private final ConnectionHandle connection;
+    private final Optional<UnlockedVault> vault;
 
     private long monotonicAtLastActivity;
     private Instant wallAtLastActivity;
@@ -246,13 +280,15 @@ public final class Sessions {
         Role role,
         ConnectionHandle connection,
         long monotonicAtLastActivity,
-        Instant wallAtLastActivity) {
+        Instant wallAtLastActivity,
+        Optional<UnlockedVault> vault) {
       this.token = token;
       this.accountName = accountName;
       this.role = role;
       this.connection = connection;
       this.monotonicAtLastActivity = monotonicAtLastActivity;
       this.wallAtLastActivity = wallAtLastActivity;
+      this.vault = vault;
     }
   }
 }

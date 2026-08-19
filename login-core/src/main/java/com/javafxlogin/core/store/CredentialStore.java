@@ -256,6 +256,51 @@ public final class CredentialStore implements AutoCloseable {
   }
 
   /**
+   * Records the password an Account holder chose to replace the one it had.
+   *
+   * <p>Unlike {@link #completeEnrolment} there is no secret to consume here and no enrolment to end:
+   * this Account had a password, offered it, and now has another. The two are separate methods
+   * because they are separate facts, and a build that reused one for the other would be writing
+   * "an enrolment completed" into the store every time somebody rotated a password.
+   */
+  public void recordChosenPassword(
+      String accountName, String passwordHash, PasswordStrength strength) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(passwordHash, "passwordHash");
+    Objects.requireNonNull(strength, "strength");
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "UPDATE accounts SET password_hash = ?, password_strength = ? WHERE name = ?")) {
+      statement.setString(1, passwordHash);
+      statement.setString(2, strength.name());
+      statement.setString(3, accountName);
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not record a chosen password in " + file, e);
+    }
+  }
+
+  /**
+   * Removes an Account entirely, and answers whether there was one to remove.
+   *
+   * <p>Everything this store holds about the Account goes with the row: its hash, what it has failed,
+   * any Lockout, any outstanding enrolment and any reset it was owed being told about. What does not
+   * live here is the Account's wrapped copy of the DataKey, which is in the SecretVault — the caller
+   * destroys that first, because a wrap left behind by a delete that half-worked would be Vault
+   * access reachable again by creating an Account under the same name.
+   */
+  public boolean delete(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    try (PreparedStatement statement =
+        connection.prepareStatement("DELETE FROM accounts WHERE name = ?")) {
+      statement.setString(1, accountName);
+      return statement.executeUpdate() > 0;
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not remove an Account from " + file, e);
+    }
+  }
+
+  /**
    * When an Administrator last took this Account's password away, where the Operator has not yet
    * been told about it.
    *

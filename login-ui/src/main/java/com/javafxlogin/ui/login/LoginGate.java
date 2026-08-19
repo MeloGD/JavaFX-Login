@@ -109,6 +109,42 @@ public interface LoginGate {
   void passwordResetNoticeWasRead(Session session);
 
   /**
+   * Asks the SecretVault for one named secret, on behalf of the Session that is holding it open.
+   *
+   * <p>This is the whole of story 55: a ProtectedFeature that needs a credential for a system it
+   * connects to asks for it by name and is handed it. One secret at a time, decrypted by the service
+   * at the moment of the request — there is nothing here that asks for the Vault as a whole, and
+   * nothing anywhere that asks for the key, which never leaves the privileged process.
+   *
+   * <p>The Session is what opens it. An Operator's password derived the key that unwrapped the
+   * DataKey when they logged in, so a client that skipped the login screen has nothing to ask with:
+   * the Vault does not open because a check passed, and there is no check here to patch.
+   *
+   * <p>Asking for a secret is not activity and does not restart the Session's countdown. A product
+   * that polls for a credential would otherwise keep alive the Session of somebody who has walked
+   * away.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  SecretOutcome secretNamed(Session session, String name);
+
+  /**
+   * Puts a named secret into the SecretVault, replacing whatever was kept under that name.
+   *
+   * <p>The other half of a Vault a host product can actually use: something has to put the
+   * credentials there, and it is the ProtectedFeature that knows what they are. Like reading one, it
+   * is an Operator's request — the Administrator is refused by the service on both sides, so there is
+   * no way in through the writing half either.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  SecretKeepingOutcome keepSecret(Session session, String name, char[] secret);
+
+  /**
    * Whether this installation is still waiting for its single Administrator, which is what decides
    * whether a person sees the first-run wizard or the login screen.
    *

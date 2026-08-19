@@ -15,6 +15,7 @@ public sealed interface Response
         BootstrapNeeded,
         EnrolmentIssued,
         PolicyRefused,
+        SecretRevealed,
         SessionLive,
         SessionEnded,
         ErrorResponse {}

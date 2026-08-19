@@ -46,7 +46,9 @@ import java.util.Optional;
  *
  * <p>Passwords become JSON strings on the way out, which is a copy this codec cannot avoid and
  * ADR-0003 already accepts: the password crosses the channel in the clear, as it does with PAM and
- * LSASS.
+ * LSASS. A secret out of the SecretVault crosses it the same way and for the same reason — the
+ * channel is a socket inside a directory only two accounts on the machine can reach, and encrypting
+ * a hop that the kernel already isolates would be answering a question nobody asked.
  */
 public final class MessageCodec {
 
@@ -107,6 +109,17 @@ public final class MessageCodec {
                   .put("accountName", complete.accountName())
                   .put("secret", new String(complete.secret()))
                   .put("password", new String(complete.password()));
+          case ChangeOwnPassword change ->
+              carrying("ChangeOwnPassword", change.token())
+                  .put("currentPassword", new String(change.currentPassword()))
+                  .put("newPassword", new String(change.newPassword()));
+          case DeleteAccount delete ->
+              carrying("DeleteAccount", delete.token()).put("accountName", delete.accountName());
+          case ReadSecret read -> carrying("ReadSecret", read.token()).put("name", read.name());
+          case KeepSecret keep ->
+              carrying("KeepSecret", keep.token())
+                  .put("name", keep.name())
+                  .put("secret", new String(keep.secret()));
         };
     return write(message);
   }
@@ -120,6 +133,8 @@ public final class MessageCodec {
               message("EnrolmentIssued")
                   .put("secret", issued.secret())
                   .put("expiresAt", issued.expiresAt().toString());
+          case SecretRevealed revealed ->
+              message("SecretRevealed").put("secret", new String(revealed.secret()));
           case Denied denied -> denied(denied);
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
@@ -166,6 +181,13 @@ public final class MessageCodec {
       case "CompleteEnrolment" ->
           new CompleteEnrolment(
               text(message, "accountName"), chars(message, "secret"), chars(message, "password"));
+      case "ChangeOwnPassword" ->
+          new ChangeOwnPassword(
+              token(message), chars(message, "currentPassword"), chars(message, "newPassword"));
+      case "DeleteAccount" -> new DeleteAccount(token(message), text(message, "accountName"));
+      case "ReadSecret" -> new ReadSecret(token(message), text(message, "name"));
+      case "KeepSecret" ->
+          new KeepSecret(token(message), text(message, "name"), chars(message, "secret"));
       default -> throw new MalformedMessageException("Not a request this build answers: " + type);
     };
   }
@@ -188,6 +210,7 @@ public final class MessageCodec {
                       () ->
                           new MalformedMessageException(
                               "A secret that expires at no moment is not one this build reads")));
+      case "SecretRevealed" -> new SecretRevealed(chars(message, "secret"));
       case "Denied" -> denied(message);
       case "Ok" -> new Ok();
       case "Assessed" ->

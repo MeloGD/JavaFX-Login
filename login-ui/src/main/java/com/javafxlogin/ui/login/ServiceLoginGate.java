@@ -11,13 +11,16 @@ import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.KeepSecret;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.MalformedMessageException;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.ReadSecret;
 import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
+import com.javafxlogin.core.ipc.SecretRevealed;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.ipc.SessionEnded;
 import com.javafxlogin.core.ipc.SessionLive;
@@ -35,14 +38,13 @@ import java.util.Objects;
  * authenticating here is refused, and refused over there — this class could not grant them access
  * if it wanted to, and a patched copy of it could not either.
  *
- * <p>Be plain about how far that goes today. A patched client can ask to act as an Administrator,
- * be granted a Session for it, and draw the feature's window anyway: nothing behind the gate yet
- * asks what the Session is for. What the refusal buys now is that no Session for an Operator is
- * ever issued to an Administrator's password, which is what the SecretVault will need — the
- * DataKey is unwrapped by an Operator's own password and is never wrapped for an Administrator, so
- * a window drawn without one shows a feature that cannot reach a single secret. Until that ticket
- * lands, the exclusion is enforced where it will keep being enforced, and it is worth no more than
- * this paragraph says.
+ * <p>Be plain about how far that goes. A patched client can ask to act as an Administrator, be
+ * granted a Session for it, and draw the feature's window anyway: nothing behind the gate asks what
+ * the Session is for. What the refusal buys is that no Session for an Operator is ever issued to an
+ * Administrator's password — and now that the SecretVault exists, that is worth something concrete
+ * rather than something promised. The DataKey is unwrapped by an Operator's own password and is
+ * never wrapped for an Administrator, so the window a patched client draws is a feature that cannot
+ * read a single secret, and every attempt to read one is written to the record.
  *
  * <p>One connection is opened on the first attempt and kept, because a Session is bound to its
  * connection: the Session granted at the end of a run of attempts lives on the connection those
@@ -123,6 +125,67 @@ final class ServiceLoginGate implements LoginGate {
   }
 
   @Override
+  public synchronized SecretOutcome secretNamed(Session session, String name) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(name, "name");
+    Response response = ask(new ReadSecret(session.token(), name));
+    return switch (response) {
+      case SecretRevealed revealed -> new SecretGiven(revealed.secret());
+      case ErrorResponse error -> withheld("a request for a secret", error);
+      case SessionEnded ignored -> new SecretWithheld(SecretWithheldReason.SESSION_OVER);
+      // An admission, or an assessment: an answer to a question nobody put here. Handing one back
+      // as an absent secret would have a host product connect to nothing and blame the credential.
+      default -> throw unexpected("a request for a secret", response);
+    };
+  }
+
+  @Override
+  public synchronized SecretKeepingOutcome keepSecret(
+      Session session, String name, char[] secret) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(name, "name");
+    Objects.requireNonNull(secret, "secret");
+    Response response = ask(new KeepSecret(session.token(), name, secret));
+    return switch (response) {
+      case Ok ignored -> new SecretKept();
+      case ErrorResponse error -> withheld("a secret to keep", error);
+      case SessionEnded ignored -> new SecretWithheld(SecretWithheldReason.SESSION_OVER);
+      default -> throw unexpected("a secret to keep", response);
+    };
+  }
+
+  /**
+   * What the service refused a Vault request with, in the words a host product reads.
+   *
+   * <p>Two of these are not refusals at all but a service that could not read its own files, and
+   * they leave as {@link ServiceUnreachableException} for the same reason a store that will not open
+   * does at the first run: nothing was decided about this request, and the remedy is not the
+   * caller's.
+   */
+  private static SecretWithheld withheld(String asked, ErrorResponse error) {
+    return switch (error.code()) {
+      case NO_SUCH_SECRET -> new SecretWithheld(SecretWithheldReason.NO_SUCH_SECRET);
+      case NO_VAULT_ACCESS -> new SecretWithheld(SecretWithheldReason.NO_VAULT_ACCESS);
+      case NOT_AN_OPERATOR -> new SecretWithheld(SecretWithheldReason.NOT_AN_OPERATOR);
+      case STORE_UNAVAILABLE, VAULT_UNAVAILABLE ->
+          throw new ServiceUnreachableException(
+              "The AuthenticationService could not reach the files it owns");
+      // Every one of these answers a request about an Account, a first run, or a file to copy the
+      // record into. None of them is an answer to a question about a secret.
+      case ADMINISTRATOR_EXISTS,
+              NOT_MACHINE_ADMINISTRATOR,
+              NOT_ADMINISTRATOR,
+              NO_SUCH_ACCOUNT,
+              ACCOUNT_EXISTS,
+              CANNOT_ENROL_THE_ADMINISTRATOR,
+              CANNOT_DELETE_THE_ADMINISTRATOR,
+              EXPORT_DESTINATION_REFUSED,
+              EXPORT_FAILED ->
+          throw unexpected(asked, error);
+    };
+  }
+
+  @Override
   public synchronized boolean firstRunNeeded() {
     Response response = ask(new AskIfBootstrapNeeded());
     if (response instanceof BootstrapNeeded needed) {
@@ -184,9 +247,14 @@ final class ServiceLoginGate implements LoginGate {
       // nothing to be written anywhere. Reaching here means the service answered a question nobody
       // asked.
       case NOT_ADMINISTRATOR,
+              NOT_AN_OPERATOR,
               NO_SUCH_ACCOUNT,
               ACCOUNT_EXISTS,
               CANNOT_ENROL_THE_ADMINISTRATOR,
+              CANNOT_DELETE_THE_ADMINISTRATOR,
+              NO_VAULT_ACCESS,
+              NO_SUCH_SECRET,
+              VAULT_UNAVAILABLE,
               EXPORT_DESTINATION_REFUSED,
               EXPORT_FAILED ->
           throw unexpected("an attempt to create the Administrator", error);
