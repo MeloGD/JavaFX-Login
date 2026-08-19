@@ -12,13 +12,15 @@ import java.util.Objects;
  * worded: turning them into sentences is this module's job, which is what lets the wording change,
  * and be translated, without the privileged process knowing.
  *
- * <p>It is the answer to both of the screens that choose a credential — the first-run wizard and the
+ * <p>It is the answer to the screens that choose a credential — the first-run wizard and the
  * enrolment screen — because it is the same refusal by the same rules in the same process. Neither
  * screen has the Account it names; the wizard's does not exist yet and the enrolment screen's is
- * already there and unchanged.
+ * already there and unchanged. It is also the answer to an Administrator creating an Account, where
+ * what broke the rules is the name alone: the panel never chooses a password, so no refusal it
+ * receives can be about one.
  */
 public record PolicyRefusal(List<PolicyViolation> violations)
-    implements FirstRunOutcome, EnrolmentOutcome {
+    implements FirstRunOutcome, EnrolmentOutcome, AccountProvisioned {
 
   public PolicyRefusal {
     Objects.requireNonNull(violations, "violations");

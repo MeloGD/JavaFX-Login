@@ -1964,3 +1964,114 @@ Both axes ran against the staged diff, against `HEAD` as the fixed point.
 - **The rollback in `rewrapAndRecord` is untested.** Forcing a `VaultException`
   between two writes needs a seam this service does not have. The path is four
   lines and stated; a reviewer should decide whether that is enough.
+
+---
+
+# Code review — Administration panel (issue #12, Seams 1 and 3)
+
+Written for a final reviewing agent, in the shape the earlier sections use: what
+was built, what the ticket asked for against evidence, the decisions worth
+judging rather than rediscovering, and what is deliberately left open.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Base / fixed point | `9f8f76b` ("Open the Vault with a password rather than with an answer") |
+| Diff to review | `git diff 9f8f76b...HEAD` |
+| Packages | `com.javafxlogin.core.account`, `…core.ipc`, `…core.store`, `…core.authentication` in `login-core`; `com.javafxlogin.ui.login` in `login-ui` |
+| Binding decision | ADR-0013 (`docs/adr/0013-the-account-list-crosses-the-socket-and-nothing-else-does.md`) |
+| Build | `mvn -o test` → 575 tests, 0 failures, 1 skipped by an OS guard (core 482, ui 92, feature 1) |
+
+New at the service: `ListAccounts` / `AccountsListed`, `AccountSummary`,
+`CredentialStore.accounts()`, migration `V006__language_preference.sql`.
+New at the client: `AdministrationWindow`, `AdministrationController`,
+`administration-window.fxml`, `AccountText`, and eight small outcome types
+(`AccountListing`, `AccountsSeen`, `AccountProvisioned`, `EnrolmentSecretIssued`,
+`AdministrationOutcome`, `Administered`, `ExportOutcome`, `EventsExported`,
+`AdministrationRefused` + its reason enum). The `LoginGate` grows `administer`
+and seven administration methods; the login screen grows one checkbox.
+
+## 2. What the ticket asked for
+
+Issue #12, "Administration panel: Accounts, configuration and log export".
+Blocked by #8 (Lockout) and #10 (enrolment), both landed. Parent spec is issue
+#1, stories 18–22, 26–28, 37–39, 47–48, 62, 74–75.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Accounts listed with Role, band, language and Lockout | met | `AccountListingTest` (5 tests, at the service) + `AdministrationWindowTest.everyAccountIsListedWithWhatTheAdministratorNeedsToKnowAboutIt`, `…anAccountWithNoLanguagePreferenceSaysSoRatherThanNamingOne`, `…anAccountThatIsLockedOutIsListedAsLockedOut` |
+| Creating an `Operator` shows the secret once, with a warning | met | `AdministrationWindowTest.creatingAnOperatorShowsTheEnrolmentSecretOnceWithAWarning`, `…theEnrolmentSecretIsGoneOnceTheAdministratorSaysTheyHaveWrittenItDown` |
+| An `Operator` can be deleted, consequences stated | met | `…deletingAnOperatorStatesWhatItCostsBeforeItHappens` (asserts nothing was deleted before confirming), `…theOperatorIsDeletedOnceItIsConfirmed` |
+| A reset without the `Administrator` choosing the password | met | `…aPasswordResetHandsBackASecretAndNeverAsksForAPassword` — asserts the request made **and** that the panel has no `PasswordField` at all |
+| A `Lockout` can be cleared | met | `…aLockoutCanBeCleared` |
+| Inactivity period changed; expiry disabled | met | `…theInactivityPeriodCanBeChanged`, `…expiryCanBeSwitchedOffEntirely`, `…aPeriodThatIsNotANumberOfMinutesChangesNothingAndSaysSo` |
+| The audit log can be exported | met | `…theRecordCanBeExportedAndSaysWhatTheCopyCameTo`, `…anExportWhoseChainDidNotHoldSaysSoInItsOwnWords` |
+| `SecondFactor` present, visibly disabled, doing nothing | met | `…theSecondFactorControlIsThereAndDisabled` |
+| Panel reachable only by an `Administrator` `Session`, enforced by the service | met | `AccountListingTest.anOperatorIsRefusedTheListOfAccounts`, `…aSessionThatIsOverIsToldSoRatherThanAnsweredWithTheList`; every other request was already enforced (`RoleEnforcementTest`, `InactivityPeriodConfigurationTest`, `LockoutTest`, `EnrolmentTest`) |
+| UI tests drive the panel headless on Monocle against a fake `LoginGate` | met | `AdministrationWindowTest` (20 tests, 86 s) — TestFX + Monocle, `FakeLoginGate` |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The account list crosses the socket.** This is the only decision here that
+  touches the security property, and ADR-0013 is written for a reviewer who
+  reaches for ADR-0002 first. Short version: the request needs a `SessionToken`
+  the service issued to an Administrator; what crosses is an `AccountSummary`
+  with no field a hash could travel in; the query names its columns.
+- **`AccountSummary` is a second type rather than a trimmed `Account`.** The
+  duplication is deliberate — an `Account` carries the hash, and a build that
+  reused it would be one field away from sending one.
+- **The `Lockout` is filled in by the service, not the store.** `CredentialStore`
+  has no clock; `AuthenticationService.everyAccount()` maps each summary through
+  the same `Lockouts` the login screen's refusals go through, so the panel cannot
+  come to disagree with the login screen. `AccountSummary.lockedFor(…)` is what
+  makes that a copy rather than a mutation.
+- **Story 37 is a checkbox.** One login screen; the box decides which `Role` the
+  attempt asks for. `LoginGate.administer` is a separate method from `admit` and
+  leads to a separate window, because an Administrator never reaches the
+  `ProtectedFeature` — the host's view function is not called on that path, which
+  `theHostProductsViewIsNeverBuiltForAnAdministrator` asserts.
+- **Four sealed outcome sets rather than one.** `AccountListing`,
+  `AccountProvisioned`, `AdministrationOutcome`, `ExportOutcome`, all sharing
+  `AdministrationRefused`. This follows the ruling in the SecretVault review
+  ("Speculative Generality — one `SecretOutcome` served both operations"): no
+  caller handles a case another request produces. The cost is eight small files.
+- **The panel carries a `SessionGuard`**, like the window an Operator works in.
+  An Administrator's Session expires by the same `InactivityPeriod` and the panel
+  closes and hands back the same way.
+- **Deleting is two clicks with the consequences in between**, in the window
+  rather than in a modal dialog — a dialog is not drivable headless on Monocle,
+  and this is testable.
+- **`V006` adds a nullable `language` column that nothing in this build writes.**
+  Criterion 1 asks for the column; issue #13 owns choosing and applying a
+  preference and is blocked by this ticket. A reviewer should decide whether the
+  column belongs here or with #13; the argument for here is that #12 lists it and
+  #13 then only adds the selector.
+
+## 4. Open ground — judge these rather than assume them
+
+- **The panel cannot show the `InactivityPeriod` currently in force.** No request
+  answers what the deployment is configured with, so the Administrator types a
+  new value blind. This is the one part of the screen that reads as unfinished.
+  It is recorded in ADR-0013 rather than hidden here.
+- **The export destination is a typed path, not a `FileChooser`.** Drivable
+  headless, and the refusals are the service's either way. A chooser is a better
+  screen and not a different decision.
+- **Nothing exercises the panel against the real service.** Seam 1 tests the
+  decisions and Seam 3 tests the window against a fake gate; the wiring between
+  them — `ServiceLoginGate`'s seven new methods — is covered only by
+  `ServiceLoginGateTest`'s existing shape, which this change does not extend. A
+  reviewer should decide whether that seam is worth a test of its own.
+- **`AdministrationController` is long** (a screen with seven jobs on it). It was
+  left as one class because every job is three lines of "ask the gate, show what
+  came back"; splitting it would move the wiring rather than remove it.
+- **The `language` column has no `CHECK` and no writer.** A tag naming no
+  language is refused when read, in the store and again in the codec, rather than
+  read as "said nothing" — which is the distinction #13 will depend on.
+- **Reading the list is not an AuthenticationEvent**, on the argument in
+  ADR-0013. If a reviewer disagrees, the change is one line in
+  `listAccounts` — and the record would then fill with the panel refreshing
+  itself after every change.

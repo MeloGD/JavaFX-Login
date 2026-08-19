@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -34,16 +35,22 @@ public final class LoginController {
 
   @FXML private TextField accountName;
   @FXML private PasswordField password;
+  @FXML private CheckBox administer;
   @FXML private Button admit;
   @FXML private Label message;
 
   private LoginGate gate;
   private Consumer<Admitted> onAdmitted;
+  private Consumer<Admitted> onAdministrator;
   private Consumer<String> onEnrolmentRequired;
 
   /**
    * Wires the window to the gate behind it, and to the two screens it can hand somebody on to.
    *
+   * @param onAdministrator given the Session an Administrator was admitted with, and expected to
+   *     show the administration panel. It is a second callback rather than a branch inside the
+   *     first because the two lead to different windows: an Administrator never reaches the
+   *     ProtectedFeature, so the host product's view is not built for them at all
    * @param onEnrolmentRequired given the name that was typed, and expected to show the enrolment
    *     screen. Sending them there is the whole point of the service answering that refusal apart
    *     from the others: an Account with no password cannot be reached by typing a better one.
@@ -53,10 +60,12 @@ public final class LoginController {
   void admitWith(
       LoginGate gate,
       Consumer<Admitted> onAdmitted,
+      Consumer<Admitted> onAdministrator,
       Consumer<String> onEnrolmentRequired,
       String saying) {
     this.gate = Objects.requireNonNull(gate, "gate");
     this.onAdmitted = Objects.requireNonNull(onAdmitted, "onAdmitted");
+    this.onAdministrator = Objects.requireNonNull(onAdministrator, "onAdministrator");
     this.onEnrolmentRequired = Objects.requireNonNull(onEnrolmentRequired, "onEnrolmentRequired");
     message.setText(Objects.requireNonNull(saying, "saying"));
   }
@@ -71,19 +80,32 @@ public final class LoginController {
     onEnrolmentRequired.accept(accountName.getText());
   }
 
+  /**
+   * Story 37: one screen, and the checkbox is the whole of the difference.
+   *
+   * <p>What the box decides is which Role is asked for, and the service decides whether the Account
+   * holds it — an Operator who ticks it is refused, in the same words as a wrong password, because
+   * telling the two apart would name the Role an Account holds.
+   */
   @FXML
   private void onAdmit() {
     String name = accountName.getText();
     char[] secret = password.getText().toCharArray();
+    boolean administering = administer.isSelected();
 
     showWaiting(true);
     GateAttempt.make(
-        "login-attempt", secret, () -> gate.admit(name, secret), this::showOutcome, this::failed);
+        "login-attempt",
+        secret,
+        () -> administering ? gate.administer(name, secret) : gate.admit(name, secret),
+        admission -> showOutcome(admission, administering),
+        this::failed);
   }
 
-  private void showOutcome(Admission admission) {
+  private void showOutcome(Admission admission, boolean administering) {
     switch (admission) {
-      case Admitted admitted -> onAdmitted.accept(admitted);
+      case Admitted admitted ->
+          (administering ? onAdministrator : onAdmitted).accept(admitted);
       case NotAdmitted notAdmitted -> refused(notAdmitted);
     }
   }
@@ -118,6 +140,7 @@ public final class LoginController {
     admit.setDisable(inFlight);
     accountName.setDisable(inFlight);
     password.setDisable(inFlight);
+    administer.setDisable(inFlight);
     if (inFlight) {
       message.setText("");
     }

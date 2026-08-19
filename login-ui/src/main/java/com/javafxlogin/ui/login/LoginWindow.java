@@ -48,6 +48,7 @@ final class LoginWindow {
         .admitWith(
             gate,
             admitted -> hold(gate, stage, protectedFeature, admitted),
+            admitted -> administer(gate, stage, protectedFeature, admitted),
             accountName -> enrol(gate, stage, protectedFeature, accountName),
             saying);
     window.showOn(stage, LOGIN_TITLE);
@@ -63,6 +64,21 @@ final class LoginWindow {
       LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, String accountName) {
     EnrolmentWindow.show(
         gate, stage, accountName, sentence -> show(gate, stage, protectedFeature, sentence));
+  }
+
+  /**
+   * Opens the administration panel, and closes the login window behind it.
+   *
+   * <p>The same arrangement as an admitted Operator's window, in the same order and for the same
+   * reason — but with nothing of the host product in it. An Administrator does not reach the
+   * ProtectedFeature, so its view is not built here at all; what is passed on is only what puts the
+   * login screen back when the Session ends.
+   */
+  private static void administer(
+      LoginGate gate, Stage stage, Function<Session, Parent> protectedFeature, Admitted admitted) {
+    AdministrationWindow.open(
+        gate, admitted, sentence -> show(gate, stage, protectedFeature, sentence));
+    stage.close();
   }
 
   /**

@@ -53,3 +53,11 @@
   -fx-border-color: #e0b980;
   -fx-padding: 10;
 }
+
+/* The one-time enrolment secret, on the screen it is read off once. Monospaced and large enough to
+   be copied onto paper without a character being mistaken for another. */
+.login .secret {
+  -fx-font-family: "monospace";
+  -fx-font-size: 18px;
+  -fx-padding: 8 0 0 0;
+}

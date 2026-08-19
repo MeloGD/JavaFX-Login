@@ -1,6 +1,7 @@
 package com.javafxlogin.core.authentication;
 
 import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEvent;
 import com.javafxlogin.core.audit.AuthenticationEventArchive;
@@ -10,6 +11,7 @@ import com.javafxlogin.core.audit.AuthenticationEventType;
 import com.javafxlogin.core.audit.FileAuthenticationEventLog;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
+import com.javafxlogin.core.ipc.AccountsListed;
 import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
@@ -35,6 +37,7 @@ import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.InitiateReset;
 import com.javafxlogin.core.ipc.KeepSecret;
+import com.javafxlogin.core.ipc.ListAccounts;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
@@ -290,6 +293,7 @@ public final class AuthenticationService implements AutoCloseable {
         case AcknowledgePasswordReset seen -> acknowledgePasswordReset(seen, connection);
         case ChangeOwnPassword change -> changeOwnPassword(change, connection);
         case DeleteAccount delete -> deleteAccount(delete, connection);
+        case ListAccounts list -> listAccounts(list, connection);
         case ReadSecret read -> readSecret(read, connection);
         case KeepSecret keep -> keepSecret(keep, connection);
       };
@@ -788,6 +792,39 @@ public final class AuthenticationService implements AutoCloseable {
     store.delete(accountName);
     record(AuthenticationEventType.ACCOUNT_DELETED, accountName);
     return new Ok();
+  }
+
+  /**
+   * Lists every Account, which is what the administration panel is drawn from.
+   *
+   * <p>The only request that reads the CredentialStore as a whole, and the only one whose answer is
+   * about Accounts other than the one asking — so it is worth being plain about what it hands over.
+   * A name, the Role, the coarse band, the language preference and the Lockout: nothing a password
+   * could be recovered from, because {@link AccountSummary} has no field one could travel in.
+   *
+   * <p>Reading the list is not recorded. The record is of things that happened to Accounts — an
+   * Account changed, a configuration changed, an export made — and an Administrator looking at the
+   * screen they administer the deployment from has changed nothing. What they go on to do from it
+   * is recorded where it is done.
+   */
+  private Response listAccounts(ListAccounts request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(), connection, live -> onlyAnAdministrator(live, this::everyAccount));
+  }
+
+  /**
+   * Every Account, with the same arithmetic behind each Lockout as the login screen's refusals use.
+   *
+   * <p>Asking {@link Lockouts} rather than reading the moment out of the store is what keeps the
+   * panel and the login screen from disagreeing about who is locked out: a Lockout that has run out
+   * is forgotten as it is read, here exactly as it is there, so an Administrator is never shown a
+   * refusal that the next attempt would not meet.
+   */
+  private Response everyAccount() {
+    return new AccountsListed(
+        store.accounts().stream()
+            .map(account -> account.lockedFor(lockouts.refusalOf(account.name())))
+            .toList());
   }
 
   /**

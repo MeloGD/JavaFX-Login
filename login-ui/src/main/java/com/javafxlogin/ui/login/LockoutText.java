@@ -29,11 +29,12 @@ final class LockoutText {
   }
 
   /**
-   * The wait, in whole minutes and never in none: rounded up so that a screen saying "one minute" is
+   * The wait, in whole minutes and never in none. Shared with the administration panel's list of
+   * Accounts, which reports the same wait about the same Lockout and must not round it differently: rounded up so that a screen saying "one minute" is
    * never a screen someone is refused after, and floored at one so that the shortest wait is still a
    * wait rather than a zero to argue with.
    */
-  private static String waitOf(Duration remaining) {
+  static String waitOf(Duration remaining) {
     long minutes = Math.max(1, (remaining.toSeconds() + 59) / 60);
     return minutes == 1 ? "1 minuto" : minutes + " minutos";
   }

@@ -135,10 +135,17 @@ known, and logs in. Resetting a forgotten password is the same thing again — t
 working the moment the reset is asked for, and its holder is told at their next login that it
 happened and when. ADR-0012 has the reasoning, including what this does and does not protect.
 
-**There is still no screen for the `Administrator`'s half of it.** Creating an `Account`,
-initiating a reset, deleting an `Operator` and changing your own password exist at the service and
-no window reaches them yet, for the same reason as
-clearing a `Lockout` and exporting the record: that screen is the administration panel. Until it
-lands, the pair started above shows the login screen and the enrolment screen behind it, and an
-`Operator` to try them with has to be created through the service directly — which is what the test
-suite does. This project ships no default credential and issues no recovery key, and it never will.
+The `Administrator`'s half of it is the **administration panel**, which is reached from the same
+login screen: tick *Entrar en la administración* and the attempt asks for the `Administrator` `Role`
+rather than the `Operator` one. What is on it is the `Account`s of the deployment — the `Role`, the
+coarse `PasswordStrength` band, the `LanguagePreference` and any `Lockout` — and what an
+`Administrator` does about one of them: create an `Operator` and be handed the one-time secret,
+initiate a reset, clear a `Lockout`, delete an `Operator` after being told what that costs, change
+how long a `Session` may idle (or switch expiry off, which is what a kiosk is), and copy the audit
+record to a file. A `SecondFactor` control sits there visibly disabled, because v1 implements none.
+
+Every one of those is refused in the privileged process unless the `Session` asking is an
+`Administrator`'s, so drawing the window is not what grants it — ADR-0013 says what that costs and
+why listing `Account`s does not undo ADR-0002. There is still no screen for changing your own
+password: that request exists at the service and no window reaches it yet. This project ships no
+default credential and issues no recovery key, and it never will.

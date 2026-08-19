@@ -23,6 +23,7 @@ public sealed interface Request
         ExportAuthenticationEvents,
         InitiateReset,
         KeepSecret,
+        ListAccounts,
         Logout,
         ReadSecret,
         ReportActivity {}

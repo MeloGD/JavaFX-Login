@@ -1,17 +1,27 @@
 package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.ipc.AccountsListed;
 import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
+import com.javafxlogin.core.ipc.AuthenticationEventsExported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
+import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
+import com.javafxlogin.core.ipc.ClearLockout;
 import com.javafxlogin.core.ipc.CompleteEnrolment;
+import com.javafxlogin.core.ipc.CreateAccount;
+import com.javafxlogin.core.ipc.DeleteAccount;
 import com.javafxlogin.core.ipc.Denied;
+import com.javafxlogin.core.ipc.EnrolmentIssued;
 import com.javafxlogin.core.ipc.ErrorResponse;
+import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.InitiateReset;
 import com.javafxlogin.core.ipc.KeepSecret;
+import com.javafxlogin.core.ipc.ListAccounts;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.MalformedMessageException;
 import com.javafxlogin.core.ipc.Ok;
@@ -24,6 +34,7 @@ import com.javafxlogin.core.ipc.SecretRevealed;
 import com.javafxlogin.core.ipc.ServiceClient;
 import com.javafxlogin.core.ipc.SessionEnded;
 import com.javafxlogin.core.ipc.SessionLive;
+import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -78,6 +89,144 @@ final class ServiceLoginGate implements LoginGate {
       // say. It is not a refusal, and showing it as one would send the person to retype a
       // password that was never the problem.
       default -> throw unexpected("an authentication attempt", response);
+    };
+  }
+
+  @Override
+  public synchronized Admission administer(String accountName, char[] password) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(password, "password");
+    Response response = ask(new Authenticate(accountName, password, Role.ADMINISTRATOR));
+    return switch (response) {
+      // An Administrator is never owed a notice about their own password having been reset: theirs
+      // is chosen at the first-run wizard and no request takes it away. The field is carried
+      // through rather than dropped, because what the service said is not this class's to edit.
+      case Granted granted -> new Admitted(new Session(granted.token()), granted.passwordResetAt());
+      case Denied denied -> new NotAdmitted(denied.reason(), denied.lockedFor());
+      default -> throw unexpected("an attempt to administer the deployment", response);
+    };
+  }
+
+  @Override
+  public synchronized AccountListing accounts(Session session) {
+    Objects.requireNonNull(session, "session");
+    Response response = ask(new ListAccounts(session.token()));
+    return switch (response) {
+      case AccountsListed listed -> new AccountsSeen(listed.accounts());
+      case ErrorResponse error -> refused("a request for the Accounts", error);
+      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      default -> throw unexpected("a request for the Accounts", response);
+    };
+  }
+
+  @Override
+  public synchronized AccountProvisioned createOperator(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(accountName, "accountName");
+    return provisioned(
+        "an Account to create", ask(new CreateAccount(session.token(), accountName, Role.OPERATOR)));
+  }
+
+  @Override
+  public synchronized AccountProvisioned resetThePasswordOf(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(accountName, "accountName");
+    return provisioned(
+        "a password to reset", ask(new InitiateReset(session.token(), accountName)));
+  }
+
+  /** The half an Account created and an Account reset have in common: a secret shown once. */
+  private static AccountProvisioned provisioned(String asked, Response response) {
+    return switch (response) {
+      case EnrolmentIssued issued -> new EnrolmentSecretIssued(issued.secret(), issued.expiresAt());
+      case PolicyRefused refused -> new PolicyRefusal(refused.violations());
+      case ErrorResponse error -> refused(asked, error);
+      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      default -> throw unexpected(asked, response);
+    };
+  }
+
+  @Override
+  public synchronized AdministrationOutcome deleteOperator(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(accountName, "accountName");
+    return administered(
+        "an Account to delete", ask(new DeleteAccount(session.token(), accountName)));
+  }
+
+  @Override
+  public synchronized AdministrationOutcome clearTheLockoutOf(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(accountName, "accountName");
+    return administered(
+        "a Lockout to clear", ask(new ClearLockout(session.token(), accountName)));
+  }
+
+  @Override
+  public synchronized AdministrationOutcome useInactivityPeriod(
+      Session session, InactivityPeriod period) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(period, "period");
+    return administered(
+        "an inactivity period to configure",
+        ask(new ChangeInactivityPeriod(session.token(), period)));
+  }
+
+  private static AdministrationOutcome administered(String asked, Response response) {
+    return switch (response) {
+      case Ok ignored -> new Administered();
+      case ErrorResponse error -> refused(asked, error);
+      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      default -> throw unexpected(asked, response);
+    };
+  }
+
+  @Override
+  public synchronized ExportOutcome exportAuthenticationEventsTo(
+      Session session, Path destination) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(destination, "destination");
+    Response response = ask(new ExportAuthenticationEvents(session.token(), destination));
+    return switch (response) {
+      case AuthenticationEventsExported exported -> new EventsExported(exported.export());
+      case ErrorResponse error -> refused("an export of the record", error);
+      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      default -> throw unexpected("an export of the record", response);
+    };
+  }
+
+  /**
+   * What the service refused an administration request with, in the words the panel reads.
+   *
+   * <p>Two of these are not refusals at all but a service that could not read its own files, and
+   * they leave as {@link ServiceUnreachableException} for the reason they do everywhere else here:
+   * nothing was decided about this request, and the remedy is not the caller's.
+   */
+  private static AdministrationRefused refused(String asked, ErrorResponse error) {
+    return switch (error.code()) {
+      case NOT_ADMINISTRATOR ->
+          new AdministrationRefused(AdministrationRefusedReason.NOT_ADMINISTRATOR);
+      case NO_SUCH_ACCOUNT -> new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT);
+      case ACCOUNT_EXISTS -> new AdministrationRefused(AdministrationRefusedReason.ACCOUNT_EXISTS);
+      case CANNOT_ENROL_THE_ADMINISTRATOR ->
+          new AdministrationRefused(AdministrationRefusedReason.CANNOT_ENROL_THE_ADMINISTRATOR);
+      case CANNOT_DELETE_THE_ADMINISTRATOR ->
+          new AdministrationRefused(AdministrationRefusedReason.CANNOT_DELETE_THE_ADMINISTRATOR);
+      case EXPORT_DESTINATION_REFUSED ->
+          new AdministrationRefused(AdministrationRefusedReason.EXPORT_DESTINATION_REFUSED);
+      case EXPORT_FAILED -> new AdministrationRefused(AdministrationRefusedReason.EXPORT_FAILED);
+      case STORE_UNAVAILABLE, VAULT_UNAVAILABLE ->
+          throw new ServiceUnreachableException(
+              "The AuthenticationService could not reach the files it owns");
+      // Every one of these answers a request about a first run or about a secret in the Vault, and
+      // the panel makes neither: an Administrator holds no Vault access, which is what
+      // NOT_AN_OPERATOR would be saying here.
+      case ADMINISTRATOR_EXISTS,
+              NOT_MACHINE_ADMINISTRATOR,
+              NOT_AN_OPERATOR,
+              NO_VAULT_ACCESS,
+              NO_SUCH_SECRET ->
+          throw unexpected(asked, error);
     };
   }
 

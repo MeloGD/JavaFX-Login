@@ -1,6 +1,7 @@
 package com.javafxlogin.core.store;
 
 import com.javafxlogin.core.account.Account;
+import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.Enrolment;
 import com.javafxlogin.core.account.FailedAuthentications;
 import com.javafxlogin.core.account.LockoutPolicy;
@@ -20,6 +21,9 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -109,6 +113,64 @@ public final class CredentialStore implements AutoCloseable {
     } catch (SQLException e) {
       throw new CredentialStoreException("could not look up an Account in " + file, e);
     }
+  }
+
+  /**
+   * Every Account this deployment holds, as the administration panel lists them, in the order a
+   * person reads them.
+   *
+   * <p>The one query that reads the store as a whole, and the only one that hands anything about
+   * every Account to a caller — so what it selects is written out column by column rather than as a
+   * {@code *}: the password hash is on that table, and a query that took the whole row would put it
+   * one careless field away from a response that crosses the socket.
+   *
+   * <p>What is not answered here is the Lockout. The store holds the moment a refusal runs out and
+   * has neither a clock nor the LockoutPolicy to read it against, so every summary comes back
+   * saying nothing about one, and the AuthenticationService fills it in with the same arithmetic
+   * that refuses an attempt at the login screen.
+   *
+   * @throws CredentialStoreException if a row names a Role, a band or a language this build does
+   *     not read — a store edited by hand is not guessed at
+   */
+  public List<AccountSummary> accounts() {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT name, role, password_strength, language FROM accounts ORDER BY name")) {
+      try (ResultSet results = statement.executeQuery()) {
+        List<AccountSummary> accounts = new ArrayList<>();
+        while (results.next()) {
+          accounts.add(
+              new AccountSummary(
+                  results.getString("name"),
+                  Role.valueOf(results.getString("role")),
+                  PasswordStrength.valueOf(results.getString("password_strength")),
+                  languageIn(results)));
+        }
+        return List.copyOf(accounts);
+      }
+    } catch (SQLException | IllegalArgumentException e) {
+      throw new CredentialStoreException("could not list the Accounts in " + file, e);
+    }
+  }
+
+  /**
+   * The language an Account's holder reads, as V006 writes it: a BCP 47 tag, or nothing at all
+   * where they have said nothing and the machine's own locale answers for them.
+   *
+   * @throws IllegalArgumentException if the column holds something that names no language, which
+   *     is not read as "said nothing" — an Administrator would then be told this person expressed
+   *     no preference while the store says they did
+   */
+  private static Optional<Locale> languageIn(ResultSet results) throws SQLException {
+    String tag = results.getString("language");
+    if (tag == null) {
+      return Optional.empty();
+    }
+    Locale language = Locale.forLanguageTag(tag);
+    if (language.getLanguage().isEmpty()) {
+      throw new IllegalArgumentException("no language is named by the tag " + tag);
+    }
+    return Optional.of(language);
   }
 
   /**

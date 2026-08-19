@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  The administration panel.
+
+  The Accounts of the deployment at the top, and everything an Administrator does about one of them
+  below. There is no field on this screen where anybody's password could be typed, and that is the
+  point rather than an omission: an Administrator creates an Account and is handed a one-time secret
+  to give away, and never knows a credential somebody goes on using.
+-->
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.CheckBox?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.Separator?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.VBox?>
+
+<BorderPane fx:id="root" xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+            fx:controller="com.javafxlogin.ui.login.AdministrationController"
+            styleClass="login" prefWidth="820.0" prefHeight="640.0">
+
+  <top>
+    <HBox styleClass="session-bar" alignment="CENTER_RIGHT" spacing="8.0">
+      <padding>
+        <Insets top="8.0" right="12.0" bottom="8.0" left="12.0"/>
+      </padding>
+      <Label text="Administración" styleClass="title" maxWidth="Infinity" HBox.hgrow="ALWAYS"/>
+      <Button fx:id="logOut" text="Cerrar sesión" onAction="#onLogOut"/>
+    </HBox>
+  </top>
+
+  <center>
+    <VBox spacing="8.0">
+      <padding>
+        <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
+      </padding>
+
+      <Label text="Cuentas" styleClass="field-label"/>
+      <!--
+        Every column is a fact the service sent: the Role, the coarse band, the language the person
+        reads and whether the Account is refused for a while. No hash and nothing derived from one:
+        the list is built inside the privileged process and has no field one could travel in.
+      -->
+      <TableView fx:id="accounts" prefHeight="220.0" VBox.vgrow="ALWAYS">
+        <columns>
+          <TableColumn fx:id="accountName" text="Cuenta" prefWidth="200.0"/>
+          <TableColumn fx:id="role" text="Rol" prefWidth="130.0"/>
+          <TableColumn fx:id="passwordStrength" text="Contraseña" prefWidth="120.0"/>
+          <TableColumn fx:id="language" text="Idioma" prefWidth="180.0"/>
+          <TableColumn fx:id="lockout" text="Bloqueo" prefWidth="150.0"/>
+        </columns>
+      </TableView>
+
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <Button fx:id="resetPassword" text="Restablecer contraseña" onAction="#onResetPassword"/>
+        <Button fx:id="clearLockout" text="Desbloquear" onAction="#onClearLockout"/>
+        <Button fx:id="deleteOperator" text="Eliminar operador" onAction="#onDeleteOperator"/>
+      </HBox>
+
+      <!--
+        What deleting costs, said before it happens and confirmed separately. Unmanaged until then,
+        so that a warning about an Account nobody chose takes no room.
+      -->
+      <Label fx:id="deleteConsequences" styleClass="warning" wrapText="true" maxWidth="Infinity"
+             visible="false" managed="false"/>
+      <HBox fx:id="deleteControls" spacing="8.0">
+        <Button fx:id="confirmDelete" text="Eliminar definitivamente" onAction="#onConfirmDelete"
+                visible="false" managed="false"/>
+        <Button fx:id="cancelDelete" text="Cancelar" onAction="#onCancelDelete"
+                visible="false" managed="false"/>
+      </HBox>
+
+      <Separator/>
+
+      <Label text="Crear un operador" styleClass="field-label"/>
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <TextField fx:id="newOperatorName" promptText="Nombre de la cuenta" prefWidth="240.0"/>
+        <Button fx:id="createOperator" text="Crear y generar código" onAction="#onCreateOperator"/>
+      </HBox>
+
+      <!--
+        The one thing the AuthenticationService will never say again. It is shown once, with the
+        warning beside it, and there is no request anywhere on the LoginGate that reads it back.
+      -->
+      <Label fx:id="enrolmentSecret" styleClass="secret" visible="false" managed="false"/>
+      <Label fx:id="enrolmentSecretWarning" styleClass="warning" wrapText="true"
+             maxWidth="Infinity" visible="false" managed="false"/>
+      <Button fx:id="enrolmentSecretRead" text="Ya lo he anotado" onAction="#onEnrolmentSecretRead"
+              visible="false" managed="false"/>
+
+      <Separator/>
+
+      <Label text="Configuración" styleClass="field-label"/>
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <Label text="Caducidad por inactividad (minutos)"/>
+        <TextField fx:id="inactivityMinutes" prefWidth="80.0"/>
+        <CheckBox fx:id="neverExpires" text="Sin caducidad (modo quiosco)"/>
+        <Button fx:id="applyInactivityPeriod" text="Aplicar" onAction="#onApplyInactivityPeriod"/>
+      </HBox>
+
+      <!--
+        Reserved by CONTEXT.md and by the CredentialStore's own column: nothing implements a
+        SecondFactor in this version, and the control is visibly disabled rather than absent so that
+        the seam has somewhere to surface later.
+      -->
+      <CheckBox fx:id="secondFactor" text="Exigir un segundo factor (no disponible en esta versión)"
+                disable="true"/>
+
+      <Separator/>
+
+      <Label text="Registro de eventos" styleClass="field-label"/>
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <TextField fx:id="exportDestination" promptText="/ruta/absoluta/eventos.csv"
+                   prefWidth="360.0"/>
+        <Button fx:id="export" text="Exportar" onAction="#onExport"/>
+      </HBox>
+      <Label text="La copia la escribe el servicio y solo su propietario puede leerla."
+             styleClass="explanation" wrapText="true"/>
+
+      <Label fx:id="message" styleClass="message" wrapText="true" maxWidth="Infinity"/>
+    </VBox>
+  </center>
+</BorderPane>

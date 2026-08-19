@@ -1,12 +1,20 @@
 package com.javafxlogin.ui.login;
 
+import com.javafxlogin.core.account.AccountSummary;
+import com.javafxlogin.core.account.PasswordStrength;
+import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.audit.AuthenticationEventExport;
 import com.javafxlogin.core.ipc.DeniedReason;
+import com.javafxlogin.core.policy.PolicyViolation;
+import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import com.javafxlogin.core.session.SessionEndedReason;
 import com.javafxlogin.core.session.SessionToken;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -41,6 +49,28 @@ final class FakeLoginGate implements LoginGate {
 
   /** The SecretVault, as far as a window ever needs one: a map with no key anywhere near it. */
   private final Map<String, String> secrets = new ConcurrentHashMap<>();
+
+  /** Whoever is added here administers the deployment with this password, and nobody else does. */
+  private final Map<String, String> administrators = new ConcurrentHashMap<>();
+
+  /** The CredentialStore, as far as the administration panel ever sees one: a list of summaries. */
+  private final Map<String, AccountSummary> accounts = new ConcurrentHashMap<>();
+
+  /** What the panel asked for, in the order it asked, so that a test can assert on the request. */
+  private final List<String> administrations = new CopyOnWriteArrayList<>();
+
+  private final AtomicInteger secretsIssued = new AtomicInteger();
+
+  private volatile InactivityPeriod configuredPeriod;
+  private volatile Path exportedTo;
+  private volatile AuthenticationEventExport nextExport =
+      new AuthenticationEventExport(12, true);
+
+  /** What the service refuses the next administration request with, or null where it obliges. */
+  private volatile AdministrationRefusedReason administrationRefused;
+
+  /** What the service refuses the next Account creation with, where the name breaks a rule. */
+  private volatile List<PolicyViolation> nameRefusedFor;
 
   private volatile boolean reachable = true;
   private volatile boolean firstRunNeeded;
@@ -175,6 +205,225 @@ final class FakeLoginGate implements LoginGate {
   /** What the window offered, as {@code name/password}, in the order it offered it. */
   List<String> attempts() {
     return List.copyOf(attempts);
+  }
+
+  /** An Account that administers this deployment, admitted at the panel with this password. */
+  FakeLoginGate administeredBy(String accountName, String password) {
+    administrators.put(accountName, password);
+    return holding(
+        new AccountSummary(
+            accountName,
+            Role.ADMINISTRATOR,
+            PasswordStrength.STRONG,
+            Optional.empty(),
+            Optional.empty()));
+  }
+
+  /** An Account the service lists when the panel asks for the Accounts of this deployment. */
+  FakeLoginGate holding(AccountSummary account) {
+    accounts.put(account.name(), account);
+    return this;
+  }
+
+  /** An ordinary Operator with nothing the matter with it. */
+  FakeLoginGate holdingTheOperator(String accountName) {
+    return holding(
+        new AccountSummary(
+            accountName,
+            Role.OPERATOR,
+            PasswordStrength.ACCEPTABLE,
+            Optional.empty(),
+            Optional.empty()));
+  }
+
+  /** What the service refuses every administration request with, until a test says otherwise. */
+  void refuseAdministrationWith(AdministrationRefusedReason reason) {
+    administrationRefused = reason;
+  }
+
+  /** What the AccountPolicy makes of the next name the panel offers it. */
+  void refuseTheNameFor(List<PolicyViolation> violations) {
+    nameRefusedFor = violations;
+  }
+
+  /** What the next export of the record comes to. */
+  void exportsComeTo(AuthenticationEventExport export) {
+    nextExport = export;
+  }
+
+  /** What the panel asked the service to do, in order, as {@code request:subject}. */
+  List<String> administrations() {
+    return List.copyOf(administrations);
+  }
+
+  /** The Accounts this fake service holds, as the panel would list them. */
+  List<AccountSummary> accountsHeld() {
+    return accounts.values().stream().sorted(Comparator.comparing(AccountSummary::name)).toList();
+  }
+
+  /** How long a Session may idle here, as the panel last configured it. */
+  InactivityPeriod configuredPeriod() {
+    return configuredPeriod;
+  }
+
+  /** Where the panel last asked for the record to be copied. */
+  Path exportedTo() {
+    return exportedTo;
+  }
+
+  @Override
+  public Admission administer(String accountName, char[] password) {
+    // Copied at once: the window blanks the array it handed over as soon as this returns.
+    String offered = new String(password);
+    attempts.add(accountName + "/" + offered);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (lockedFor != null) {
+      return NotAdmitted.lockedFor(lockedFor);
+    }
+    if (!Objects.equals(administrators.get(accountName), offered)) {
+      // As the service does: an Operator asking to administer is refused in the same words as a
+      // wrong password, because telling the two apart would name the Role an Account holds.
+      return NotAdmitted.because(DeniedReason.AUTH_FAILED);
+    }
+    return new Admitted(new Session(SessionToken.generate(new SecureRandom())));
+  }
+
+  @Override
+  public AccountListing accounts(Session session) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("accounts");
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    return new AccountsSeen(accountsHeld());
+  }
+
+  @Override
+  public AccountProvisioned createOperator(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("createOperator:" + accountName);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    if (nameRefusedFor != null) {
+      return new PolicyRefusal(nameRefusedFor);
+    }
+    if (accounts.containsKey(accountName)) {
+      return new AdministrationRefused(AdministrationRefusedReason.ACCOUNT_EXISTS);
+    }
+    // As the real service does: the Account exists from here on, with no password and the weakest
+    // band, until somebody turns the secret below into one.
+    accounts.put(
+        accountName,
+        new AccountSummary(
+            accountName,
+            Role.OPERATOR,
+            PasswordStrength.WEAK,
+            Optional.empty(),
+            Optional.empty()));
+    return issueASecret();
+  }
+
+  @Override
+  public AccountProvisioned resetThePasswordOf(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("resetThePasswordOf:" + accountName);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    AccountSummary account = accounts.get(accountName);
+    if (account == null) {
+      return new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT);
+    }
+    if (account.role() == Role.ADMINISTRATOR) {
+      return new AdministrationRefused(AdministrationRefusedReason.CANNOT_ENROL_THE_ADMINISTRATOR);
+    }
+    return issueASecret();
+  }
+
+  /** A secret that is different every time, as one generated from 128 bits would be. */
+  private AccountProvisioned issueASecret() {
+    return new EnrolmentSecretIssued(
+        "SECRET-%04d".formatted(secretsIssued.incrementAndGet()),
+        Instant.parse("2026-03-04T09:00:00Z"));
+  }
+
+  @Override
+  public AdministrationOutcome deleteOperator(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("deleteOperator:" + accountName);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    AccountSummary account = accounts.get(accountName);
+    if (account == null) {
+      return new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT);
+    }
+    if (account.role() == Role.ADMINISTRATOR) {
+      return new AdministrationRefused(AdministrationRefusedReason.CANNOT_DELETE_THE_ADMINISTRATOR);
+    }
+    accounts.remove(accountName);
+    return new Administered();
+  }
+
+  @Override
+  public AdministrationOutcome clearTheLockoutOf(Session session, String accountName) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("clearTheLockoutOf:" + accountName);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    AccountSummary account = accounts.get(accountName);
+    if (account == null) {
+      return new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT);
+    }
+    accounts.put(accountName, account.lockedFor(Optional.empty()));
+    return new Administered();
+  }
+
+  @Override
+  public AdministrationOutcome useInactivityPeriod(Session session, InactivityPeriod period) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("useInactivityPeriod:" + period.text());
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    configuredPeriod = period;
+    return new Administered();
+  }
+
+  @Override
+  public ExportOutcome exportAuthenticationEventsTo(Session session, Path destination) {
+    Objects.requireNonNull(session, "session");
+    administrations.add("exportAuthenticationEventsTo:" + destination);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    exportedTo = destination;
+    return new EventsExported(nextExport);
   }
 
   /** What the wizard offered, as {@code name/password}, in the order it offered it. */

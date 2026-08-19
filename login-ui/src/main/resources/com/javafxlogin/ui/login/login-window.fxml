@@ -9,6 +9,7 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
+<?import javafx.scene.control.CheckBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.PasswordField?>
 <?import javafx.scene.control.TextField?>
@@ -29,6 +30,13 @@
 
   <Label text="Contraseña" styleClass="field-label"/>
   <PasswordField fx:id="password"/>
+
+  <!--
+    Story 37: one way in for both Roles, one control apart. What the box decides is which Role the
+    attempt asks for; whether the Account holds it is the AuthenticationService's decision, and an
+    Operator who ticks it is refused in the same words as a wrong password.
+  -->
+  <CheckBox fx:id="administer" text="Entrar en la administración"/>
 
   <Button fx:id="admit" text="Acceder" onAction="#onAdmit" defaultButton="true"
           maxWidth="Infinity"/>

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
@@ -21,6 +22,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
@@ -102,6 +104,7 @@ class MessageCodecTest {
     assertArrayEquals(
         token.copyOfBytes(), tokenOfRoundTripped(new AcknowledgePasswordReset(token)));
     assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new ReadSecret(token, "a.secret")));
+    assertArrayEquals(token.copyOfBytes(), tokenOfRoundTripped(new ListAccounts(token)));
     assertArrayEquals(
         token.copyOfBytes(),
         tokenOfRoundTripped(
@@ -170,6 +173,79 @@ class MessageCodecTest {
 
     assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
     assertEquals(sent.accountName(), received.accountName());
+  }
+
+  @Test
+  void carriesEveryAccountOfAListingUnchangedAndInOrder() {
+    AccountsListed sent =
+        new AccountsListed(
+            List.of(
+                new AccountSummary(
+                    "finch.mercer",
+                    Role.OPERATOR,
+                    PasswordStrength.ACCEPTABLE,
+                    Optional.of(Locale.forLanguageTag("es-ES")),
+                    Optional.of(Duration.ofMinutes(10))),
+                new AccountSummary(
+                    "wren.holloway",
+                    Role.ADMINISTRATOR,
+                    PasswordStrength.STRONG,
+                    Optional.empty(),
+                    Optional.empty())));
+
+    AccountsListed received =
+        (AccountsListed) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertEquals(sent.accounts(), received.accounts());
+  }
+
+  @Test
+  void carriesAListingOfNoAccountsAtAll() {
+    AccountsListed sent = new AccountsListed(List.of());
+
+    AccountsListed received =
+        (AccountsListed) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertTrue(received.accounts().isEmpty(), "an empty listing is not a malformed message");
+  }
+
+  /**
+   * Saying nothing about a language and naming one are different facts about a person, and a codec
+   * that read a tag naming no language as "said nothing" would turn one into the other.
+   */
+  @Test
+  void refusesAnAccountWhoseLanguageNamesNoLanguage() {
+    String message =
+        """
+        {"type":"AccountsListed","accounts":[{"name":"finch.mercer","role":"OPERATOR",\
+        "passwordStrength":"WEAK","language":"???","lockedForMillis":null}]}\
+        """;
+
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(message.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void refusesAnAccountWithNoAnswerAboutItsLockoutAtAll() {
+    String message =
+        """
+        {"type":"AccountsListed","accounts":[{"name":"finch.mercer","role":"OPERATOR",\
+        "passwordStrength":"WEAK","language":null}]}\
+        """;
+
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(message.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void refusesAListingWhoseAccountsAreNotObjects() {
+    String message = "{\"type\":\"AccountsListed\",\"accounts\":[\"finch.mercer\"]}";
+
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(message.getBytes(StandardCharsets.UTF_8)));
   }
 
   /** Every one of the new codes is a constant a client has to be able to read back. */
@@ -519,6 +595,7 @@ class MessageCodecTest {
       case Logout logout -> logout.token().copyOfBytes();
       case AcknowledgePasswordReset seen -> seen.token().copyOfBytes();
       case ReadSecret read -> read.token().copyOfBytes();
+      case ListAccounts list -> list.token().copyOfBytes();
       case ChangeOwnPassword change -> change.token().copyOfBytes();
       default -> throw new AssertionError("not a request about a Session: " + received);
     };

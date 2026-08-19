@@ -1,5 +1,6 @@
 package com.javafxlogin.ui.login;
 
+import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import java.nio.file.Path;
 import java.util.function.Function;
@@ -54,6 +55,115 @@ public interface LoginGate {
    *     which is not a refusal and must not be shown as one
    */
   Admission admit(String accountName, char[] password);
+
+  /**
+   * Offers a name and a password on behalf of somebody asking to administer this deployment.
+   *
+   * <p>Story 37: the same screen, one control apart. It is a separate method rather than a flag
+   * because the two are separate questions — this one asks the service for a Session in the Role
+   * that manages Accounts and configuration, and nothing about it reaches the ProtectedFeature or
+   * the SecretVault. An Operator who asks it is refused, and refused over there, in the same words
+   * as a wrong password.
+   *
+   * <p>Blocks: verifying a password is deliberately slow, so this must not be called on the JavaFX
+   * application thread.
+   *
+   * @return the Session, or the refusal the service made, worded exactly as an Operator's would be
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  Admission administer(String accountName, char[] password);
+
+  /**
+   * Every Account this deployment holds, which is what the administration panel is drawn from.
+   *
+   * <p>The account list is the thing ADR-0002 keeps out of an unprivileged process's reach, so this
+   * is the one request that hands any of it over — and the privileged process refuses it to a
+   * Session that is not an Administrator's. What comes back carries no password material at all.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AccountListing accounts(Session session);
+
+  /**
+   * Creates an Operator, and is handed a one-time secret to give to the person who will use it.
+   *
+   * <p>The Administrator does not choose the password and is never told one: what comes back is an
+   * EnrolmentSecret, shown once, which its holder turns into a password nobody else has ever known.
+   * That is ASVS 5.0 §6.4.6, and it is why this method takes no password to pass on.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AccountProvisioned createOperator(Session session, String accountName);
+
+  /**
+   * Takes an Operator's password away and is handed an EnrolmentSecret to replace it.
+   *
+   * <p>The old password stops working at once rather than when the new one arrives, so a reset
+   * cannot be started and quietly abandoned — and the Operator is told it happened at their next
+   * admission. The same request re-issues a secret that was lost or has expired.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AccountProvisioned resetThePasswordOf(Session session, String accountName);
+
+  /**
+   * Deletes an Operator, and their wrapped copy of the DataKey with them.
+   *
+   * <p>What it costs is stated at the screen that asks for it, because nothing here can undo it:
+   * the Account, whatever it has failed, any outstanding enrolment and the only copy of the DataKey
+   * that this person's password opened all go. The secrets in the SecretVault stay where they are —
+   * every other Operator has a copy of their own.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AdministrationOutcome deleteOperator(Session session, String accountName);
+
+  /**
+   * Forgets what an Account has failed, which is how a colleague who fat-fingered their password is
+   * released before the Lockout runs out on its own.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AdministrationOutcome clearTheLockoutOf(Session session, String accountName);
+
+  /**
+   * Changes how long a Session may idle here, or switches expiry off entirely, which is what a
+   * kiosk deployment is.
+   *
+   * <p>The service reads the setting again on every decision, so this changes what happens next
+   * rather than what happens after a restart.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AdministrationOutcome useInactivityPeriod(Session session, InactivityPeriod period);
+
+  /**
+   * Copies the record of AuthenticationEvents to a file the Administrator names, which is the only
+   * way that record is ever read.
+   *
+   * <p>Nothing hands an event back to the application: what comes back says how much was copied and
+   * whether the chain still held, and the copy itself is written by the privileged process, owner
+   * only, wherever it was told to. A destination it will not write to is a refusal and not a
+   * failure.
+   *
+   * <p>Blocks: it crosses the socket, and the record is copied while it does. Must not be called on
+   * the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  ExportOutcome exportAuthenticationEventsTo(Session session, Path destination);
 
   /**
    * Reports that the Operator did something, which is what starts the Session's countdown again.
@@ -189,6 +299,10 @@ public interface LoginGate {
    * Opens whichever window this installation needs on {@code stage} — the first-run wizard while
    * there is no Administrator, the login screen once there is — and, once an Operator is admitted,
    * closes it and opens the view {@code protectedFeature} builds on a stage of its own.
+   *
+   * <p>Somebody who asked for the administration panel instead is handed the same way to a window
+   * of the gate's own, and back to the login screen when they are done with it — the host product's
+   * view is never built for them, because an Administrator does not reach it.
    *
    * <p>That stage is the gate's, not the host product's. It carries the view it was handed and one
    * control of the gate's own above it, which is where an Operator logs out; and it closes, handing

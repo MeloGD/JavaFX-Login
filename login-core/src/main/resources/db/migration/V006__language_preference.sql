@@ -1,0 +1,18 @@
+-- The language each Account's holder reads the interface in.
+--
+-- Recorded here because the administration panel lists it beside the Role and the coarse band: an
+-- Administrator looking at the Accounts of a deployment is looking at who is on it, and what
+-- language each of them works in is part of that. Issue #13 is what fills the column — the selector,
+-- the ResourceBundles and the rule that an Account's own preference applies once it has
+-- authenticated all belong to it — and this build only reads what is here.
+--
+-- Absent means the Account has said nothing, and an Account that has said nothing follows the
+-- machine's own locale. It is nullable rather than defaulted for exactly that reason: a column that
+-- defaulted to a language would be every Account claiming a preference nobody expressed, and the
+-- login screen has to be readable before anyone has authenticated anyway.
+--
+-- Held as an IETF BCP 47 language tag, which is what java.util.Locale reads and writes without
+-- interpretation. No CHECK constraint names the languages a build ships: adding one is issue #13's
+-- to do in a ResourceBundle, and a schema that had to be migrated for it would make adding a
+-- language a change of shape rather than of content.
+ALTER TABLE accounts ADD COLUMN language TEXT;

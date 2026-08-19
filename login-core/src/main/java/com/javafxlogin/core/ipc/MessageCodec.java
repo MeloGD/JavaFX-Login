@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
@@ -25,6 +26,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -115,6 +117,7 @@ public final class MessageCodec {
                   .put("newPassword", new String(change.newPassword()));
           case DeleteAccount delete ->
               carrying("DeleteAccount", delete.token()).put("accountName", delete.accountName());
+          case ListAccounts list -> carrying("ListAccounts", list.token());
           case ReadSecret read -> carrying("ReadSecret", read.token()).put("name", read.name());
           case KeepSecret keep ->
               carrying("KeepSecret", keep.token())
@@ -136,6 +139,7 @@ public final class MessageCodec {
           case SecretRevealed revealed ->
               message("SecretRevealed").put("secret", new String(revealed.secret()));
           case Denied denied -> denied(denied);
+          case AccountsListed listed -> accountsListed(listed);
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
           case AuthenticationEventsExported exported -> exported(exported.export());
@@ -185,6 +189,7 @@ public final class MessageCodec {
           new ChangeOwnPassword(
               token(message), chars(message, "currentPassword"), chars(message, "newPassword"));
       case "DeleteAccount" -> new DeleteAccount(token(message), text(message, "accountName"));
+      case "ListAccounts" -> new ListAccounts(token(message));
       case "ReadSecret" -> new ReadSecret(token(message), text(message, "name"));
       case "KeepSecret" ->
           new KeepSecret(token(message), text(message, "name"), chars(message, "secret"));
@@ -212,6 +217,7 @@ public final class MessageCodec {
                               "A secret that expires at no moment is not one this build reads")));
       case "SecretRevealed" -> new SecretRevealed(chars(message, "secret"));
       case "Denied" -> denied(message);
+      case "AccountsListed" -> new AccountsListed(accountsIn(message));
       case "Ok" -> new Ok();
       case "Assessed" ->
           new Assessed(
@@ -266,6 +272,81 @@ public final class MessageCodec {
     } catch (DateTimeParseException e) {
       throw new MalformedMessageException("The " + field + " field is not a moment", e);
     }
+  }
+
+  /**
+   * Every Account the administration panel lists, one object each.
+   *
+   * <p>Written out field by field like every other message here, rather than by handing the record
+   * to Jackson: what leaves the privileged process is what this method names, so a later build that
+   * added a field to {@link AccountSummary} would have to come here before it could put it on the
+   * wire.
+   */
+  private static ObjectNode accountsListed(AccountsListed listed) {
+    ArrayNode accounts = MAPPER.createArrayNode();
+    for (AccountSummary account : listed.accounts()) {
+      ObjectNode entry =
+          MAPPER
+              .createObjectNode()
+              .put("name", account.name())
+              .put("role", account.role().name())
+              .put("passwordStrength", account.passwordStrength().name());
+      account
+          .language()
+          .ifPresentOrElse(
+              language -> entry.put("language", language.toLanguageTag()),
+              () -> entry.putNull("language"));
+      millis(entry, "lockedForMillis", account.lockedFor());
+      accounts.add(entry);
+    }
+    ObjectNode message = message("AccountsListed");
+    message.set("accounts", accounts);
+    return message;
+  }
+
+  private static List<AccountSummary> accountsIn(ObjectNode message) {
+    JsonNode field = message.get("accounts");
+    if (!(field instanceof ArrayNode array)) {
+      throw new MalformedMessageException("The accounts field is missing or is not a list");
+    }
+    List<AccountSummary> accounts = new ArrayList<>();
+    for (JsonNode element : array) {
+      if (!(element instanceof ObjectNode account)) {
+        throw new MalformedMessageException("An Account is an object, and this is not one");
+      }
+      accounts.add(
+          new AccountSummary(
+              text(account, "name"),
+              constant(Role.class, account, "role"),
+              constant(PasswordStrength.class, account, "passwordStrength"),
+              language(account),
+              millis(account, "lockedForMillis")));
+    }
+    return accounts;
+  }
+
+  /**
+   * The language an Account's holder reads, as a BCP 47 tag — or an explicit {@code null} where
+   * they have said nothing, for the reason {@link #sessionLive} gives.
+   *
+   * <p>A tag that names no language is refused rather than read as having said nothing: the two
+   * mean different things to whoever is reading the panel, and this codec does not turn one into
+   * the other.
+   */
+  private static Optional<Locale> language(ObjectNode account) {
+    JsonNode value = account.get("language");
+    if (value == null || !(value.isNull() || value.isTextual())) {
+      throw new MalformedMessageException(
+          "The language field is missing or is neither a language tag nor null");
+    }
+    if (value.isNull()) {
+      return Optional.empty();
+    }
+    Locale language = Locale.forLanguageTag(value.textValue());
+    if (language.getLanguage().isEmpty()) {
+      throw new MalformedMessageException("No language is named by the tag " + value.textValue());
+    }
+    return Optional.of(language);
   }
 
   private static ObjectNode exported(AuthenticationEventExport export) {

@@ -50,6 +50,17 @@ MachineAdministrator. It prefills and suggests nothing, and it issues no recover
 key.
 _Avoid_: setup screen, onboarding, installer, registration
 
+**AdministrationPanel**:
+The screens an Administrator runs a deployment from: the Accounts it holds, the
+configuration that applies to all of them, and the copy of the
+AuthenticationEvents. It is reached from the same screen as the ProtectedFeature
+and one control apart — the attempt asks for the Administrator Role rather than
+the Operator one — and every request behind it is refused by the
+AuthenticationService unless the Session naming it is an Administrator's, so
+drawing the window is never what grants it. There is nowhere on it to type
+anybody's password, and nothing it shows once can be asked for again.
+_Avoid_: admin screen, management console, dashboard, settings
+
 **Role**:
 The single capability set attached to an Account: either Administrator or
 Operator. Roles are mutually exclusive and an Account never holds both.
@@ -86,13 +97,22 @@ _Avoid_: forgot password, recovery, password change
 A second proof of identity, beyond the password, that an Account could be asked
 for. Deferred from v1: a seam and a reserved column in the CredentialStore exist
 so that adding one later is a change of behaviour rather than of shape. Nothing
-implements it, and the administration UI shows the option visibly disabled.
+implements it, and the AdministrationPanel shows the option visibly disabled.
 _Avoid_: 2FA, MFA, TOTP, one-time code
 
 **PasswordStrength**:
 A coarse estimate — weak, acceptable or strong — of how resistant an Account's
 password is to guessing. Only the coarse band is ever recorded.
 _Avoid_: score, entropy, complexity rating
+
+**LanguagePreference**:
+The language the person using an Account reads the interface in, or nothing at
+all where they have said nothing and the machine's own locale answers for them.
+It is held in the CredentialStore beside the Account and listed in the
+AdministrationPanel. Choosing one, and applying it once somebody has
+authenticated, is issue #13's — until then every Account reads as having said
+nothing, which is what a deployment that has never been asked looks like.
+_Avoid_: locale, i18n setting, translation, language
 
 **AccountPolicy**:
 The rules about what an Account name and a password are allowed to be, applied

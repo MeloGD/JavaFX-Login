@@ -21,7 +21,8 @@ public final class SchemaMigrations {
               "db/migration/V002__password_strength.sql",
               "db/migration/V003__configuration.sql",
               "db/migration/V004__lockout.sql",
-              "db/migration/V005__enrolment.sql"));
+              "db/migration/V005__enrolment.sql",
+              "db/migration/V006__language_preference.sql"));
 
   private SchemaMigrations() {}
 
