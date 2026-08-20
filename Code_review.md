@@ -1978,7 +1978,7 @@ judging rather than rediscovering, and what is deliberately left open.
 | | |
 |---|---|
 | Branch | `dev-login` |
-| Commits | `4d9d533` (implementation), `1478c85` (review fixes) |
+| Commits | `4d9d533` (implementation), `8f53875` (review fixes), and this one, which records them |
 | Base / fixed point | `9f8f76b` ("Open the Vault with a password rather than with an answer") |
 | Diff to review | `git diff 9f8f76b...HEAD` |
 | Packages | `com.javafxlogin.core.account`, `…core.ipc`, `…core.store`, `…core.authentication` in `login-core`; `com.javafxlogin.ui.login` in `login-ui` |
