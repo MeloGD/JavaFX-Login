@@ -2,9 +2,6 @@ package com.javafxlogin.ui.login;
 
 import com.javafxlogin.core.session.Session;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.format.FormatStyle;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.fxml.FXML;
@@ -24,20 +21,11 @@ import javafx.scene.layout.StackPane;
 public final class SessionController {
 
   /**
-   * Story 29, and every string here moves to a ResourceBundle when the interface learns a second
-   * language. It says who did it and when, because those are the two things that let the person tell
-   * a reset they were expecting from one they were not.
+   * Story 29. It says who did it and when, because those are the two things that let a person tell
+   * a reset they were expecting from one they were not — and it is said in the language that person
+   * reads, with the moment written the way their language writes moments.
    */
-  private static final String PASSWORD_WAS_RESET =
-      "Tu contraseña fue restablecida por la administración el %s. Si no lo habías pedido,"
-          + " comunícalo.";
-
-  /**
-   * The moment as this machine writes moments. The audit log's own format is ISO-8601 because it is
-   * read by tools; this one is read by a person over their own shoulder.
-   */
-  private static final DateTimeFormatter WHEN =
-      DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault());
+  private static final String PASSWORD_WAS_RESET = "session.password-was-reset";
 
   @FXML private BorderPane root;
   @FXML private StackPane protectedFeature;
@@ -46,6 +34,7 @@ public final class SessionController {
   @FXML private Button noticeRead;
 
   private LoginGate gate;
+  private InterfaceLanguage saidIn;
   private Session session;
   private Consumer<String> handBack;
   private SessionGuard guard;
@@ -55,8 +44,14 @@ public final class SessionController {
    * Puts the host's view inside, sets a guard watching everything done to it, and says the one thing
    * the service said only once.
    */
-  void hold(LoginGate gate, Admitted admitted, Parent view, Consumer<String> handBack) {
+  void hold(
+      LoginGate gate,
+      Admitted admitted,
+      InterfaceLanguage saidIn,
+      Parent view,
+      Consumer<String> handBack) {
     this.gate = Objects.requireNonNull(gate, "gate");
+    this.saidIn = Objects.requireNonNull(saidIn, "saidIn");
     this.handBack = Objects.requireNonNull(handBack, "handBack");
     Objects.requireNonNull(admitted, "admitted");
     this.session = admitted.session();
@@ -75,8 +70,8 @@ public final class SessionController {
     noticeRead.setManaged(true);
   }
 
-  private static String sentenceFor(Instant resetAt) {
-    return PASSWORD_WAS_RESET.formatted(WHEN.format(resetAt));
+  private String sentenceFor(Instant resetAt) {
+    return saidIn.say(PASSWORD_WAS_RESET, saidIn.moments().format(resetAt));
   }
 
   /**
@@ -124,6 +119,8 @@ public final class SessionController {
           return SessionEndedText.LOGGED_OUT;
         },
         this::theSessionEnded,
+        // Not an answer, and not this window's to word either: it is said at the login screen, in
+        // whatever language that one is drawn in.
         this::theSessionEnded);
   }
 
@@ -137,8 +134,11 @@ public final class SessionController {
   /**
    * However the Session ended — a logout, the clocks, a service that went away — this window is
    * done. The guard is stopped first: whatever it is in the middle of asking about is over.
+   *
+   * <p>What is handed back is the key of what to say and not the sentence: this window is closing,
+   * and the login screen that says it is drawn in the language nobody had to authenticate for.
    */
-  private void theSessionEnded(String sentence) {
+  private void theSessionEnded(String saying) {
     // A Session can only end once, and two things watch for it: a logout in flight and the guard
     // asking. Whichever gets here first is the one the person is told about.
     if (over) {
@@ -146,6 +146,6 @@ public final class SessionController {
     }
     over = true;
     stopWatching();
-    handBack.accept(sentence);
+    handBack.accept(saying);
   }
 }

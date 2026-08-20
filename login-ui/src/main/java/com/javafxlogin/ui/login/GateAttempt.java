@@ -14,18 +14,16 @@ import javafx.application.Platform;
  * that long looks broken, so no controller may ask on the thread that draws it — and having each
  * of them arrange that separately is how one of them ends up not doing it.
  *
- * <p>What is not an answer is worded here too, for the same reason: a service that cannot be
+ * <p>What is not an answer is named here too, for the same reason: a service that cannot be
  * reached, and a defect below that produced no answer at all, mean the same thing to a person
- * whichever window they are looking at.
+ * whichever window they are looking at. What comes back is the key of that sentence and not the sentence,
+ * because the window asking is the one that knows which language it is being drawn in.
  */
 final class GateAttempt {
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String UNREACHABLE =
-      "No se ha podido contactar con el servicio de autenticación.";
+  private static final String UNREACHABLE = "service.unreachable";
 
-  private static final String UNANSWERED =
-      "No se ha podido completar el intento. Vuelve a intentarlo.";
+  private static final String UNANSWERED = "service.unanswered";
 
   private GateAttempt() {}
 
@@ -58,9 +56,14 @@ final class GateAttempt {
    * a sentence to {@code unanswered}, on the JavaFX application thread.
    *
    * @param threadName what the attempt is called in a stack trace
+   * @param unanswered handed the key of what to say rather than the sentence, so that the window
+   *     asking words it in the language it is itself drawn in
    */
   static <A> void make(
-      String threadName, Supplier<A> question, Consumer<A> answered, Consumer<String> unanswered) {
+      String threadName,
+      Supplier<A> question,
+      Consumer<A> answered,
+      Consumer<String> unanswered) {
     Thread.ofVirtual()
         .name(threadName)
         .start(

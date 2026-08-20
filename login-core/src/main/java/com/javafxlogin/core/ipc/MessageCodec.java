@@ -93,6 +93,11 @@ public final class MessageCodec {
           case ChangeInactivityPeriod change ->
               carrying("ChangeInactivityPeriod", change.token())
                   .put("period", change.period().text());
+          case ChangeLanguagePreference change ->
+              languagePreference(
+                  carrying("ChangeLanguagePreference", change.token())
+                      .put("accountName", change.accountName()),
+                  change.preference());
           case ClearLockout clear ->
               carrying("ClearLockout", clear.token()).put("accountName", clear.accountName());
           case ExportAuthenticationEvents export ->
@@ -174,6 +179,9 @@ public final class MessageCodec {
       case "AskIfSessionIsLive" -> new AskIfSessionIsLive(token(message));
       case "Logout" -> new Logout(token(message));
       case "ChangeInactivityPeriod" -> new ChangeInactivityPeriod(token(message), period(message));
+      case "ChangeLanguagePreference" ->
+          new ChangeLanguagePreference(
+              token(message), text(message, "accountName"), languagePreference(message));
       case "ClearLockout" -> new ClearLockout(token(message), text(message, "accountName"));
       case "ExportAuthenticationEvents" ->
           new ExportAuthenticationEvents(token(message), destination(message));
@@ -206,7 +214,9 @@ public final class MessageCodec {
     ObjectNode message = read(payload);
     String type = text(message, TYPE);
     return switch (type) {
-      case "Granted" -> new Granted(token(message), moment(message, "passwordResetAt"));
+      case "Granted" ->
+          new Granted(
+              token(message), moment(message, "passwordResetAt"), languagePreference(message));
       case "EnrolmentIssued" ->
           new EnrolmentIssued(
               text(message, "secret"),
@@ -243,7 +253,21 @@ public final class MessageCodec {
    * #sessionLive} gives — a missing field is a message this codec does not read.
    */
   private static ObjectNode granted(Granted granted) {
-    return moment(carrying("Granted", granted.token()), "passwordResetAt", granted.passwordResetAt());
+    return languagePreference(
+        moment(carrying("Granted", granted.token()), "passwordResetAt", granted.passwordResetAt()),
+        granted.languagePreference());
+  }
+
+  /**
+   * A language, as a BCP 47 tag, or an explicit {@code null} where whoever it is about has said
+   * nothing — written for the reason {@link #sessionLive} gives, and read back by {@link
+   * #languagePreference(ObjectNode)}.
+   */
+  private static ObjectNode languagePreference(ObjectNode message, Optional<Locale> preference) {
+    preference.ifPresentOrElse(
+        present -> message.put("languagePreference", present.toLanguageTag()),
+        () -> message.putNull("languagePreference"));
+    return message;
   }
 
   private static ObjectNode moment(
@@ -292,11 +316,7 @@ public final class MessageCodec {
           .ifPresentOrElse(
               band -> entry.put("passwordStrength", band.name()),
               () -> entry.putNull("passwordStrength"));
-      account
-          .languagePreference()
-          .ifPresentOrElse(
-              preference -> entry.put("languagePreference", preference.toLanguageTag()),
-              () -> entry.putNull("languagePreference"));
+      languagePreference(entry, account.languagePreference());
       millis(entry, "lockedForMillis", account.lockedFor());
       accounts.add(entry);
     }
@@ -343,15 +363,16 @@ public final class MessageCodec {
   }
 
   /**
-   * The language an Account's holder reads, as a BCP 47 tag — or an explicit {@code null} where
-   * they have said nothing, for the reason {@link #sessionLive} gives.
+   * The language somebody reads, as a BCP 47 tag — or an explicit {@code null} where they have said
+   * nothing, for the reason {@link #sessionLive} gives. Read the same way wherever it appears: on
+   * an Account in the panel's list, on the admission that says whose preference to apply, and on
+   * the request that records one.
    *
    * <p>A tag that names no language is refused rather than read as having said nothing: the two
-   * mean different things to whoever is reading the panel, and this codec does not turn one into
-   * the other.
+   * mean different things to whoever reads them, and this codec does not turn one into the other.
    */
-  private static Optional<Locale> languagePreference(ObjectNode account) {
-    JsonNode value = account.get("languagePreference");
+  private static Optional<Locale> languagePreference(ObjectNode message) {
+    JsonNode value = message.get("languagePreference");
     if (value == null || !(value.isNull() || value.isTextual())) {
       throw new MalformedMessageException(
           "The languagePreference field is missing or is neither a language tag nor null");

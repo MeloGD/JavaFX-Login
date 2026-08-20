@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -79,6 +80,9 @@ final class FakeLoginGate implements LoginGate {
   private volatile FirstRunOutcome nextOutcome = new AdministratorCreated();
   private volatile EnrolmentOutcome nextEnrolmentOutcome = new Enrolled();
   private volatile Instant passwordResetAt;
+
+  /** What the service says on the next admission about the language that Account reads. */
+  private volatile Locale languagePreference;
   private volatile boolean noticeReadFails;
 
   /** What the Vault answers with instead of a secret, or null where it answers with the secret. */
@@ -133,6 +137,15 @@ final class FakeLoginGate implements LoginGate {
   /** What the service says on the next admission about a reset the person was never told about. */
   void withAPasswordResetAt(Instant resetAt) {
     passwordResetAt = resetAt;
+  }
+
+  /**
+   * An Account whose holder has said which language they read, which the service answers the
+   * admission with.
+   */
+  FakeLoginGate readingTheInterfaceIn(Locale preference) {
+    languagePreference = preference;
+    return this;
   }
 
   /**
@@ -287,7 +300,10 @@ final class FakeLoginGate implements LoginGate {
       // wrong password, because telling the two apart would name the Role an Account holds.
       return NotAdmitted.because(DeniedReason.AUTH_FAILED);
     }
-    return new Admitted(new Session(SessionToken.generate(new SecureRandom())));
+    return new Admitted(
+        new Session(SessionToken.generate(new SecureRandom())),
+        Optional.empty(),
+        Optional.ofNullable(languagePreference));
   }
 
   @Override
@@ -395,6 +411,35 @@ final class FakeLoginGate implements LoginGate {
   }
 
   @Override
+  public AdministrationOutcome useLanguagePreference(
+      Session session, String accountName, Optional<Locale> preference) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(preference, "preference");
+    administrations.add(
+        "useLanguagePreference:"
+            + accountName
+            + ":"
+            + preference.map(Locale::toLanguageTag).orElse("the machine's"));
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    AccountSummary account = accounts.get(accountName);
+    if (account == null) {
+      return new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT);
+    }
+    // As the service does: the list an Administrator reads afterwards says what was recorded.
+    accounts.put(
+        accountName,
+        new AccountSummary(
+                account.name(), account.role(), account.passwordStrength(), preference)
+            .lockedFor(account.lockedFor()));
+    return new Administered();
+  }
+
+  @Override
   public AdministrationOutcome useInactivityPeriod(Session session, InactivityPeriod period) {
     Objects.requireNonNull(session, "session");
     administrations.add("useInactivityPeriod:" + period.text());
@@ -449,7 +494,8 @@ final class FakeLoginGate implements LoginGate {
     }
     return new Admitted(
         new Session(SessionToken.generate(new SecureRandom())),
-        Optional.ofNullable(passwordResetAt));
+        Optional.ofNullable(passwordResetAt),
+        Optional.ofNullable(languagePreference));
   }
 
   @Override

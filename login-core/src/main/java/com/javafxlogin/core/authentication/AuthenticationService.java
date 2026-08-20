@@ -22,6 +22,7 @@ import com.javafxlogin.core.ipc.AuthenticationEventsExported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
+import com.javafxlogin.core.ipc.ChangeLanguagePreference;
 import com.javafxlogin.core.ipc.ChangeOwnPassword;
 import com.javafxlogin.core.ipc.ClearLockout;
 import com.javafxlogin.core.ipc.CompleteEnrolment;
@@ -70,6 +71,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
@@ -285,6 +287,7 @@ public final class AuthenticationService implements AutoCloseable {
         case AskIfSessionIsLive ask -> askIfSessionIsLive(ask, connection);
         case Logout logout -> logOut(logout, connection);
         case ChangeInactivityPeriod change -> changeInactivityPeriod(change, connection);
+        case ChangeLanguagePreference change -> changeLanguagePreference(change, connection);
         case ClearLockout clear -> clearLockout(clear, connection);
         case ExportAuthenticationEvents export -> exportAuthenticationEvents(export, connection);
         case CreateAccount create -> createAccount(create, connection);
@@ -457,7 +460,12 @@ public final class AuthenticationService implements AutoCloseable {
     // records a refusal, which is over by the time it is written; an admission is not over until
     // there is a Session, and the record says what happened rather than what was about to.
     record(AuthenticationEventType.AUTHENTICATION_SUCCEEDED, account.get().name());
-    return new Granted(token, passwordResetAt);
+
+    // The language this person reads, sent with the admission because this is the moment it becomes
+    // answerable: until a password has been offered and found right, there is a name somebody typed
+    // and no Account it has been proved to be. An Account that has said nothing sends nothing, and
+    // the client goes on drawing whatever the machine it runs on reads.
+    return new Granted(token, passwordResetAt, store.languagePreferenceOf(account.get().name()));
   }
 
   /**
@@ -924,6 +932,37 @@ public final class AuthenticationService implements AutoCloseable {
         request.token(),
         connection,
         live -> onlyAnAdministrator(live, () -> changeFor(live, request.period())));
+  }
+
+  /**
+   * Records which language an Account's holder reads the interface in, which is issue #13's half of
+   * the LanguagePreference the panel already lists.
+   *
+   * <p>It is an Administrator's request like every other one about somebody else's Account, and it
+   * is refused for a name no Account holds rather than answered with a cheerful {@link Ok}: an
+   * Administrator who mistyped it would otherwise walk away believing somebody's screens had
+   * changed language.
+   *
+   * <p>Nothing here asks whether a client ships that language. The bundles are the client's, and a
+   * service that held the list of them would have to be changed — and restarted, privileged — to
+   * add a language, which is exactly what issue #13 asks not to be true.
+   */
+  private Response changeLanguagePreference(
+      ChangeLanguagePreference request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live ->
+            onlyAnAdministrator(
+                live, () -> recordPreference(request.accountName(), request.preference())));
+  }
+
+  private Response recordPreference(String accountName, Optional<Locale> preference) {
+    if (!store.setLanguagePreference(accountName, preference)) {
+      return new ErrorResponse(ErrorCode.NO_SUCH_ACCOUNT);
+    }
+    record(AuthenticationEventType.LANGUAGE_PREFERENCE_CHANGED, accountName);
+    return new Ok();
   }
 
   /**

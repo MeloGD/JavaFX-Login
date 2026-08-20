@@ -16,7 +16,9 @@
   Nothing is prefilled but the name, and only where the person arrived from the login screen having
   typed it there.
 
-  Every string here moves to a ResourceBundle when the interface learns a second language.
+  Every string here is a %key the FXMLLoader resolves out of the bundle for the language this screen
+  is drawn in. Somebody enrolling has not authenticated, so that is the machine's own language or
+  whatever was chosen at the login screen they came from.
 -->
 
 <?import javafx.geometry.Insets?>
@@ -34,25 +36,25 @@
     <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
   </padding>
 
-  <Label text="Establecer contraseña" styleClass="title"/>
+  <Label text="%enrolment.title" styleClass="title"/>
 
-  <Label styleClass="explanation" wrapText="true" text="Esta cuenta todavía no tiene contraseña. Escribe el código de un solo uso que te han dado y elige tu contraseña: nadie más la conocerá, ni siquiera quien administre la aplicación."/>
+  <Label styleClass="explanation" wrapText="true" text="%enrolment.explanation"/>
 
-  <Label styleClass="warning" wrapText="true" text="Esta contraseña no se puede recuperar. Si la pierdes, tendrán que darte otro código para volver a establecerla. Guárdala en un gestor de contraseñas antes de continuar."/>
+  <Label styleClass="warning" wrapText="true" text="%enrolment.recovery-warning"/>
 
-  <Label text="Nombre de cuenta" styleClass="field-label"/>
+  <Label text="%enrolment.account-name" styleClass="field-label"/>
   <TextField fx:id="accountName"/>
 
-  <Label text="Código de un solo uso" styleClass="field-label"/>
+  <Label text="%enrolment.secret" styleClass="field-label"/>
   <TextField fx:id="secret"/>
 
-  <Label text="Contraseña" styleClass="field-label"/>
+  <Label text="%enrolment.password" styleClass="field-label"/>
   <PasswordField fx:id="password"/>
 
-  <Label text="Repite la contraseña" styleClass="field-label"/>
+  <Label text="%enrolment.repeated-password" styleClass="field-label"/>
   <PasswordField fx:id="repeatedPassword"/>
 
-  <Button fx:id="enrol" text="Establecer la contraseña" onAction="#onEnrol"
+  <Button fx:id="enrol" text="%enrolment.enrol" onAction="#onEnrol"
           defaultButton="true" maxWidth="Infinity"/>
 
   <Label fx:id="enrolmentMessage" styleClass="message" wrapText="true"/>

@@ -4,7 +4,7 @@
 -- Administrator looking at the Accounts of a deployment is looking at who is on it, and what
 -- language each of them works in is part of that. Issue #13 is what fills the column — the selector,
 -- the ResourceBundles and the rule that an Account's own preference applies once it has
--- authenticated all belong to it — and this build only reads what is here.
+-- authenticated all belong to it, and it has since landed: see ADR-0014.
 --
 -- Absent means the Account has said nothing, and an Account that has said nothing follows the
 -- machine's own locale. It is nullable rather than defaulted for exactly that reason: a column that

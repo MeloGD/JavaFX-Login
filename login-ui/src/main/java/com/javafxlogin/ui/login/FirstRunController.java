@@ -15,21 +15,17 @@ import javafx.scene.control.TextField;
  * of this class worth nothing: it can send whatever it likes and be refused all the same.
  *
  * <p>What it does own is the wording. The service names a broken rule; this turns it into a
- * sentence, and it says every one of them at once so that a person fixes the whole thing rather
- * than discovering it a rule at a time.
+ * sentence in the language the window was drawn in, and it says every one of them at once so that a
+ * person fixes the whole thing rather than discovering it a rule at a time.
  *
  * <p>The attempt runs off the JavaFX application thread, because a password is hashed at the other
  * end and a window frozen for the length of an Argon2id hash looks broken.
  */
 public final class FirstRunController {
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String ADMINISTRATOR_EXISTS =
-      "Esta instalación ya tiene su cuenta de administración. Reinicia la aplicación para acceder.";
+  private static final String ADMINISTRATOR_EXISTS = "first-run.administrator-exists";
 
-  private static final String NOT_MACHINE_ADMINISTRATOR =
-      "Solo puede crear esta cuenta quien administre el equipo. Cierra la aplicación y vuelve a"
-          + " abrirla desde una cuenta del sistema con permisos de administración.";
+  private static final String NOT_MACHINE_ADMINISTRATOR = "first-run.not-machine-administrator";
 
   @FXML private TextField administratorName;
   @FXML private PasswordField administratorPassword;
@@ -37,11 +33,13 @@ public final class FirstRunController {
   @FXML private Label firstRunMessage;
 
   private LoginGate gate;
+  private InterfaceLanguage saidIn;
   private Runnable onCreated;
 
   /** Wires the window to the gate behind it, and to whatever opens once the Account exists. */
-  void createWith(LoginGate gate, Runnable onCreated) {
+  void createWith(LoginGate gate, InterfaceLanguage saidIn, Runnable onCreated) {
     this.gate = Objects.requireNonNull(gate, "gate");
+    this.saidIn = Objects.requireNonNull(saidIn, "saidIn");
     this.onCreated = Objects.requireNonNull(onCreated, "onCreated");
   }
 
@@ -56,15 +54,16 @@ public final class FirstRunController {
         secret,
         () -> gate.createAdministrator(name, secret),
         this::showOutcome,
-        this::refused);
+        this::refusedSaying);
   }
 
   private void showOutcome(FirstRunOutcome outcome) {
     switch (outcome) {
       case AdministratorCreated ignored -> created();
-      case PolicyRefusal refusal -> refused(PolicyViolationText.paragraphFor(refusal.violations()));
+      case PolicyRefusal refusal ->
+          refused(PolicyViolationText.paragraphFor(saidIn, refusal.violations()));
       case FirstRunRefused refused ->
-          refused(
+          refusedSaying(
               switch (refused.reason()) {
                 case ADMINISTRATOR_EXISTS -> ADMINISTRATOR_EXISTS;
                 case NOT_MACHINE_ADMINISTRATOR -> NOT_MACHINE_ADMINISTRATOR;
@@ -77,6 +76,11 @@ public final class FirstRunController {
     // being left in a control the scene graph may keep alive.
     administratorPassword.clear();
     onCreated.run();
+  }
+
+  /** What this window says about a refusal, from the key of it. */
+  private void refusedSaying(String key) {
+    refused(saidIn.say(key));
   }
 
   /**

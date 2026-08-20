@@ -3,6 +3,7 @@ package com.javafxlogin.ui.login;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.session.Session;
+import java.util.Locale;
 import javafx.scene.Parent;
 import javafx.scene.control.Label;
 import javafx.scene.layout.StackPane;
@@ -23,6 +24,14 @@ import org.testfx.framework.junit5.ApplicationTest;
  */
 class NoServiceAtStartupTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private Stage stage;
 
   @Override
@@ -30,7 +39,7 @@ class NoServiceAtStartupTest extends ApplicationTest {
     this.stage = stage;
     FakeLoginGate gate = new FakeLoginGate().needingItsAdministrator();
     gate.becomeUnreachable();
-    gate.protect(stage, this::protectedFeature);
+    GateFlow.open(gate, stage, this::protectedFeature, SPANISH);
   }
 
   private Parent protectedFeature(Session session) {

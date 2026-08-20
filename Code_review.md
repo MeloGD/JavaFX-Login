@@ -2123,3 +2123,155 @@ Both axes ran against `4d9d533`, with `9f8f76b` as the fixed point.
   awaiting enrolment simply has no password to take away. What the review was
   right about is that the panel could not *tell* which Accounts those were; it
   now can, and the wording follows.
+
+# Code review — Interface language (issue #13, Seams 1–3)
+
+Written for a final reviewing agent, in the shape the earlier sections use: what
+was built, what the ticket asked for against evidence, the decisions worth
+judging rather than rediscovering, and what is deliberately left open.
+
+## 1. Where the code is
+
+| | |
+|---|---|
+| Branch | `dev-login` |
+| Commits | this one |
+| Base / fixed point | `9e05fc7` ("Name in the report the commits the report is about") |
+| Diff to review | `git diff 9e05fc7...HEAD` |
+| Packages | `com.javafxlogin.core.ipc`, `…core.store`, `…core.authentication`, `…core.audit` in `login-core`; `com.javafxlogin.ui.login` in `login-ui` |
+| Binding decision | ADR-0014 (`docs/adr/0014-the-interface-language-is-the-clients-and-is-chosen-twice.md`) |
+| Build | `mvn -o test` → 623 tests, 0 failures, 1 skipped by an OS guard (core 499, ui 123, feature 1) |
+
+New at the service: `ChangeLanguagePreference`, `LANGUAGE_PREFERENCE_CHANGED`,
+`CredentialStore.setLanguagePreference` / `languagePreferenceOf`, and an
+`Optional<Locale>` on `Granted`. New at the client: `InterfaceLanguage`,
+`GateFlow`, `messages.properties`, `messages_es.properties`,
+`languages.properties`, and `LoginGate.useLanguagePreference`. Every window is
+now loaded with a bundle, so the five FXML files hold `%keys` and not sentences.
+
+## 2. What the ticket asked for
+
+Issue #13, "Interface language: ResourceBundle, OS locale and per-Account
+preference". Blocked by #12 (administration panel), landed. Parent spec is issue
+#1.
+
+### Acceptance criteria against evidence
+
+| Criterion | Status | Proof |
+|---|---|---|
+| Every user-facing string comes from a `ResourceBundle`; adding a language touches no code | met | `messages.properties` + `messages_es.properties`; the five FXML files hold only `%keys`; `grep` for a Spanish literal in `login-ui/src/main` returns nothing. Which languages exist is `languages.properties`, so a new language is two files |
+| The login screen and the first-run wizard follow the operating-system locale | met | `InterfaceLanguage.ofTheMachine()` reads `Locale.Category.DISPLAY`; `WordingTest.theMachinesOwnLanguageIsTheOneItDisplaysIn`, `…theClosestOfferedLanguageIsTheOneDrawn`, `…aLocaleThatNamesNoLanguageIsDrawnInTheFirstOneOffered`; `LanguageWindowTest.theLoginScreenFollowsTheMachine` |
+| A language selector on the login screen overrides that locale for the session | met | `LanguageWindowTest.theSelectorOffersEveryLanguageThisBuildShips`, `…choosingALanguageRedrawsTheLoginScreenInIt`, `…whatTheOldLanguageSaidDoesNotSurviveTheNewOne`, `…theEnrolmentScreenIsDrawnInTheLanguageTheLoginScreenWasIn` |
+| After authentication, the Account's own language preference is applied | met | `LanguagePreferenceTest.anAdmissionCarriesTheLanguageTheAccountReads`, `…anAdministratorsOwnAdmissionCarriesTheirLanguage`, `…anAdmissionOfAnAccountThatHasSaidNothingCarriesNoLanguage` (seam 1); `ServiceLoginGateTest.carriesALanguagePreferenceThroughToTheServiceAndBackOnTheNextAdmission` (seam 2); `LanguageWindowTest.theAdmittedAccountsOwnLanguageIsWhatTheirWindowIsDrawnIn`, `…anAccountThatHasSaidNothingKeepsTheLanguageTheLoginScreenWasIn` (seam 3) |
+| The `Administrator` can set an Account's language preference from the administration panel | met | `LanguagePreferenceTest` (8 tests: who may, who may not, a name no Account holds, a Session that ended, the record); `AdministrationWindowTest.anAdministratorSaysWhichLanguageAnAccountReads`, `…anAccountIsPutBackToFollowingTheMachine`, `…choosingAnAccountShowsTheLanguageItReads`, `…aLanguageCannotBeSetWithoutChoosingAnAccountFirst` |
+| Spanish and English bundles both exist and are complete | met | `WordingTest.everyOfferedLanguageHoldsExactlyTheKeysTheBaseBundleHolds`, `…nothingIsWordedAsNothing`, `…everyMessageTakesTheSameThingsInEveryLanguage` |
+| No string is concatenated from fragments in a way that cannot be translated | met | every sentence is one key; the one sentence that changes with a number chooses inside the bundle (`lockout.wait` is a `ChoiceFormat`), asserted by `WordingTest.aWaitIsSaidWithItsNumberInEveryLanguage`. What is still joined is whole sentences: `PolicyViolationText.paragraphFor` puts one refusal after another, which is a paragraph rather than a fragment |
+| A missing key fails visibly in tests rather than silently at runtime | met | three ways: the bundles are compared key for key; every enum the service can name is worded in every language (`WordingTest`, five tests); and every screen is loaded in both languages by the TestFX suites, where `FXMLLoader` throws on a `%key` nothing answers to. `…aKeyThisBuildShipsNoWordingForThrows` pins the behaviour itself |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The language is chosen twice, and the second choice is an admission.** ADR-0014
+  is written for a reviewer who asks why a preference the store already holds is
+  not applied at the login screen. Short version: before an admission there is a
+  name somebody typed, not an Account, and asking the service which language a
+  typed name reads would answer a question about an Account to somebody who has
+  not proved they hold it.
+- **A window says what it is drawn in, and hands on a key for what it is not.**
+  `SessionGuard`, `SessionEndedText`, `AdministrationRefusedText` and
+  `GateAttempt` answer with a key; the window that draws it words it. The reason
+  is the hand-back: the window discovering that a Session ended is closing, and
+  the login screen behind it is drawn in another language.
+- **The login screen does not keep the admitted Account's language.** It returns
+  to the machine's, or to what the selector was set to. Keeping it would tell
+  whoever walks up next which language the last person reads.
+- **`Locale.ROOT` is how "the machine's" is chosen in the panel's selector**, and
+  it is turned into `Optional.empty()` before it crosses the socket. The store
+  holds NULL rather than a tag for the same reason V006 gave: an Account that
+  follows the machine follows whichever machine it is read on.
+- **The service records the tag and holds no list of languages.** It will happily
+  record `eu`, which this build ships no wording for, and that Account is then
+  drawn in the first language offered — `LanguagePreferenceTest.aLanguageThisBuildShipsNoWordingForIsRecordedAllTheSame`
+  pins it. The alternative makes adding a language a privileged deployment.
+- **A language with no bundle is drawn in one language, not in a fallback
+  mixture.** `ResourceBundle`'s candidate chain stops at the base bundle and never
+  reaches the JVM's default locale, so a screen is never half-translated by
+  accident, and a regional variant reads the language it varies (`es-MX` → `es`).
+- **`LANGUAGE_PREFERENCE_CHANGED` does not say which language.** The record says
+  an Account changed; the language itself is in the store and on the panel, and a
+  copy in a file read with other tools buys nothing. `…theRecordDoesNotSayWhichLanguageWasChosen`.
+- **`GateFlow` exists so the tests can name a language.** `LoginGate.protect`
+  gives the machine's, which is the only thing a host product could sensibly be
+  given; the suites drive the same flow in a language they name, so what a screen
+  says is asserted against the bundle rather than against the locale of whoever
+  runs the build.
+
+## 4. Scope taken deliberately, and why
+
+- **No selector on the first-run wizard.** The ticket puts one on the login
+  screen. The wizard is seen once, by whoever installed the product on a machine
+  whose locale they set; adding one later is small.
+- **The `ProtectedFeature`'s own view is left in Spanish.** `protected-feature` is
+  the host product in this repo, and CONTEXT.md is explicit that this system knows
+  it only as a view it is handed. Translating it would be the gate reaching into
+  the host.
+- **The selector's choice is not written anywhere.** It lasts as long as the run,
+  which is what "for the session" asks for; the durable answer is an Account's
+  `LanguagePreference`.
+- **Setting a language does not redraw the panel that set it**, even when an
+  Administrator sets their own. It takes effect at the next admission, like every
+  other fact about an Account.
+
+## 5. Open ground — judge these rather than assume them
+
+- **A preference the panel cannot offer stays as it is.** An Account holding
+  `es-ES` shows in the selector as *Español* (the converter names it), and
+  applying without touching the box writes `es-ES` back unchanged. That is
+  deliberate — the panel does not silently rewrite a tag somebody else chose —
+  but it means two Accounts can hold tags that read identically in the list only
+  because the tag is shown beside the name.
+- **The panel lists a language in that language, not in the Administrator's.**
+  `AccountText.preferenceOf` names it in itself with the tag beside it, which is
+  what issue #12 shipped and what an Administrator choosing for somebody else
+  needs to recognise. A reviewer may reasonably prefer the reader's language.
+- **`languages.properties` is a second file to keep in step.** It is the price of
+  a list that cannot disagree with itself across bundles; the alternative is a key
+  inside every bundle, which is a list that can.
+- **Nothing verifies that the offered tags have bundles at build time.** A tag
+  added to `languages.properties` without a bundle beside it is drawn in the base
+  bundle rather than refused. `WordingTest.everyOfferedLanguageHoldsExactlyTheKeysTheBaseBundleHolds`
+  would pass, because that language's file resolves to the base one. Worth a test
+  that asserts each offered tag has a file of its own if a third language lands.
+- **The TestFX suites are slow** (`AdministrationWindowTest` ~116 s), and this
+  ticket added four windows' worth of loading in two languages to them.
+
+## 6. What the two-axis review found and what was done
+
+Reviewed inline rather than by fanning out to sub-agents, on this session's
+standing instruction not to spawn them.
+
+### Acted on
+
+| Axis | Finding | What was done |
+|---|---|---|
+| Spec | **The hand-back sentence was worded in the wrong language.** `SessionController` and `SessionGuard` produced a finished sentence in the Account's language and handed it to a login screen drawn in the machine's, so an Operator reading Spanish logging out of an English-locale machine would have been returned to an English screen with a Spanish sentence on it. | The hand-back carries the **key**: `SessionEndedText.keyFor`, `AdministrationRefusedText.keyFor`, and `GateAttempt`'s `unanswered` all answer with keys, and the login screen words them. `LanguageWindowTest.theLoginScreenComesBackInItsOwnLanguageWhenASessionEnds`. |
+| Spec | **The login screen would have leaked the last Account's language** had it kept the language it was handed back in — a fact about an Account, shown to whoever walks up next. | It returns to the pre-authentication language. Same test as above asserts both the screen and its sentence. |
+| Spec | **A language change left the previous language's sentence on the screen.** | The window is redrawn saying nothing; `LanguageWindowTest.whatTheOldLanguageSaidDoesNotSurviveTheNewOne`. |
+| Standards | **`MessageFormat` treats an apostrophe as quoting**, so an English message with `{0}` in it and an apostrophe in the prose would silently swallow its arguments. | Doubled where needed, and the rule is stated at the top of both bundles. `WordingTest.everyMessageTakesTheSameThingsInEveryLanguage` catches a translation that drops or gains an argument. |
+| Standards | **A malformed default locale would have thrown before any window was drawn** — `LanguageRange.parse` refuses a tag it cannot read. | `InterfaceLanguage.closestTo` falls back to the first language offered; `WordingTest.aLocaleThatNamesNoLanguageIsDrawnInTheFirstOneOffered`. |
+| Standards | **Stale references to this ticket as future work** in `V006__language_preference.sql`, `AccountListingTest` and `CONTEXT.md`'s `LanguagePreference` entry. | Updated, with `InterfaceLanguage` added to the glossary as the term for what a screen is drawn in — which is not the same thing as what an Account holds. |
+| Standards | Lines over 100 columns introduced by widening signatures with an `InterfaceLanguage` parameter. | Rewrapped; the diff introduces none. |
+
+### Deliberately not acted on
+
+- **"`AccountText`, `LockoutText` and `PolicyViolationText` take a language as
+  their first parameter" (Standards, Long Parameter List).** They are wording
+  functions; the language is what they word in. Making them instances would put a
+  constructor call at every call site to save one argument.
+- **"`LoginController.admitWith` now takes seven arguments" (Standards).** Six of
+  them are the window's collaborators and were already there in some form; the
+  alternative is a parameter object that exists to be unpacked immediately.
+- **"The base bundle is English while the product's interface is Spanish"
+  (Spec).** Deliberate: the base bundle is what a machine this build ships no
+  wording for is drawn in, and the repo's own language is English. A Spanish
+  deployment is drawn from `messages_es.properties` because the machine says so,
+  not because a fallback happened to pick it.

@@ -34,9 +34,9 @@
       -->
       <Label fx:id="notice" styleClass="warning" wrapText="true" maxWidth="Infinity"
              HBox.hgrow="ALWAYS"/>
-      <Button fx:id="noticeRead" text="Entendido" onAction="#onNoticeRead"
+      <Button fx:id="noticeRead" text="%session.notice-read" onAction="#onNoticeRead"
               visible="false" managed="false"/>
-      <Button fx:id="logOut" text="Cerrar sesión" onAction="#onLogOut"/>
+      <Button fx:id="logOut" text="%session.log-out" onAction="#onLogOut"/>
     </HBox>
   </top>
 

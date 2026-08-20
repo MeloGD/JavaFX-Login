@@ -10,7 +10,9 @@
   The warning about the password sits above the fields rather than beside the button: there is no
   recovery key and there never will be, so it has to be read while there is still a choice to make.
 
-  Every string here moves to a ResourceBundle when the interface learns a second language.
+  Every string here is a %key the FXMLLoader resolves out of the bundle for the language this screen
+  is drawn in, which is the machine's own: nobody has authenticated yet, so there is no Account
+  whose preference could answer instead.
 -->
 
 <?import javafx.geometry.Insets?>
@@ -28,19 +30,19 @@
     <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
   </padding>
 
-  <Label text="Primer arranque" styleClass="title"/>
+  <Label text="%first-run.title" styleClass="title"/>
 
-  <Label styleClass="explanation" wrapText="true" text="Esta aplicación no trae ninguna cuenta creada. Crea aquí la cuenta de administración: es la única que podrá crear después las cuentas de operación."/>
+  <Label styleClass="explanation" wrapText="true" text="%first-run.explanation"/>
 
-  <Label fx:id="recoveryWarning" styleClass="warning" wrapText="true" text="Esta contraseña no se puede recuperar. No hay clave de recuperación, ni código de respaldo, ni forma de restablecerla, y nunca la habrá: si la pierdes, pierdes el acceso a esta instalación. Guárdala en un gestor de contraseñas antes de continuar."/>
+  <Label fx:id="recoveryWarning" styleClass="warning" wrapText="true" text="%first-run.recovery-warning"/>
 
-  <Label text="Nombre de cuenta" styleClass="field-label"/>
+  <Label text="%first-run.account-name" styleClass="field-label"/>
   <TextField fx:id="administratorName"/>
 
-  <Label text="Contraseña" styleClass="field-label"/>
+  <Label text="%first-run.password" styleClass="field-label"/>
   <PasswordField fx:id="administratorPassword"/>
 
-  <Button fx:id="create" text="Crear la cuenta de administración" onAction="#onCreate"
+  <Button fx:id="create" text="%first-run.create" onAction="#onCreate"
           defaultButton="true" maxWidth="Infinity"/>
 
   <Label fx:id="firstRunMessage" styleClass="message" wrapText="true"/>

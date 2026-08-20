@@ -6,11 +6,10 @@ import com.javafxlogin.core.session.Session;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.format.FormatStyle;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import javafx.beans.property.ReadOnlyStringWrapper;
@@ -19,11 +18,13 @@ import javafx.fxml.FXML;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
+import javafx.util.StringConverter;
 
 /**
  * What the administration panel does: list the Accounts of the deployment, ask the service to
@@ -38,49 +39,50 @@ import javafx.scene.layout.BorderPane;
  * <p>Nothing here chooses anybody's password, and there is nowhere on this screen to type one. That
  * is ASVS 5.0 §6.4.6 and story 21: what an Administrator gets instead is a one-time secret to hand
  * over, shown once and never readable again.
+ *
+ * <p>It is drawn in the language the Administrator's own Account reads, and every sentence on it
+ * comes out of that language's bundle. The one thing on it that is <em>about</em> a language rather
+ * than said in one is issue #13's control: which language somebody else's screens are drawn in,
+ * which is a fact about their Account and takes effect the next time they are admitted.
  */
 public final class AdministrationController {
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String SECRET_WARNING =
-      "Anótalo ahora y entrégaselo en persona: no se volverá a mostrar y no hay forma de"
-          + " recuperarlo. Caduca el %s.";
+  private static final String SECRET_WARNING = "administration.secret-warning";
 
-  private static final String DELETE_CONSEQUENCES =
-      "Se eliminará la cuenta «%s» y con ella su copia de la clave del almacén de secretos:"
-          + " esa persona dejará de poder entrar y de poder leer secretos. Los secretos guardados"
-          + " siguen ahí para el resto de operadores. No se puede deshacer.";
+  private static final String DELETE_CONSEQUENCES = "administration.delete-consequences";
 
-  private static final String ACCOUNT_CREATED = "Cuenta «%s» creada.";
-  private static final String PASSWORD_RESET =
-      "La contraseña de «%s» ha dejado de funcionar ahora mismo.";
+  private static final String ACCOUNT_CREATED = "administration.account-created";
+  private static final String PASSWORD_RESET = "administration.password-reset";
 
   /**
    * An Account awaiting enrolment had no password to take away, and the service records no reset
    * for it. Saying one happened would be the panel asserting an event the service did not make.
    */
   private static final String ENROLMENT_SECRET_REISSUED =
-      "Se ha vuelto a emitir el código de «%s», que seguía sin contraseña.";
-  private static final String ACCOUNT_DELETED = "Cuenta «%s» eliminada.";
-  private static final String LOCKOUT_CLEARED = "Se ha desbloqueado «%s».";
-  private static final String PERIOD_CHANGED =
-      "Las sesiones caducan tras %d minutos de inactividad, a partir de ahora.";
-  private static final String EXPIRY_DISABLED =
-      "Las sesiones ya no caducan por inactividad en este equipo.";
-  private static final String NOT_A_PERIOD =
-      "Escribe los minutos de inactividad como un número entero mayor que cero.";
-  private static final String NAME_NEEDED = "Escribe el nombre de la cuenta que quieres crear.";
-  private static final String NOTHING_SELECTED = "Elige antes una cuenta de la lista.";
-  private static final String DESTINATION_NEEDED =
-      "Escribe la ruta completa del archivo donde quieres la copia del registro.";
-  private static final String EXPORTED = "Se han copiado %d eventos a %s.";
-  private static final String EXPORTED_WITH_A_BROKEN_CHAIN =
-      "Se han copiado %d eventos a %s, pero la cadena de integridad no cuadra: el registro se ha"
-          + " editado o le faltan entradas.";
+      "administration.enrolment-secret-reissued";
 
-  /** The moment as this machine writes moments for a person, not as the record writes them. */
-  private static final DateTimeFormatter WHEN =
-      DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault());
+  private static final String ACCOUNT_DELETED = "administration.account-deleted";
+  private static final String LOCKOUT_CLEARED = "administration.lockout-cleared";
+  private static final String LANGUAGE_CHANGED = "administration.language-changed";
+  private static final String LANGUAGE_FOLLOWS_THE_MACHINE =
+      "administration.language-follows-the-machine";
+  private static final String MACHINE_LANGUAGE = "administration.language.machine";
+  private static final String PERIOD_CHANGED = "administration.period-changed";
+  private static final String EXPIRY_DISABLED = "administration.expiry-disabled";
+  private static final String NOT_A_PERIOD = "administration.not-a-period";
+  private static final String NAME_NEEDED = "administration.name-needed";
+  private static final String NOTHING_SELECTED = "administration.nothing-selected";
+  private static final String DESTINATION_NEEDED = "administration.destination-needed";
+  private static final String EXPORTED = "administration.exported";
+  private static final String EXPORTED_WITH_A_BROKEN_CHAIN =
+      "administration.exported-with-a-broken-chain";
+
+  /**
+   * What an Account that has said nothing about its language is chosen from the selector as. It is
+   * a Locale naming no language, which is what "follow whichever machine you are read on" is: a tag
+   * would freeze that to the machine it was chosen on.
+   */
+  private static final Locale THE_MACHINE_S = Locale.ROOT;
 
   @FXML private BorderPane root;
   @FXML private TableView<AccountSummary> accounts;
@@ -99,6 +101,8 @@ public final class AdministrationController {
   @FXML private Button confirmDelete;
   @FXML private Button cancelDelete;
 
+  @FXML private ComboBox<Locale> languageChoice;
+
   @FXML private TextField inactivityMinutes;
   @FXML private CheckBox neverExpires;
   @FXML private TextField exportDestination;
@@ -107,26 +111,24 @@ public final class AdministrationController {
   @FXML private Label message;
 
   private LoginGate gate;
+  private InterfaceLanguage saidIn;
   private Session session;
   private Consumer<String> handBack;
   private SessionGuard guard;
   private boolean over;
 
-  /** Wires the columns to what each one says about an Account, before anything is listed. */
+  /** Wires everything that does not depend on which language this panel is being drawn in. */
   @FXML
   private void initialize() {
-    accountName.setCellValueFactory(row -> text(row.getValue().name()));
-    role.setCellValueFactory(row -> text(AccountText.nameOf(row.getValue().role())));
-    passwordStrength.setCellValueFactory(
-        row -> text(AccountText.bandOf(row.getValue().passwordStrength())));
-    languagePreference.setCellValueFactory(
-        row -> text(AccountText.preferenceOf(row.getValue().languagePreference())));
-    lockout.setCellValueFactory(row -> text(AccountText.lockoutOf(row.getValue().lockedFor())));
     // Nothing is proposed about somebody else's Account until somebody is chosen.
     accounts
         .getSelectionModel()
         .selectedItemProperty()
-        .addListener((item, was, is) -> forgetTheDelete());
+        .addListener(
+            (item, was, is) -> {
+              forgetTheDelete();
+              showTheLanguageOf(is);
+            });
     // A number of minutes means nothing while expiry is switched off, and a box that still took one
     // would be a screen saying two things at once.
     inactivityMinutes.disableProperty().bind(neverExpires.selectedProperty());
@@ -136,6 +138,53 @@ public final class AdministrationController {
     secondFactor.setDisable(true);
   }
 
+  /**
+   * Wires the columns and the language selector to what each one says, in the language this panel
+   * is drawn in.
+   *
+   * <p>Apart from {@link #initialize()} because it needs that language, and the FXML has been
+   * loaded before anybody has handed one over — the wording of a Role is not a fact about the
+   * screen, it is a fact about who is reading it.
+   */
+  private void wireWhatIsWorded() {
+    accountName.setCellValueFactory(row -> text(row.getValue().name()));
+    role.setCellValueFactory(row -> text(AccountText.nameOf(saidIn, row.getValue().role())));
+    passwordStrength.setCellValueFactory(
+        row -> text(AccountText.bandOf(saidIn, row.getValue().passwordStrength())));
+    languagePreference.setCellValueFactory(
+        row -> text(AccountText.preferenceOf(saidIn, row.getValue().languagePreference())));
+    lockout.setCellValueFactory(
+        row -> text(AccountText.lockoutOf(saidIn, row.getValue().lockedFor())));
+    offerTheLanguages();
+  }
+
+  /**
+   * The languages an Account can be set to read: the ones this build ships, and the machine's own.
+   *
+   * <p>Each is named in itself, as the login screen's selector names them, because an Administrator
+   * choosing a language for somebody else is choosing something that person has to recognise.
+   */
+  private void offerTheLanguages() {
+    languageChoice.getItems().setAll(THE_MACHINE_S);
+    languageChoice.getItems().addAll(InterfaceLanguage.offered());
+    languageChoice.setConverter(
+        new StringConverter<>() {
+          @Override
+          public String toString(Locale offered) {
+            if (offered == null || offered.getLanguage().isEmpty()) {
+              return saidIn.say(MACHINE_LANGUAGE);
+            }
+            return InterfaceLanguage.nameOf(offered);
+          }
+
+          @Override
+          public Locale fromString(String named) {
+            throw new UnsupportedOperationException("the selector is not typed into");
+          }
+        });
+    languageChoice.setValue(THE_MACHINE_S);
+  }
+
   private static ReadOnlyStringWrapper text(String value) {
     return new ReadOnlyStringWrapper(value);
   }
@@ -143,12 +192,18 @@ public final class AdministrationController {
   /**
    * Watches the Session this panel runs under and asks for the Accounts, which is what the screen
    * is drawn from.
+   *
+   * @param saidIn the language the Administrator's own Account reads, or whatever was being read at
+   *     the login screen where it has said nothing
    */
-  void administer(LoginGate gate, Session session, Consumer<String> handBack) {
+  void administer(
+      LoginGate gate, Session session, InterfaceLanguage saidIn, Consumer<String> handBack) {
     this.gate = Objects.requireNonNull(gate, "gate");
     this.session = Objects.requireNonNull(session, "session");
+    this.saidIn = Objects.requireNonNull(saidIn, "saidIn");
     this.handBack = Objects.requireNonNull(handBack, "handBack");
 
+    wireWhatIsWorded();
     guard = SessionGuard.watching(root, gate, session, this::theSessionEnded);
     listTheAccounts();
   }
@@ -188,7 +243,7 @@ public final class AdministrationController {
   private void onCreateOperator() {
     String name = newOperatorName.getText().trim();
     if (name.isEmpty()) {
-      say(NAME_NEEDED);
+      say(saidIn.say(NAME_NEEDED));
       return;
     }
     ask(
@@ -197,7 +252,7 @@ public final class AdministrationController {
         provisioned -> {
           if (provisioned instanceof EnrolmentSecretIssued) {
             newOperatorName.clear();
-            say(ACCOUNT_CREATED.formatted(name));
+            say(saidIn.say(ACCOUNT_CREATED, name));
           }
           showTheSecretOf(provisioned);
         });
@@ -208,8 +263,9 @@ public final class AdministrationController {
     withTheChosenAccount(
         chosen -> {
           String said =
-              (chosen.isAwaitingEnrolment() ? ENROLMENT_SECRET_REISSUED : PASSWORD_RESET)
-                  .formatted(chosen.name());
+              saidIn.say(
+                  chosen.isAwaitingEnrolment() ? ENROLMENT_SECRET_REISSUED : PASSWORD_RESET,
+                  chosen.name());
           ask(
               "administration-reset",
               () -> gate.resetThePasswordOf(session, chosen.name()),
@@ -233,11 +289,13 @@ public final class AdministrationController {
     switch (provisioned) {
       case EnrolmentSecretIssued issued -> {
         enrolmentSecret.setText(issued.secret());
-        enrolmentSecretWarning.setText(SECRET_WARNING.formatted(WHEN.format(issued.expiresAt())));
+        enrolmentSecretWarning.setText(
+            saidIn.say(SECRET_WARNING, saidIn.moments().format(issued.expiresAt())));
         showTheSecret(true);
         listTheAccounts();
       }
-      case PolicyRefusal refusal -> say(PolicyViolationText.paragraphFor(refusal.violations()));
+      case PolicyRefusal refusal ->
+          say(PolicyViolationText.paragraphFor(saidIn, refusal.violations()));
       case AdministrationRefused refused -> refused(refused);
     }
   }
@@ -262,7 +320,7 @@ public final class AdministrationController {
   private void onDeleteOperator() {
     withTheChosenAccount(
         chosen -> {
-          deleteConsequences.setText(DELETE_CONSEQUENCES.formatted(chosen.name()));
+          deleteConsequences.setText(saidIn.say(DELETE_CONSEQUENCES, chosen.name()));
           showTheDelete(true);
         });
   }
@@ -275,7 +333,7 @@ public final class AdministrationController {
           ask(
               "administration-delete",
               () -> gate.deleteOperator(session, chosen.name()),
-              outcome -> administered(outcome, ACCOUNT_DELETED.formatted(chosen.name())));
+              outcome -> administered(outcome, saidIn.say(ACCOUNT_DELETED, chosen.name())));
         });
   }
 
@@ -311,7 +369,57 @@ public final class AdministrationController {
             ask(
                 "administration-clear-lockout",
                 () -> gate.clearTheLockoutOf(session, chosen.name()),
-                outcome -> administered(outcome, LOCKOUT_CLEARED.formatted(chosen.name()))));
+                outcome -> administered(outcome, saidIn.say(LOCKOUT_CLEARED, chosen.name()))));
+  }
+
+  /**
+   * Puts the selector on whatever the chosen Account holds, so that what it shows is that Account's
+   * language rather than the last one somebody looked at.
+   */
+  private void showTheLanguageOf(AccountSummary chosen) {
+    if (chosen == null) {
+      languageChoice.setValue(THE_MACHINE_S);
+      return;
+    }
+    languageChoice.setValue(chosen.languagePreference().orElse(THE_MACHINE_S));
+  }
+
+  /**
+   * Issue #13's last criterion: which language the person using an Account reads the interface in.
+   *
+   * <p>It changes nothing about this panel, and that is not an omission. What is recorded is a fact
+   * about somebody else's Account, and it reaches their screens the way every other fact about an
+   * Account does — at the admission that proves the Account is theirs. An Administrator setting
+   * their own is in the same position, one logout later.
+   */
+  @FXML
+  private void onApplyLanguage() {
+    withTheChosenAccount(
+        chosen -> {
+          Optional<Locale> preference = theLanguageChosen();
+          String said =
+              preference
+                  .map(
+                      language ->
+                          saidIn.say(
+                              LANGUAGE_CHANGED,
+                              chosen.name(),
+                              InterfaceLanguage.nameOf(language)))
+                  .orElseGet(() -> saidIn.say(LANGUAGE_FOLLOWS_THE_MACHINE, chosen.name()));
+          ask(
+              "administration-language",
+              () -> gate.useLanguagePreference(session, chosen.name(), preference),
+              outcome -> administered(outcome, said));
+        });
+  }
+
+  /** A language, or the machine's — which is the absence of one rather than a language itself. */
+  private Optional<Locale> theLanguageChosen() {
+    Locale chosen = languageChoice.getValue();
+    if (chosen == null || chosen.getLanguage().isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(chosen);
   }
 
   /**
@@ -328,15 +436,15 @@ public final class AdministrationController {
     String said;
     if (neverExpires.isSelected()) {
       period = InactivityPeriod.disabled();
-      said = EXPIRY_DISABLED;
+      said = saidIn.say(EXPIRY_DISABLED);
     } else {
       long minutes = minutesTyped();
       if (minutes <= 0) {
-        say(NOT_A_PERIOD);
+        say(saidIn.say(NOT_A_PERIOD));
         return;
       }
       period = InactivityPeriod.of(Duration.ofMinutes(minutes));
-      said = PERIOD_CHANGED.formatted(minutes);
+      said = saidIn.say(PERIOD_CHANGED, minutes);
     }
     ask(
         "administration-inactivity-period",
@@ -358,7 +466,7 @@ public final class AdministrationController {
   private void onExport() {
     String typed = exportDestination.getText().trim();
     if (typed.isEmpty()) {
-      say(DESTINATION_NEEDED);
+      say(saidIn.say(DESTINATION_NEEDED));
       return;
     }
     Path destination;
@@ -368,8 +476,9 @@ public final class AdministrationController {
       // The same sentence the service answers with, because it is the same thing: a destination
       // this export is not going to be written to, and another path is what fixes it.
       say(
-          AdministrationRefusedText.sentenceFor(
-              AdministrationRefusedReason.EXPORT_DESTINATION_REFUSED));
+          saidIn.say(
+              AdministrationRefusedText.keyFor(
+                  AdministrationRefusedReason.EXPORT_DESTINATION_REFUSED)));
       return;
     }
     ask(
@@ -382,8 +491,10 @@ public final class AdministrationController {
     switch (outcome) {
       case EventsExported copied ->
           say(
-              (copied.export().chainIntact() ? EXPORTED : EXPORTED_WITH_A_BROKEN_CHAIN)
-                  .formatted(copied.export().events(), destination));
+              saidIn.say(
+                  copied.export().chainIntact() ? EXPORTED : EXPORTED_WITH_A_BROKEN_CHAIN,
+                  copied.export().events(),
+                  destination));
       case AdministrationRefused refused -> refused(refused);
     }
   }
@@ -412,26 +523,27 @@ public final class AdministrationController {
 
   /**
    * A refusal is said and nothing else happens — except the one that is not about this request at
-   * all: a Session that has ended is the end of this window, whichever click discovered it.
+   * all: a Session that has ended is the end of this window, whichever click discovered it. That
+   * one is handed on as the key it is, because the window that says it is the login screen.
    */
   private void refused(AdministrationRefused refused) {
-    String sentence = AdministrationRefusedText.sentenceFor(refused.reason());
+    String key = AdministrationRefusedText.keyFor(refused.reason());
     if (refused.reason() == AdministrationRefusedReason.SESSION_OVER) {
-      theSessionEnded(sentence);
+      theSessionEnded(key);
       return;
     }
-    say(sentence);
+    say(saidIn.say(key));
   }
 
   /**
    * Does something to the Account somebody chose from the list, or says that nobody has been
-   * chosen. What is handed over is the Account rather than its name, because two of the three
+   * chosen. What is handed over is the Account rather than its name, because three of the four
    * things done to one are worded differently depending on what state it is in.
    */
   private void withTheChosenAccount(Consumer<AccountSummary> then) {
     AccountSummary chosen = accounts.getSelectionModel().getSelectedItem();
     if (chosen == null) {
-      say(NOTHING_SELECTED);
+      say(saidIn.say(NOTHING_SELECTED));
       return;
     }
     then.accept(chosen);
@@ -448,7 +560,7 @@ public final class AdministrationController {
    * window waits.
    */
   private <A> void ask(String threadName, Supplier<A> question, Consumer<A> answered) {
-    GateAttempt.make(threadName, question, answered, this::say);
+    GateAttempt.make(threadName, question, answered, key -> say(saidIn.say(key)));
   }
 
   private void say(String sentence) {
@@ -457,14 +569,14 @@ public final class AdministrationController {
 
   /**
    * However the Session ended — a logout, the clocks, a service that went away — this window is
-   * done, and the person is handed back to the login screen.
+   * done, and the person is handed back to the login screen, which says why in its own language.
    */
-  private void theSessionEnded(String sentence) {
+  private void theSessionEnded(String saying) {
     if (over) {
       return;
     }
     over = true;
     stopWatching();
-    handBack.accept(sentence);
+    handBack.accept(saying);
   }
 }

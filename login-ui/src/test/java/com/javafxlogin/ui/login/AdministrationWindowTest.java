@@ -27,6 +27,7 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TableView;
@@ -48,9 +49,20 @@ import org.testfx.util.WaitForAsyncUtils;
  */
 class AdministrationWindowTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private static final String ADMINISTRATOR = "wren.holloway";
   private static final String ADMINISTRATOR_PASSWORD = "Correct-Horse-1";
   private static final String OPERATOR = "finch.mercer";
+
+  /** A language this build ships wording for, and not the one this panel is being drawn in. */
+  private static final Locale ENGLISH = Locale.forLanguageTag("en");
 
   private static final int PATIENCE_IN_SECONDS = 10;
 
@@ -67,7 +79,7 @@ class AdministrationWindowTest extends ApplicationTest {
         new FakeLoginGate()
             .administeredBy(ADMINISTRATOR, ADMINISTRATOR_PASSWORD)
             .holdingTheOperator(OPERATOR);
-    gate.protect(stage, session -> theHostsView());
+    GateFlow.open(gate, stage, session -> theHostsView(), SPANISH);
   }
 
   /** The host product's view, which an Administrator must never be handed. */
@@ -111,15 +123,17 @@ class AdministrationWindowTest extends ApplicationTest {
         rows.stream().anyMatch(row -> row.contains(ADMINISTRATOR)),
         () -> "no Administrator in " + rows);
     String juno = rowFor(rows, "juno.vale");
-    assertTrue(juno.contains(AccountText.nameOf(Role.OPERATOR)), () -> "no Role in " + juno);
     assertTrue(
-        juno.contains(AccountText.bandOf(Optional.of(PasswordStrength.WEAK))),
+        juno.contains(AccountText.nameOf(SPANISH, Role.OPERATOR)), () -> "no Role in " + juno);
+    assertTrue(
+        juno.contains(AccountText.bandOf(SPANISH, Optional.of(PasswordStrength.WEAK))),
         () -> "no band in " + juno);
     assertTrue(
-        juno.contains(AccountText.preferenceOf(Optional.of(Locale.forLanguageTag("es-ES")))),
+        juno.contains(
+            AccountText.preferenceOf(SPANISH, Optional.of(Locale.forLanguageTag("es-ES")))),
         () -> "no language in " + juno);
     assertTrue(
-        juno.contains(AccountText.lockoutOf(Optional.of(Duration.ofMinutes(10)))),
+        juno.contains(AccountText.lockoutOf(SPANISH, Optional.of(Duration.ofMinutes(10)))),
         () -> "no Lockout in " + juno);
   }
 
@@ -131,7 +145,7 @@ class AdministrationWindowTest extends ApplicationTest {
     String operator = rowFor(listedAccounts(), OPERATOR);
 
     assertTrue(
-        operator.contains(AccountText.preferenceOf(Optional.empty())),
+        operator.contains(AccountText.preferenceOf(SPANISH, Optional.empty())),
         () -> "a language nobody chose is claimed in " + operator);
   }
 
@@ -150,11 +164,11 @@ class AdministrationWindowTest extends ApplicationTest {
     String juno = rowFor(listedAccounts(), "juno.vale");
 
     assertTrue(
-        juno.contains(AccountText.lockoutOf(Optional.of(Duration.ofMinutes(10)))),
+        juno.contains(AccountText.lockoutOf(SPANISH, Optional.of(Duration.ofMinutes(10)))),
         () -> "the Lockout is not on the screen: " + juno);
     assertNotEquals(
-        AccountText.lockoutOf(Optional.of(Duration.ofMinutes(10))),
-        AccountText.lockoutOf(Optional.empty()),
+        AccountText.lockoutOf(SPANISH, Optional.of(Duration.ofMinutes(10))),
+        AccountText.lockoutOf(SPANISH, Optional.empty()),
         "a locked Account must not read the same as one that is not");
   }
 
@@ -173,10 +187,10 @@ class AdministrationWindowTest extends ApplicationTest {
     String juno = rowFor(listedAccounts(), "juno.vale");
 
     assertFalse(
-        juno.contains(AccountText.bandOf(Optional.of(PasswordStrength.WEAK))),
+        juno.contains(AccountText.bandOf(SPANISH, Optional.of(PasswordStrength.WEAK))),
         () -> "an Account with no password reads as a weak one: " + juno);
     assertTrue(
-        juno.contains(AccountText.bandOf(Optional.empty())),
+        juno.contains(AccountText.bandOf(SPANISH, Optional.empty())),
         () -> "it does not say what it is waiting for: " + juno);
   }
 
@@ -244,7 +258,8 @@ class AdministrationWindowTest extends ApplicationTest {
 
     await(() -> !message().isBlank());
     assertEquals(
-        PolicyViolationText.paragraphFor(List.of(PolicyViolation.ACCOUNT_NAME_BLOCKED)), message());
+        PolicyViolationText.paragraphFor(SPANISH, List.of(PolicyViolation.ACCOUNT_NAME_BLOCKED)),
+        message());
     assertTrue(secret().isBlank(), "no secret comes of a refused name");
   }
 
@@ -433,6 +448,89 @@ class AdministrationWindowTest extends ApplicationTest {
         "the Administrator is still there");
   }
 
+  /**
+   * Issue #13's last criterion: an Administrator says which language somebody reads the interface
+   * in. It is recorded against that Account and takes effect at their next admission — nothing on
+   * this panel changes language because of it, and the list says what was recorded.
+   */
+  @Test
+  void anAdministratorSaysWhichLanguageAnAccountReads() {
+    openThePanel();
+    select(OPERATOR);
+
+    chooseTheLanguage(ENGLISH);
+    clickOn("#applyLanguage");
+
+    await(() -> gate.administrations().contains("useLanguagePreference:" + OPERATOR + ":en"));
+    await(
+        () ->
+            rowFor(listedAccounts(), OPERATOR)
+                .contains(AccountText.preferenceOf(SPANISH, Optional.of(ENGLISH))));
+    assertTrue(
+        message().contains(InterfaceLanguage.nameOf(ENGLISH)),
+        () -> "the panel should say which language: " + message());
+  }
+
+  /** The other direction: an Account goes back to following whichever machine it is used on. */
+  @Test
+  void anAccountIsPutBackToFollowingTheMachine() {
+    gate.holding(
+        new AccountSummary(
+            "juno.vale",
+            Role.OPERATOR,
+            Optional.of(PasswordStrength.ACCEPTABLE),
+            Optional.of(ENGLISH)));
+    openThePanel();
+    select("juno.vale");
+
+    chooseTheLanguage(null);
+    clickOn("#applyLanguage");
+
+    await(
+        () ->
+            gate.administrations().contains("useLanguagePreference:juno.vale:the machine's"));
+    await(
+        () ->
+            rowFor(listedAccounts(), "juno.vale")
+                .contains(AccountText.preferenceOf(SPANISH, Optional.empty())));
+  }
+
+  /** The selector says what the chosen Account holds, and not what the last one held. */
+  @Test
+  void choosingAnAccountShowsTheLanguageItReads() {
+    gate.holding(
+        new AccountSummary(
+            "juno.vale",
+            Role.OPERATOR,
+            Optional.of(PasswordStrength.ACCEPTABLE),
+            Optional.of(ENGLISH)));
+    openThePanel();
+
+    select("juno.vale");
+    assertEquals(ENGLISH, languageChoice().getValue());
+
+    select(OPERATOR);
+    assertEquals(
+        Locale.ROOT,
+        languageChoice().getValue(),
+        "an Account that has said nothing follows the machine");
+  }
+
+  /** Nothing is proposed about somebody's language until somebody is chosen. */
+  @Test
+  void aLanguageCannotBeSetWithoutChoosingAnAccountFirst() {
+    openThePanel();
+
+    chooseTheLanguage(ENGLISH);
+    clickOn("#applyLanguage");
+
+    await(() -> !message().isEmpty());
+    assertFalse(
+        gate.administrations().stream()
+            .anyMatch(asked -> asked.startsWith("useLanguagePreference")),
+        () -> "the service was asked anyway: " + gate.administrations());
+  }
+
   /** The panel is a window over a Session: when the Session ends, it goes, like every other one. */
   @Test
   void theWindowClosesAndTheLoginScreenReturnsWhenTheSessionEnds() {
@@ -468,6 +566,16 @@ class AdministrationWindowTest extends ApplicationTest {
   private void createAnOperatorNamed(String accountName) {
     clickOn("#newOperatorName").write(accountName);
     clickOn("#createOperator");
+  }
+
+  /** Puts the selector on a language, or on the machine's own where none is named. */
+  private void chooseTheLanguage(Locale language) {
+    interact(() -> languageChoice().setValue(language == null ? Locale.ROOT : language));
+  }
+
+  @SuppressWarnings("unchecked")
+  private ComboBox<Locale> languageChoice() {
+    return (ComboBox<Locale>) lookup("#languageChoice").queryAs(ComboBox.class);
   }
 
   private void select(String accountName) {

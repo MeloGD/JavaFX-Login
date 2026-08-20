@@ -12,10 +12,14 @@ import java.time.Duration;
  */
 final class LockoutText {
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String LOCKED_OUT =
-      "La cuenta está bloqueada temporalmente tras varios intentos fallidos."
-          + " Vuelve a intentarlo dentro de %s.";
+  private static final String LOCKED_OUT = "lockout.refused";
+
+  /**
+   * The wait, whose sentence changes with the number in it. Which form a count takes is chosen
+   * inside the bundle rather than here, so that a language counting differently from Spanish is a
+   * matter of editing a message.
+   */
+  private static final String WAIT = "lockout.wait";
 
   private LockoutText() {}
 
@@ -24,8 +28,8 @@ final class LockoutText {
    * simply keeps trying; it names no Account and offers no way out, because the wait is the point
    * and an Administrator is who shortens it.
    */
-  static String forA(Duration remaining) {
-    return LOCKED_OUT.formatted(waitOf(remaining));
+  static String forA(InterfaceLanguage language, Duration remaining) {
+    return language.say(LOCKED_OUT, waitOf(language, remaining));
   }
 
   /**
@@ -36,8 +40,8 @@ final class LockoutText {
    * <p>Shared with the administration panel's list of Accounts, which reports the same wait about
    * the same Lockout and must not come to round it differently.
    */
-  static String waitOf(Duration remaining) {
+  static String waitOf(InterfaceLanguage language, Duration remaining) {
     long minutes = Math.max(1, (remaining.toSeconds() + 59) / 60);
-    return minutes == 1 ? "1 minuto" : minutes + " minutos";
+    return language.say(WAIT, minutes);
   }
 }

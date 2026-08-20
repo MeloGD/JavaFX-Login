@@ -12,34 +12,32 @@ import java.util.stream.Collectors;
  * exhaustive on purpose: a rule added over there that nobody worded over here would reach a person
  * as a blank refusal, which is exactly the failure that cannot be told apart from a bug.
  *
- * <p>Every string here moves to a ResourceBundle when the interface learns a second language.
+ * <p>What the switch names now is a key rather than a sentence, so that a rule added over there and
+ * given no wording is a build that does not compile — and a rule worded in one language and not in
+ * another is a test that does not pass.
  */
 final class PolicyViolationText {
 
   private PolicyViolationText() {}
 
   /** Every broken rule as one paragraph, in the order the policy reports them. */
-  static String paragraphFor(List<PolicyViolation> violations) {
+  static String paragraphFor(InterfaceLanguage language, List<PolicyViolation> violations) {
     return violations.stream()
-        .map(PolicyViolationText::sentenceFor)
+        .map(violation -> sentenceFor(language, violation))
         .collect(Collectors.joining(" "));
   }
 
-  static String sentenceFor(PolicyViolation violation) {
-    return switch (violation) {
-      case ACCOUNT_NAME_BLANK -> "Escribe un nombre de cuenta.";
-      case ACCOUNT_NAME_BLOCKED ->
-          "Ese nombre de cuenta es de los primeros que probaría quien atacase la instalación."
-              + " Elige uno que no se pueda adivinar.";
-      case PASSWORD_TOO_SHORT -> "La contraseña necesita al menos 12 caracteres.";
-      case PASSWORD_TOO_LONG -> "La contraseña no puede pasar de 64 caracteres.";
-      case PASSWORD_WITHOUT_UPPERCASE -> "La contraseña necesita alguna letra mayúscula.";
-      case PASSWORD_WITHOUT_NUMBER -> "La contraseña necesita algún número.";
-      case PASSWORD_WITHOUT_SPECIAL_CHARACTER ->
-          "La contraseña necesita algún carácter especial.";
-      case PASSWORD_BREACHED ->
-          "Esa contraseña aparece en filtraciones conocidas, así que ya está en la lista por la"
-              + " que empezaría cualquier ataque. Elige otra.";
-    };
+  static String sentenceFor(InterfaceLanguage language, PolicyViolation violation) {
+    return language.say(
+        switch (violation) {
+          case ACCOUNT_NAME_BLANK -> "policy.account-name-blank";
+          case ACCOUNT_NAME_BLOCKED -> "policy.account-name-blocked";
+          case PASSWORD_TOO_SHORT -> "policy.password-too-short";
+          case PASSWORD_TOO_LONG -> "policy.password-too-long";
+          case PASSWORD_WITHOUT_UPPERCASE -> "policy.password-without-uppercase";
+          case PASSWORD_WITHOUT_NUMBER -> "policy.password-without-number";
+          case PASSWORD_WITHOUT_SPECIAL_CHARACTER -> "policy.password-without-special-character";
+          case PASSWORD_BREACHED -> "policy.password-breached";
+        });
   }
 }

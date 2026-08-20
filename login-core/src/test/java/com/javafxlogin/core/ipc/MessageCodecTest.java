@@ -387,11 +387,54 @@ class MessageCodecTest {
     Granted sent =
         new Granted(
             SessionToken.generate(new SecureRandom()),
-            Optional.of(Instant.parse("2026-03-01T09:00:00Z")));
+            Optional.of(Instant.parse("2026-03-01T09:00:00Z")),
+            Optional.empty());
 
     Granted received = (Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent));
 
     assertEquals(sent.passwordResetAt(), received.passwordResetAt());
+  }
+
+  /** The other thing it carries: the language the person who has just been admitted reads. */
+  @Test
+  void carriesTheLanguageTheAdmittedAccountReads() {
+    Granted sent =
+        new Granted(
+            SessionToken.generate(new SecureRandom()),
+            Optional.empty(),
+            Optional.of(Locale.forLanguageTag("es")));
+
+    Granted received = (Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertEquals(Optional.of(Locale.forLanguageTag("es")), received.languagePreference());
+  }
+
+  /**
+   * An Account that has said nothing about which language it reads says so, rather than leaving the
+   * field out: the client that reads this has to tell "follow the machine" from "read Spanish".
+   */
+  @Test
+  void carriesAnAdmissionWithNoLanguagePreferenceAsSomethingRatherThanAsNothing() {
+    Granted sent = new Granted(SessionToken.generate(new SecureRandom()));
+
+    assertTrue(
+        text(MessageCodec.encode(sent)).contains("\"languagePreference\":null"));
+    assertEquals(
+        Optional.empty(),
+        ((Granted) MessageCodec.decodeResponse(MessageCodec.encode(sent))).languagePreference());
+  }
+
+  @Test
+  void refusesAnAdmissionWhoseLanguageNamesNoLanguage() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes(
+                    "{\"type\":\"Granted\",\"token\":\""
+                        + Base64.getEncoder()
+                            .encodeToString(SessionToken.generate(new SecureRandom()).copyOfBytes())
+                        + "\",\"passwordResetAt\":null,\"languagePreference\":\"???\"}")));
   }
 
   /** Nothing to tell is written as an explicit null, as everything optional here is. */
@@ -516,6 +559,51 @@ class MessageCodecTest {
         () ->
             MessageCodec.decodeResponse(
                 bytes("{\"type\":\"Denied\",\"reason\":\"LOCKED_OUT\"}")));
+  }
+
+  @Test
+  void carriesAChangeLanguagePreferenceUnchanged() {
+    ChangeLanguagePreference sent =
+        new ChangeLanguagePreference(
+            SessionToken.generate(new SecureRandom()),
+            "finch.mercer",
+            Optional.of(Locale.forLanguageTag("es")));
+
+    ChangeLanguagePreference received =
+        (ChangeLanguagePreference) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.accountName(), received.accountName());
+    assertEquals(sent.preference(), received.preference());
+  }
+
+  /** Saying nothing is a language preference too, and it crosses as a field rather than as none. */
+  @Test
+  void carriesAnAccountBackToFollowingTheMachine() {
+    ChangeLanguagePreference sent =
+        new ChangeLanguagePreference(
+            SessionToken.generate(new SecureRandom()), "finch.mercer", Optional.empty());
+
+    assertTrue(text(MessageCodec.encode(sent)).contains("\"languagePreference\":null"));
+    assertEquals(
+        Optional.empty(),
+        ((ChangeLanguagePreference) MessageCodec.decodeRequest(MessageCodec.encode(sent)))
+            .preference());
+  }
+
+  @Test
+  void printingAChangeLanguagePreferencePrintsNeitherTheTokenNorTheAccount() {
+    SessionToken token = SessionToken.generate(new SecureRandom());
+
+    String printed =
+        new ChangeLanguagePreference(
+                token, "finch.mercer", Optional.of(Locale.forLanguageTag("es")))
+            .toString();
+
+    assertFalse(printed.contains("finch.mercer"), () -> "named the Account: " + printed);
+    assertFalse(
+        printed.contains(Base64.getEncoder().encodeToString(token.copyOfBytes())),
+        () -> "carried the token: " + printed);
   }
 
   @Test

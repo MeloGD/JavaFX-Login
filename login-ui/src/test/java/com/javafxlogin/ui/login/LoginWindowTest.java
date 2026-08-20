@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.javafxlogin.core.session.Session;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -32,6 +33,14 @@ import org.testfx.util.WaitForAsyncUtils;
  */
 class LoginWindowTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private static final String OPERATOR = "finch.mercer";
   private static final String PASSWORD = "Another-Horse-2";
 
@@ -47,7 +56,7 @@ class LoginWindowTest extends ApplicationTest {
   public void start(Stage stage) {
     loginStage = stage;
     gate = new FakeLoginGate().admitting(OPERATOR, PASSWORD);
-    gate.protect(stage, this::protectedFeature);
+    GateFlow.open(gate, stage, this::protectedFeature, SPANISH);
   }
 
   /** The host product's view, which the gate is handed and knows nothing else about. */

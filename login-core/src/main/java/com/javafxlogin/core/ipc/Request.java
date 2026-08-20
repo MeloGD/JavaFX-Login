@@ -15,6 +15,7 @@ public sealed interface Request
         Authenticate,
         Bootstrap,
         ChangeInactivityPeriod,
+        ChangeLanguagePreference,
         ChangeOwnPassword,
         ClearLockout,
         CompleteEnrolment,

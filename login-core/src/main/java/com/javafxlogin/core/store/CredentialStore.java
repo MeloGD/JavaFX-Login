@@ -191,6 +191,54 @@ public final class CredentialStore implements AutoCloseable {
   }
 
   /**
+   * The language one Account's holder reads, or nothing at all where they have said nothing.
+   *
+   * <p>Asked about one Account rather than read out of the whole list, because this is what the
+   * AuthenticationService answers an admission with: the person has just proved they hold this
+   * Account, and the language they read is the one thing about it their client is handed.
+   *
+   * @throws CredentialStoreException if the column holds something that names no language
+   */
+  public Optional<Locale> languagePreferenceOf(String accountName) {
+    Objects.requireNonNull(accountName, "accountName");
+    try (PreparedStatement statement =
+        connection.prepareStatement("SELECT language_preference FROM accounts WHERE name = ?")) {
+      statement.setString(1, accountName);
+      try (ResultSet results = statement.executeQuery()) {
+        return results.next() ? languagePreferenceIn(results) : Optional.empty();
+      }
+    } catch (SQLException | IllegalArgumentException e) {
+      throw new CredentialStoreException("could not read a LanguagePreference in " + file, e);
+    }
+  }
+
+  /**
+   * Records the language an Account's holder reads, or that they have said nothing, and answers
+   * whether there was an Account to record it against.
+   *
+   * <p>What is written is the BCP 47 tag and nothing else. Which languages a build ships is not
+   * this store's business and is not the AuthenticationService's either — the bundles are in the
+   * client, and a store that refused a tag no bundle answered to would make adding a language a
+   * change to the privileged process.
+   *
+   * <p>Saying nothing is written as NULL rather than as a tag meaning "the machine's", because the
+   * two are different facts: an Account that follows the machine follows whichever machine it is
+   * being read on, and a tag would freeze that to the one it was chosen on.
+   */
+  public boolean setLanguagePreference(String accountName, Optional<Locale> preference) {
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(preference, "preference");
+    try (PreparedStatement statement =
+        connection.prepareStatement("UPDATE accounts SET language_preference = ? WHERE name = ?")) {
+      statement.setString(1, preference.map(Locale::toLanguageTag).orElse(null));
+      statement.setString(2, accountName);
+      return statement.executeUpdate() > 0;
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not record a LanguagePreference in " + file, e);
+    }
+  }
+
+  /**
    * Records a new Account that has a password of its own, which is the Administrator's and no other:
    * every Operator is created awaiting enrolment.
    *

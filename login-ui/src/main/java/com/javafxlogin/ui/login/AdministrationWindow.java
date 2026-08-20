@@ -24,23 +24,26 @@ final class AdministrationWindow {
 
   private static final String FXML = "administration-window.fxml";
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String TITLE = "Administración";
+  private static final String TITLE = "administration.title";
 
   private AdministrationWindow() {}
 
   /**
    * Opens the panel, and closes it again when the Session ends however it ends.
    *
-   * @param handBack given the sentence explaining why, and expected to show the login screen
+   * @param language the LanguagePreference of the Administrator's own Account, or whatever was
+   *     being read at the login screen where it has said nothing
+   * @param handBack given the key of what to say about why, and expected to show the login screen
    */
-  static void open(LoginGate gate, Admitted admitted, Consumer<String> handBack) {
+  static void open(
+      LoginGate gate, Admitted admitted, InterfaceLanguage language, Consumer<String> handBack) {
     Objects.requireNonNull(gate, "gate");
     Objects.requireNonNull(admitted, "admitted");
+    Objects.requireNonNull(language, "language");
     Objects.requireNonNull(handBack, "handBack");
 
     Stage stage = new Stage();
-    GateWindow window = GateWindow.loadedFrom(FXML);
+    GateWindow window = GateWindow.loadedFrom(FXML, language);
     AdministrationController controller = window.controller(AdministrationController.class);
     // However this window goes — the Session ending, or the person closing it with the window
     // decoration — nothing is left watching a Session behind a window that is not there.
@@ -48,10 +51,11 @@ final class AdministrationWindow {
     controller.administer(
         gate,
         admitted.session(),
-        sentence -> {
-          handBack.accept(sentence);
+        language,
+        saying -> {
+          handBack.accept(saying);
           stage.close();
         });
-    window.showOn(stage, TITLE);
+    window.showOn(stage, language.say(TITLE));
   }
 }

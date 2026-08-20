@@ -5,14 +5,21 @@
 
   Nothing is prefilled and nothing is suggested, not even as a prompt: ADR-0002 keeps the account
   list unreadable, and a hint at what a name looks like hands part of it back.
+
+  Nothing here is written in a language either. Every string is a %key the FXMLLoader resolves out
+  of the bundle for whichever language this screen is being drawn in, which before anybody has
+  authenticated is the machine's own — and the selector beside the title is what somebody uses when
+  the machine's own is not the language they read.
 -->
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.CheckBox?>
+<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.PasswordField?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
 <VBox xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
@@ -23,12 +30,21 @@
     <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
   </padding>
 
-  <Label text="Iniciar sesión" styleClass="title"/>
+  <!--
+    The selector sits with the title rather than at the foot of the window: somebody who cannot read
+    this screen has to be able to find it without reading it, and the top of the window is where
+    they look first. Each language is named in itself for the same reason.
+  -->
+  <HBox spacing="8.0" alignment="CENTER_LEFT">
+    <Label text="%login.title" styleClass="title" maxWidth="Infinity" HBox.hgrow="ALWAYS"/>
+    <Label text="%login.language" styleClass="field-label"/>
+    <ComboBox fx:id="language" accessibleText="%login.language"/>
+  </HBox>
 
-  <Label text="Nombre de cuenta" styleClass="field-label"/>
+  <Label text="%login.account-name" styleClass="field-label"/>
   <TextField fx:id="accountName"/>
 
-  <Label text="Contraseña" styleClass="field-label"/>
+  <Label text="%login.password" styleClass="field-label"/>
   <PasswordField fx:id="password"/>
 
   <!--
@@ -36,16 +52,16 @@
     attempt asks for; whether the Account holds it is the AuthenticationService's decision, and an
     Operator who ticks it is refused in the same words as a wrong password.
   -->
-  <CheckBox fx:id="administer" text="Entrar en la administración"/>
+  <CheckBox fx:id="administer" text="%login.administer"/>
 
-  <Button fx:id="admit" text="Acceder" onAction="#onAdmit" defaultButton="true"
+  <Button fx:id="admit" text="%login.admit" onAction="#onAdmit" defaultButton="true"
           maxWidth="Infinity"/>
 
   <!--
     For somebody who has a one-time code and has never had a password. Without it they would have
     to type a password they do not have, be refused, and be sent to the same screen.
   -->
-  <Button fx:id="enrolInstead" text="Tengo un código de un solo uso" onAction="#onEnrolInstead"
+  <Button fx:id="enrolInstead" text="%login.enrol-instead" onAction="#onEnrolInstead"
           maxWidth="Infinity"/>
 
   <Label fx:id="message" styleClass="message" wrapText="true"/>

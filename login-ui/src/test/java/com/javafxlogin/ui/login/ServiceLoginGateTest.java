@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -255,6 +256,51 @@ class ServiceLoginGateTest {
     assertInstanceOf(
         AdministratorCreated.class,
         gate().createAdministrator(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+  }
+
+  /**
+   * Issue #13 end to end, across the socket: an Administrator records which language somebody reads
+   * and that Operator's next admission carries it. Nothing before the admission does — the login
+   * screen has a name somebody typed, and a name is not an Account.
+   */
+  @Test
+  void carriesALanguagePreferenceThroughToTheServiceAndBackOnTheNextAdmission() {
+    createTheAdministrator();
+    LoginGate gate = gate();
+    Admitted admitted =
+        assertInstanceOf(
+            Admitted.class, gate.administer(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+    assertEquals(
+        Optional.empty(),
+        admitted.languagePreference(),
+        "nobody has said which language anybody reads yet");
+
+    assertInstanceOf(
+        Administered.class,
+        gate.useLanguagePreference(
+            admitted.session(), OPERATOR, Optional.of(Locale.forLanguageTag("es"))));
+    gate.logOut(admitted.session());
+
+    Admitted operator =
+        assertInstanceOf(Admitted.class, gate.admit(OPERATOR, OPERATOR_PASSWORD.toCharArray()));
+    assertEquals(Optional.of(Locale.forLanguageTag("es")), operator.languagePreference());
+  }
+
+  /** A name no Account holds is refused rather than quietly accepted, as every other one is. */
+  @Test
+  void refusesALanguagePreferenceForANameNoAccountHolds() {
+    createTheAdministrator();
+    LoginGate gate = gate();
+    Admitted admitted =
+        assertInstanceOf(
+            Admitted.class, gate.administer(ADMINISTRATOR, ADMINISTRATOR_PASSWORD.toCharArray()));
+
+    AdministrationOutcome outcome =
+        gate.useLanguagePreference(
+            admitted.session(), "nobody.here", Optional.of(Locale.forLanguageTag("es")));
+
+    assertEquals(
+        new AdministrationRefused(AdministrationRefusedReason.NO_SUCH_ACCOUNT), outcome);
   }
 
   // --- the first run ---------------------------------------------------------------------

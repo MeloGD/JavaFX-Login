@@ -10,6 +10,7 @@ import com.javafxlogin.core.ipc.AuthenticationEventsExported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
+import com.javafxlogin.core.ipc.ChangeLanguagePreference;
 import com.javafxlogin.core.ipc.ClearLockout;
 import com.javafxlogin.core.ipc.CompleteEnrolment;
 import com.javafxlogin.core.ipc.CreateAccount;
@@ -38,7 +39,9 @@ import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * The gate a shipped product runs behind: it asks the AuthenticationService and believes nothing
@@ -83,7 +86,10 @@ final class ServiceLoginGate implements LoginGate {
     Response response = ask(new Authenticate(accountName, password, Role.OPERATOR));
     return switch (response) {
       case Granted granted ->
-          new Admitted(new Session(granted.token()), granted.passwordResetAt());
+          new Admitted(
+              new Session(granted.token()),
+              granted.passwordResetAt(),
+              granted.languagePreference());
       case Denied denied -> new NotAdmitted(denied.reason(), denied.lockedFor());
       // A readable answer that does not answer this question — a store the service cannot open,
       // say. It is not a refusal, and showing it as one would send the person to retype a
@@ -101,7 +107,11 @@ final class ServiceLoginGate implements LoginGate {
       // An Administrator is never owed a notice about their own password having been reset: theirs
       // is chosen at the first-run wizard and no request takes it away. The field is carried
       // through rather than dropped, because what the service said is not this class's to edit.
-      case Granted granted -> new Admitted(new Session(granted.token()), granted.passwordResetAt());
+      case Granted granted ->
+          new Admitted(
+              new Session(granted.token()),
+              granted.passwordResetAt(),
+              granted.languagePreference());
       case Denied denied -> new NotAdmitted(denied.reason(), denied.lockedFor());
       default -> throw unexpected("an attempt to administer the deployment", response);
     };
@@ -160,6 +170,17 @@ final class ServiceLoginGate implements LoginGate {
     Objects.requireNonNull(accountName, "accountName");
     return administered(
         "a Lockout to clear", ask(new ClearLockout(session.token(), accountName)));
+  }
+
+  @Override
+  public synchronized AdministrationOutcome useLanguagePreference(
+      Session session, String accountName, Optional<Locale> preference) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(accountName, "accountName");
+    Objects.requireNonNull(preference, "preference");
+    return administered(
+        "a LanguagePreference to record",
+        ask(new ChangeLanguagePreference(session.token(), accountName, preference)));
   }
 
   @Override

@@ -27,17 +27,13 @@ import javafx.scene.control.TextField;
  */
 public final class EnrolmentController {
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String REFUSED =
-      "El código no es válido, ya se ha usado o ha caducado. Pide uno nuevo a quien administre la"
-          + " aplicación.";
+  private static final String REFUSED = "enrolment.refused";
 
   /** The screen's own rule, and the only one it has. */
-  private static final String PASSWORDS_DO_NOT_MATCH =
-      "Las dos contraseñas no coinciden. Escríbelas otra vez.";
+  private static final String PASSWORDS_DO_NOT_MATCH = "enrolment.passwords-do-not-match";
 
-  private static final String ENROLLED =
-      "Ya puedes iniciar sesión con la contraseña que acabas de elegir.";
+  /** Said at the login screen this hands back to, and so handed over as a key. */
+  private static final String ENROLLED = "enrolment.enrolled";
 
   @FXML private TextField accountName;
   @FXML private TextField secret;
@@ -47,11 +43,17 @@ public final class EnrolmentController {
   @FXML private Label enrolmentMessage;
 
   private LoginGate gate;
+  private InterfaceLanguage saidIn;
   private Consumer<String> onEnrolled;
 
   /** Wires the window to the gate behind it, and to whatever opens once the Account has one. */
-  void enrolWith(LoginGate gate, String startingName, Consumer<String> onEnrolled) {
+  void enrolWith(
+      LoginGate gate,
+      InterfaceLanguage saidIn,
+      String startingName,
+      Consumer<String> onEnrolled) {
     this.gate = Objects.requireNonNull(gate, "gate");
+    this.saidIn = Objects.requireNonNull(saidIn, "saidIn");
     this.onEnrolled = Objects.requireNonNull(onEnrolled, "onEnrolled");
     accountName.setText(Objects.requireNonNull(startingName, "startingName"));
   }
@@ -59,7 +61,7 @@ public final class EnrolmentController {
   @FXML
   private void onEnrol() {
     if (!password.getText().equals(repeatedPassword.getText())) {
-      refused(PASSWORDS_DO_NOT_MATCH);
+      refusedSaying(PASSWORDS_DO_NOT_MATCH);
       return;
     }
 
@@ -79,24 +81,25 @@ public final class EnrolmentController {
           }
         },
         this::showOutcome,
-        this::refused);
+        this::refusedSaying);
   }
 
   private void showOutcome(EnrolmentOutcome outcome) {
     switch (outcome) {
       case Enrolled ignored -> enrolled();
-      case PolicyRefusal refusal -> refused(PolicyViolationText.paragraphFor(refusal.violations()));
+      case PolicyRefusal refusal ->
+          refused(PolicyViolationText.paragraphFor(saidIn, refusal.violations()));
       case EnrolmentRefused refused ->
           refused(
               switch (refused.reason()) {
                 // The same sentence the login screen says, because it is the same Lockout: a wrong
                 // secret counts against an Account exactly as a wrong password does.
-                case LOCKED_OUT -> LockoutText.forA(refused.lockedFor().orElseThrow());
+                case LOCKED_OUT -> LockoutText.forA(saidIn, refused.lockedFor().orElseThrow());
                 // Everything else the service could say here is the one refusal it does say: the
                 // secret was not the outstanding one. AUTH_FAILED is what it sends; the other two
                 // are answers to questions this screen does not ask, and a person reading this
                 // sentence is being sent to the right place whichever of them arrived.
-                case AUTH_FAILED, SESSION_ALREADY_LIVE, ENROLMENT_REQUIRED -> REFUSED;
+                case AUTH_FAILED, SESSION_ALREADY_LIVE, ENROLMENT_REQUIRED -> saidIn.say(REFUSED);
               });
     }
   }
@@ -107,6 +110,11 @@ public final class EnrolmentController {
     password.clear();
     repeatedPassword.clear();
     onEnrolled.accept(ENROLLED);
+  }
+
+  /** What this window says about a refusal, from the key of it: everything but the Lockout. */
+  private void refusedSaying(String key) {
+    refused(saidIn.say(key));
   }
 
   /**

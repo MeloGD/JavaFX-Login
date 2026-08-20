@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
@@ -37,6 +38,14 @@ import org.testfx.util.WaitForAsyncUtils;
  */
 class SessionWindowTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private static final String OPERATOR = "finch.mercer";
   private static final String PASSWORD = "Another-Horse-2";
 
@@ -52,7 +61,7 @@ class SessionWindowTest extends ApplicationTest {
   public void start(Stage stage) {
     loginStage = stage;
     gate = new FakeLoginGate().admitting(OPERATOR, PASSWORD);
-    gate.protect(stage, this::protectedFeature);
+    GateFlow.open(gate, stage, this::protectedFeature, SPANISH);
   }
 
   /** The host product's view, which the gate is handed and knows nothing else about. */
@@ -105,7 +114,7 @@ class SessionWindowTest extends ApplicationTest {
     awaitTheLoginScreen();
     await(() -> !message().isBlank());
     assertNotEquals(
-        SessionEndedText.sentenceFor(SessionEndedReason.INACTIVITY),
+        SPANISH.say(SessionEndedText.keyFor(SessionEndedReason.INACTIVITY)),
         message(),
         "one reason must not be worded as another");
   }
@@ -132,7 +141,7 @@ class SessionWindowTest extends ApplicationTest {
 
     awaitTheLoginScreen();
     assertEquals(1, gate.logouts(), "the service should have been told");
-    await(() -> message().equals(SessionEndedText.LOGGED_OUT));
+    await(() -> message().equals(SPANISH.say(SessionEndedText.LOGGED_OUT)));
   }
 
   /**
@@ -147,7 +156,7 @@ class SessionWindowTest extends ApplicationTest {
     gate.becomeUnreachable();
 
     awaitTheLoginScreen();
-    await(() -> message().equals(SessionEndedText.SERVICE_LOST));
+    await(() -> message().equals(SPANISH.say(SessionEndedText.SERVICE_LOST)));
   }
 
   /** Story 48: a kiosk Session has nothing to count down to, so the guard has nothing to ask. */

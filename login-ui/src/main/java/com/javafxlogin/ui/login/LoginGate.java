@@ -3,6 +3,8 @@ package com.javafxlogin.ui.login;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.function.Function;
 import javafx.scene.Parent;
 import javafx.stage.Stage;
@@ -148,6 +150,24 @@ public interface LoginGate {
    * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
    */
   AdministrationOutcome useInactivityPeriod(Session session, InactivityPeriod period);
+
+  /**
+   * Records which language the person using an Account reads the interface in, or that they read
+   * whatever the machine does.
+   *
+   * <p>It takes effect at that Account's next admission rather than now: which language somebody
+   * reads is a fact about their Account, and the service answers it on the admission that proves
+   * the Account is theirs. Nothing here says which languages exist — the service records the tag it
+   * is given, and what this build can actually draw is the bundles it ships.
+   *
+   * <p>Blocks: it crosses the socket. Must not be called on the JavaFX application thread.
+   *
+   * @param preference the language, or empty to have this Account follow whichever machine it is
+   *     used on
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  AdministrationOutcome useLanguagePreference(
+      Session session, String accountName, Optional<Locale> preference);
 
   /**
    * Copies the record of AuthenticationEvents to a file the Administrator names, which is the only
@@ -312,28 +332,16 @@ public interface LoginGate {
    * <p>This is the whole of the flow, and it is the same whichever gate is behind it, which is why
    * it is given rather than left to each implementation to get right.
    *
+   * <p>Everything shown before somebody is admitted is drawn in the language of the machine this
+   * runs on, with a selector on the login screen for when that is not the language of whoever is at
+   * the keyboard; everything opened by an admission is drawn in the LanguagePreference of the
+   * Account admitted. A host product chooses none of that and is asked for none of it.
+   *
    * <p>Must be called on the JavaFX application thread. Asking which window to open is one round
    * trip with no hashing behind it, and it happens before anything has been drawn, so it is made
    * here rather than off the thread: there is no window yet to freeze.
    */
   default void protect(Stage stage, Function<Session, Parent> protectedFeature) {
-    if (theWizardIsNeeded()) {
-      FirstRunWindow.show(this, stage, () -> LoginWindow.show(this, stage, protectedFeature));
-      return;
-    }
-    LoginWindow.show(this, stage, protectedFeature);
-  }
-
-  /**
-   * A service that cannot be asked gets the login window, whose first attempt says plainly that it
-   * could not be reached. Guessing the other way would put a wizard in front of someone on a
-   * machine that may well have an Administrator already.
-   */
-  private boolean theWizardIsNeeded() {
-    try {
-      return firstRunNeeded();
-    } catch (ServiceUnreachableException e) {
-      return false;
-    }
+    GateFlow.open(this, stage, protectedFeature, InterfaceLanguage.ofTheMachine());
   }
 }

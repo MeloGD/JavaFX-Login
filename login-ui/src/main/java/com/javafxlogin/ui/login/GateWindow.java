@@ -11,6 +11,10 @@ import javafx.stage.Stage;
 /**
  * One of the gate's own windows, loaded out of the jar this class came in.
  *
+ * <p>It is loaded in a language, which is what turns the {@code %keys} in the FXML into sentences:
+ * a screen names what it wants to say and never says it, so no window in this package holds a word
+ * of anybody's language.
+ *
  * <p>Loading and showing are two steps rather than one so that a window is wired to whatever
  * answers for it before a person can click anything in it. There is only ever one of these on a
  * stage at a time: the wizard is replaced by the login screen on the stage they share, and the
@@ -29,8 +33,8 @@ final class GateWindow {
     this.controller = controller;
   }
 
-  static GateWindow loadedFrom(String fxml) {
-    FXMLLoader loader = new FXMLLoader(resource(fxml));
+  static GateWindow loadedFrom(String fxml, InterfaceLanguage language) {
+    FXMLLoader loader = new FXMLLoader(resource(fxml), language.wording());
     try {
       Parent root = loader.load();
       return new GateWindow(root, loader.getController());

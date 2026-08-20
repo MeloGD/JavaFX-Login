@@ -33,6 +33,14 @@ import org.testfx.util.WaitForAsyncUtils;
  */
 class FirstRunWindowTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private static final String ADMINISTRATOR = "wren.holloway";
   private static final String PASSWORD = "Correct-Horse-1";
 
@@ -45,7 +53,7 @@ class FirstRunWindowTest extends ApplicationTest {
   public void start(Stage stage) {
     this.stage = stage;
     gate = new FakeLoginGate().needingItsAdministrator();
-    gate.protect(stage, this::protectedFeature);
+    GateFlow.open(gate, stage, this::protectedFeature, SPANISH);
   }
 
   private Parent protectedFeature(Session session) {

@@ -17,7 +17,9 @@ import javafx.stage.Stage;
  * are no longer authenticated for.
  *
  * <p>What the host handed over is untouched: it is placed inside, and nothing here knows what it
- * is.
+ * is — including which language it is written in. The gate draws its own control and its own notice
+ * in the language the admitted Account reads; what the ProtectedFeature says is the host product's
+ * business.
  *
  * <p>It is also where the one thing the service says only once gets said. An Operator whose password
  * an Administrator reset is told so on the admission that follows, and this is the first window they
@@ -27,8 +29,7 @@ final class SessionWindow {
 
   private static final String FXML = "session-window.fxml";
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String FEATURE_TITLE = "Funcionalidad protegida";
+  private static final String TITLE = "feature.title";
 
   private SessionWindow() {}
 
@@ -39,17 +40,26 @@ final class SessionWindow {
    * closing the only window a JavaFX application has shown ends the toolkit, and the login screen
    * would go with it.
    *
-   * @param handBack given the sentence explaining why, and expected to show the login screen
+   * @param language the LanguagePreference of the Account that was just admitted, or whatever was
+   *     being read at the login screen where it has said nothing. This is the first window in this
+   *     application that can be drawn in somebody's own language, because it is the first one
+   *     opened after a password proved whose it is.
+   * @param handBack given the key of what to say about why, and expected to show the login screen
    */
   static void open(
-      LoginGate gate, Admitted admitted, Parent protectedFeature, Consumer<String> handBack) {
+      LoginGate gate,
+      Admitted admitted,
+      InterfaceLanguage language,
+      Parent protectedFeature,
+      Consumer<String> handBack) {
     Objects.requireNonNull(gate, "gate");
     Objects.requireNonNull(admitted, "admitted");
+    Objects.requireNonNull(language, "language");
     Objects.requireNonNull(protectedFeature, "protectedFeature");
     Objects.requireNonNull(handBack, "handBack");
 
     Stage stage = new Stage();
-    GateWindow window = GateWindow.loadedFrom(FXML);
+    GateWindow window = GateWindow.loadedFrom(FXML, language);
     SessionController controller = window.controller(SessionController.class);
     // However this window goes — the Session ending, or the person closing it with the window
     // decoration — nothing is left watching a Session behind a window that is not there. A Session
@@ -58,11 +68,12 @@ final class SessionWindow {
     controller.hold(
         gate,
         admitted,
+        language,
         protectedFeature,
-        sentence -> {
-          handBack.accept(sentence);
+        saying -> {
+          handBack.accept(saying);
           stage.close();
         });
-    window.showOn(stage, FEATURE_TITLE);
+    window.showOn(stage, language.say(TITLE));
   }
 }

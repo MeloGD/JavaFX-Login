@@ -108,11 +108,24 @@ _Avoid_: score, entropy, complexity rating
 **LanguagePreference**:
 The language the person using an Account reads the interface in, or nothing at
 all where they have said nothing and the machine's own locale answers for them.
-It is held in the CredentialStore beside the Account and listed in the
-AdministrationPanel. Choosing one, and applying it once somebody has
-authenticated, is issue #13's — until then every Account reads as having said
-nothing, which is what a deployment that has never been asked looks like.
+It is held in the CredentialStore beside the Account, listed and chosen in the
+AdministrationPanel, and answered by the AuthenticationService on the admission
+that proves somebody holds the Account — which is the earliest moment there is
+anybody to answer about. It takes effect at the next admission and never at the
+moment it is recorded: it is a fact about an Account, not a change to whatever
+screen is open.
 _Avoid_: locale, i18n setting, translation, language
+
+**InterfaceLanguage**:
+The language a screen is actually drawn in, which is not the same thing as a
+LanguagePreference. Before anybody has authenticated it is the machine's own, or
+whatever the selector on the login screen was set to; after an admission it is
+the LanguagePreference of the Account admitted, and where that Account has said
+nothing it stays as it was. It is the client's throughout: the
+AuthenticationService names things and never words them, so no bundle, no
+language list and no sentence exists inside the privileged process, and adding a
+language is a properties file in login-ui — see ADR-0014.
+_Avoid_: locale, i18n, translation, language file
 
 **AccountPolicy**:
 The rules about what an Account name and a password are allowed to be, applied

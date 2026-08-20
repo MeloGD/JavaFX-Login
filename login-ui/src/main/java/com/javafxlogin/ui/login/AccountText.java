@@ -13,39 +13,40 @@ import java.util.Optional;
  * milliseconds — and this is the other side of that bargain, in one place so that the list and
  * whatever else comes to show an Account cannot drift into wording the same fact two ways.
  *
- * <p>Every string here moves to a ResourceBundle when the interface learns a second language, which
- * is issue #13. The language column is the one that will read strangely until then: it says what
- * the CredentialStore holds, and nothing in this build writes it.
+ * <p>Every sentence comes out of the bundle for the language the panel is being drawn in, which is
+ * the Administrator's own: what the store holds is a tag and a band, and neither of them is a word
+ * in anybody's language until it reaches here.
  */
 final class AccountText {
 
-  /** Said in the glossary's own words: there is one Administrator and one or more Operators. */
-  private static final String ADMINISTRATOR = "Administración";
-
-  private static final String OPERATOR = "Operador";
+  private static final String ADMINISTRATOR = "account.role.administrator";
+  private static final String OPERATOR = "account.role.operator";
 
   /** An Account nobody has enrolled against has no password, and so no band to report. */
-  private static final String AWAITING_ENROLMENT = "Pendiente de alta";
+  private static final String AWAITING_ENROLMENT = "account.band.awaiting-enrolment";
 
-  private static final String WEAK = "Débil";
-  private static final String ACCEPTABLE = "Aceptable";
-  private static final String STRONG = "Fuerte";
+  private static final String WEAK = "account.band.weak";
+  private static final String ACCEPTABLE = "account.band.acceptable";
+  private static final String STRONG = "account.band.strong";
 
   /** An Account that has chosen none follows the machine's, which is not a choice of theirs. */
-  private static final String NO_PREFERENCE = "El del sistema";
+  private static final String NO_PREFERENCE = "account.language.none";
 
-  private static final String LOCKED = "Bloqueada (%s)";
+  private static final String NAMED_LANGUAGE = "account.language.named";
+
+  private static final String LOCKED = "account.lockout.locked";
 
   /** Nothing to report, said as a mark rather than as a word, so the column reads at a glance. */
-  private static final String NOT_LOCKED = "—";
+  private static final String NOT_LOCKED = "account.lockout.none";
 
   private AccountText() {}
 
-  static String nameOf(Role role) {
-    return switch (role) {
-      case ADMINISTRATOR -> ADMINISTRATOR;
-      case OPERATOR -> OPERATOR;
-    };
+  static String nameOf(InterfaceLanguage language, Role role) {
+    return language.say(
+        switch (role) {
+          case ADMINISTRATOR -> ADMINISTRATOR;
+          case OPERATOR -> OPERATOR;
+        });
   }
 
   /**
@@ -57,11 +58,11 @@ final class AccountText {
    * showing that here would have an Administrator nudging somebody about a password they have not
    * been given the chance to choose.
    */
-  static String bandOf(Optional<PasswordStrength> passwordStrength) {
-    return passwordStrength.map(AccountText::bandOf).orElse(AWAITING_ENROLMENT);
+  static String bandOf(InterfaceLanguage language, Optional<PasswordStrength> passwordStrength) {
+    return language.say(passwordStrength.map(AccountText::keyOf).orElse(AWAITING_ENROLMENT));
   }
 
-  private static String bandOf(PasswordStrength strength) {
+  private static String keyOf(PasswordStrength strength) {
     return switch (strength) {
       case WEAK -> WEAK;
       case ACCEPTABLE -> ACCEPTABLE;
@@ -72,20 +73,29 @@ final class AccountText {
   /**
    * The language this Account's holder reads, in that language, with the tag beside it so that two
    * variants of one language are told apart.
+   *
+   * <p>Named in itself rather than in the language the panel is drawn in, and deliberately: an
+   * Administrator setting somebody's screens to a language is choosing something that person has to
+   * recognise, and a build that ships no wording for it still names it the way its readers would.
    */
-  static String preferenceOf(Optional<Locale> languagePreference) {
+  static String preferenceOf(InterfaceLanguage language, Optional<Locale> languagePreference) {
     return languagePreference
-        .map(locale -> "%s (%s)".formatted(locale.getDisplayName(locale), locale.toLanguageTag()))
-        .orElse(NO_PREFERENCE);
+        .map(
+            preference ->
+                language.say(
+                    NAMED_LANGUAGE,
+                    preference.getDisplayName(preference),
+                    preference.toLanguageTag()))
+        .orElseGet(() -> language.say(NO_PREFERENCE));
   }
 
   /**
    * Whether this Account is locked out, and for how long, in the same whole minutes the login
    * screen says it in — the two are the same wait and must not round differently.
    */
-  static String lockoutOf(Optional<Duration> lockedFor) {
+  static String lockoutOf(InterfaceLanguage language, Optional<Duration> lockedFor) {
     return lockedFor
-        .map(remaining -> LOCKED.formatted(LockoutText.waitOf(remaining)))
-        .orElse(NOT_LOCKED);
+        .map(remaining -> language.say(LOCKED, LockoutText.waitOf(language, remaining)))
+        .orElseGet(() -> language.say(NOT_LOCKED));
   }
 }

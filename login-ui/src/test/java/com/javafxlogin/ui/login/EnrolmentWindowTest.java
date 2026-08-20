@@ -10,6 +10,7 @@ import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.Session;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,6 +35,14 @@ import org.testfx.util.WaitForAsyncUtils;
  */
 class EnrolmentWindowTest extends ApplicationTest {
 
+  /**
+   * The language every window in this test is drawn in, named rather than taken from the machine
+   * the suite happens to be running on: what a screen says is asserted against the bundle it came
+   * from, and a developer's locale is not a thing to assert against.
+   */
+  private static final InterfaceLanguage SPANISH =
+      InterfaceLanguage.of(Locale.forLanguageTag("es"));
+
   private static final String NEWCOMER = "rosalind.sanders";
   private static final String SECRET = "K7QF-9M2X-3WBR-8ZDN-5YCG-VJH2-P4";
   private static final String CHOSEN = "Another-Horse-2";
@@ -47,7 +56,7 @@ class EnrolmentWindowTest extends ApplicationTest {
   @Override
   public void start(Stage stage) {
     gate = new FakeLoginGate().awaitingEnrolment(NEWCOMER);
-    gate.protect(stage, this::protectedFeature);
+    GateFlow.open(gate, stage, this::protectedFeature, SPANISH);
   }
 
   private Parent protectedFeature(Session session) {

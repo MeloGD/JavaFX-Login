@@ -12,6 +12,7 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.CheckBox?>
+<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.Separator?>
 <?import javafx.scene.control.TableColumn?>
@@ -30,8 +31,8 @@
       <padding>
         <Insets top="8.0" right="12.0" bottom="8.0" left="12.0"/>
       </padding>
-      <Label text="Administración" styleClass="title" maxWidth="Infinity" HBox.hgrow="ALWAYS"/>
-      <Button fx:id="logOut" text="Cerrar sesión" onAction="#onLogOut"/>
+      <Label text="%administration.title" styleClass="title" maxWidth="Infinity" HBox.hgrow="ALWAYS"/>
+      <Button fx:id="logOut" text="%administration.log-out" onAction="#onLogOut"/>
     </HBox>
   </top>
 
@@ -41,7 +42,7 @@
         <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
       </padding>
 
-      <Label text="Cuentas" styleClass="field-label"/>
+      <Label text="%administration.accounts" styleClass="field-label"/>
       <!--
         Every column is a fact the service sent: the Role, the coarse band, the language the person
         reads and whether the Account is refused for a while. No hash and nothing derived from one:
@@ -49,18 +50,18 @@
       -->
       <TableView fx:id="accounts" prefHeight="220.0" VBox.vgrow="ALWAYS">
         <columns>
-          <TableColumn fx:id="accountName" text="Cuenta" prefWidth="200.0"/>
-          <TableColumn fx:id="role" text="Rol" prefWidth="130.0"/>
-          <TableColumn fx:id="passwordStrength" text="Contraseña" prefWidth="120.0"/>
-          <TableColumn fx:id="languagePreference" text="Idioma" prefWidth="180.0"/>
-          <TableColumn fx:id="lockout" text="Bloqueo" prefWidth="150.0"/>
+          <TableColumn fx:id="accountName" text="%administration.column.account" prefWidth="200.0"/>
+          <TableColumn fx:id="role" text="%administration.column.role" prefWidth="130.0"/>
+          <TableColumn fx:id="passwordStrength" text="%administration.column.password" prefWidth="120.0"/>
+          <TableColumn fx:id="languagePreference" text="%administration.column.language" prefWidth="180.0"/>
+          <TableColumn fx:id="lockout" text="%administration.column.lockout" prefWidth="150.0"/>
         </columns>
       </TableView>
 
       <HBox spacing="8.0" alignment="CENTER_LEFT">
-        <Button fx:id="resetPassword" text="Restablecer contraseña" onAction="#onResetPassword"/>
-        <Button fx:id="clearLockout" text="Desbloquear" onAction="#onClearLockout"/>
-        <Button fx:id="deleteOperator" text="Eliminar operador" onAction="#onDeleteOperator"/>
+        <Button fx:id="resetPassword" text="%administration.reset-password" onAction="#onResetPassword"/>
+        <Button fx:id="clearLockout" text="%administration.clear-lockout" onAction="#onClearLockout"/>
+        <Button fx:id="deleteOperator" text="%administration.delete-operator" onAction="#onDeleteOperator"/>
       </HBox>
 
       <!--
@@ -70,18 +71,34 @@
       <Label fx:id="deleteConsequences" styleClass="warning" wrapText="true" maxWidth="Infinity"
              visible="false" managed="false"/>
       <HBox fx:id="deleteControls" spacing="8.0">
-        <Button fx:id="confirmDelete" text="Eliminar definitivamente" onAction="#onConfirmDelete"
+        <Button fx:id="confirmDelete" text="%administration.confirm-delete" onAction="#onConfirmDelete"
                 visible="false" managed="false"/>
-        <Button fx:id="cancelDelete" text="Cancelar" onAction="#onCancelDelete"
+        <Button fx:id="cancelDelete" text="%administration.cancel-delete" onAction="#onCancelDelete"
                 visible="false" managed="false"/>
+      </HBox>
+
+      <!--
+        Issue #13: which language the person using an Account reads, chosen from the same list the
+        login screen offers plus the machine's own. It is one of the things done to a chosen
+        Account, and it changes nothing about the panel it is set from — an Administrator setting
+        somebody else's language is not changing their own screens, and setting their own takes
+        effect at their next admission, which is when the service is asked whose preference to
+        apply.
+      -->
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <Label text="%administration.language"/>
+        <ComboBox fx:id="languageChoice" prefWidth="200.0"
+                  accessibleText="%administration.language"/>
+        <Button fx:id="applyLanguage" text="%administration.apply-language"
+                onAction="#onApplyLanguage"/>
       </HBox>
 
       <Separator/>
 
-      <Label text="Crear un operador" styleClass="field-label"/>
+      <Label text="%administration.create-operator" styleClass="field-label"/>
       <HBox spacing="8.0" alignment="CENTER_LEFT">
-        <TextField fx:id="newOperatorName" promptText="Nombre de la cuenta" prefWidth="240.0"/>
-        <Button fx:id="createOperator" text="Crear y generar código" onAction="#onCreateOperator"/>
+        <TextField fx:id="newOperatorName" promptText="%administration.new-operator-name" prefWidth="240.0"/>
+        <Button fx:id="createOperator" text="%administration.create-and-issue" onAction="#onCreateOperator"/>
       </HBox>
 
       <!--
@@ -91,17 +108,17 @@
       <Label fx:id="enrolmentSecret" styleClass="secret" visible="false" managed="false"/>
       <Label fx:id="enrolmentSecretWarning" styleClass="warning" wrapText="true"
              maxWidth="Infinity" visible="false" managed="false"/>
-      <Button fx:id="enrolmentSecretRead" text="Ya lo he anotado" onAction="#onEnrolmentSecretRead"
+      <Button fx:id="enrolmentSecretRead" text="%administration.enrolment-secret-read" onAction="#onEnrolmentSecretRead"
               visible="false" managed="false"/>
 
       <Separator/>
 
-      <Label text="Configuración" styleClass="field-label"/>
+      <Label text="%administration.configuration" styleClass="field-label"/>
       <HBox spacing="8.0" alignment="CENTER_LEFT">
-        <Label text="Caducidad por inactividad (minutos)"/>
+        <Label text="%administration.inactivity-minutes"/>
         <TextField fx:id="inactivityMinutes" prefWidth="80.0"/>
-        <CheckBox fx:id="neverExpires" text="Sin caducidad (modo quiosco)"/>
-        <Button fx:id="applyInactivityPeriod" text="Aplicar" onAction="#onApplyInactivityPeriod"/>
+        <CheckBox fx:id="neverExpires" text="%administration.never-expires"/>
+        <Button fx:id="applyInactivityPeriod" text="%administration.apply" onAction="#onApplyInactivityPeriod"/>
       </HBox>
 
       <!--
@@ -109,18 +126,18 @@
         SecondFactor in this version, and the control is visibly disabled rather than absent so that
         the seam has somewhere to surface later.
       -->
-      <CheckBox fx:id="secondFactor" text="Exigir un segundo factor (no disponible en esta versión)"
+      <CheckBox fx:id="secondFactor" text="%administration.second-factor"
                 disable="true"/>
 
       <Separator/>
 
-      <Label text="Registro de eventos" styleClass="field-label"/>
+      <Label text="%administration.events" styleClass="field-label"/>
       <HBox spacing="8.0" alignment="CENTER_LEFT">
-        <TextField fx:id="exportDestination" promptText="/ruta/absoluta/eventos.csv"
+        <TextField fx:id="exportDestination" promptText="%administration.export-destination"
                    prefWidth="360.0"/>
-        <Button fx:id="export" text="Exportar" onAction="#onExport"/>
+        <Button fx:id="export" text="%administration.export" onAction="#onExport"/>
       </HBox>
-      <Label text="La copia la escribe el servicio y solo su propietario puede leerla."
+      <Label text="%administration.export-explanation"
              styleClass="explanation" wrapText="true"/>
 
       <Label fx:id="message" styleClass="message" wrapText="true" maxWidth="Infinity"/>

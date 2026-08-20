@@ -35,6 +35,30 @@ the machine's clock moved. A host product writes none of that: the view it hands
 and the stylesheet the gate's own windows use is scoped so that it cannot restyle it. See
 ADR-0009 for how expiry is decided, and `CONTEXT.md` for what an `InactivityPeriod` is.
 
+## The language the interface is in
+
+The product's interface is Spanish and English; the code and the documentation are English. Every
+sentence a person reads lives in a `ResourceBundle` in `login-ui`:
+
+```
+login-ui/src/main/resources/com/javafxlogin/ui/login/
+  languages.properties     the tags this build offers, in the order the selector lists them
+  messages.properties      English, and what a machine with no bundle of its own is drawn in
+  messages_es.properties   Spanish
+```
+
+Adding a language is a `messages_<tag>.properties` beside those and its tag in
+`languages.properties`. No class names a language, and neither does the `AuthenticationService`:
+it records whatever tag it is given and holds no list, so a language is never a change to the
+privileged process.
+
+Which language a screen is drawn in is decided twice. Before anybody has authenticated — the login
+screen and the first-run wizard — it follows the machine's own locale, and the login screen carries
+a selector for when that locale is not the language of whoever is at the keyboard. After an
+admission it is the `LanguagePreference` of the `Account` admitted, which an `Administrator` sets
+from the administration panel and which takes effect at that Account's next admission. See
+ADR-0014.
+
 ## Running the pair by hand
 
 The service and the application are two processes that agree on a socket path:

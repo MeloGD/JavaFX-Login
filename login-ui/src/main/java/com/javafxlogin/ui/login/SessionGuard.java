@@ -98,7 +98,9 @@ final class SessionGuard {
    * <p>The filters are on the node rather than on the scene so that a guard can be attached before
    * the window is shown: an event on anything inside it passes through here on its way down.
    *
-   * @param whenTheSessionEnds handed the sentence to show, on the JavaFX application thread
+   * @param whenTheSessionEnds handed the key of what to say rather than the sentence, on the JavaFX
+   *     application thread: a Session that ends is said at the login screen the person is handed
+   *     back to, and that screen may well be drawn in another language than this window was
    */
   static SessionGuard watching(
       Node watched, LoginGate gate, Session session, Consumer<String> whenTheSessionEnds) {
@@ -140,7 +142,7 @@ final class SessionGuard {
   private void answered(SessionStatus status) {
     switch (status) {
       case SessionContinues continues -> continues.expiresIn().ifPresent(this::itHasThisLeft);
-      case SessionOver over -> ended(SessionEndedText.sentenceFor(over.reason()));
+      case SessionOver over -> ended(SessionEndedText.keyFor(over.reason()));
     }
   }
 
@@ -158,12 +160,12 @@ final class SessionGuard {
     nextQuestion = schedule(() -> answered(gate.stillLive(session)), expiresIn.plus(SLACK));
   }
 
-  private void ended(String sentence) {
+  private void ended(String saying) {
     if (!watching) {
       return;
     }
     watching = false;
-    Platform.runLater(() -> whenTheSessionEnds.accept(sentence));
+    Platform.runLater(() -> whenTheSessionEnds.accept(saying));
     // Not stop(): shutting the executor down from a task running on it would interrupt the task
     // that is still finishing here. The window this guard was watching stops it once it is gone.
   }

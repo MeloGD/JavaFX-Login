@@ -20,25 +20,33 @@ final class EnrolmentWindow {
 
   private static final String FXML = "enrolment-window.fxml";
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String ENROLMENT_TITLE = "Establecer contraseña";
+  private static final String TITLE = "enrolment.title";
 
   private EnrolmentWindow() {}
 
   /**
+   * @param language the one the login screen was being read in, because this is the same person on
+   *     the same stage and they have still not authenticated: the Account they are enrolling has no
+   *     password yet, so it has nothing to say about which language they read
    * @param accountName what to start the name box with — the name typed at the login screen, where
    *     the person arrived here by being sent
-   * @param onEnrolled given the sentence to greet them with, and expected to show the login screen
+   * @param onEnrolled given the key of what to greet them with, and expected to show the login
+   *     screen
    */
   static void show(
-      LoginGate gate, Stage stage, String accountName, Consumer<String> onEnrolled) {
+      LoginGate gate,
+      Stage stage,
+      InterfaceLanguage language,
+      String accountName,
+      Consumer<String> onEnrolled) {
     Objects.requireNonNull(gate, "gate");
     Objects.requireNonNull(stage, "stage");
+    Objects.requireNonNull(language, "language");
     Objects.requireNonNull(accountName, "accountName");
     Objects.requireNonNull(onEnrolled, "onEnrolled");
 
-    GateWindow window = GateWindow.loadedFrom(FXML);
-    window.controller(EnrolmentController.class).enrolWith(gate, accountName, onEnrolled);
-    window.showOn(stage, ENROLMENT_TITLE);
+    GateWindow window = GateWindow.loadedFrom(FXML, language);
+    window.controller(EnrolmentController.class).enrolWith(gate, language, accountName, onEnrolled);
+    window.showOn(stage, language.say(TITLE));
   }
 }

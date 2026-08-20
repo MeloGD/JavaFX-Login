@@ -110,6 +110,18 @@ public enum AuthenticationEventType {
   CONFIGURATION_CHANGED,
 
   /**
+   * An Administrator recorded which language an Account's holder reads the interface in, or that
+   * they read whatever the machine does. Recorded against the Account it is about rather than
+   * against whoever changed it: there is one Administrator, so the second name would be the same
+   * name every time, and the first is the one a reader is looking for.
+   *
+   * <p>What it was changed to is not here. The record says that somebody's interface changed
+   * language, which is what an Account change is; the language itself is in the CredentialStore and
+   * on the panel that lists it, and a copy of it in a file read with other tools buys nothing.
+   */
+  LANGUAGE_PREFERENCE_CHANGED,
+
+  /**
    * An Account failed authentication often enough to be refused for a while. Recorded against the
    * Account, because whoever reads the exported log wants to know which one stopped answering — and
    * a run of these is what a guessing attack looks like from the outside.

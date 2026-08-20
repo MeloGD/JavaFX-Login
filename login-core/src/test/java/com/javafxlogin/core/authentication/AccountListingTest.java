@@ -118,9 +118,9 @@ class AccountListingTest {
   }
 
   /**
-   * The other branch of the column, which nothing in this build writes yet: issue #13 owns choosing
-   * a LanguagePreference, and until it lands the only way to put one in the store is the way that
-   * ticket will. Written here so that the reading half is not shipped untested.
+   * The other branch of the column, written straight into the store rather than through the request
+   * that records one: what is asserted here is that the list reads a tag the store holds. Who may
+   * record one, and what an admission answers with, is {@link LanguagePreferenceTest}'s.
    */
   @Test
   void anAccountThatHasChosenALanguageIsListedWithIt() {
@@ -199,7 +199,7 @@ class AccountListingTest {
     assertFalse(listed.contains(hash), () -> "a hash reached the list: " + listed);
   }
 
-  /** Writes the column V006 added, the way the ticket that owns it eventually will. */
+  /** Writes the column V006 added, without going through the request that records one. */
   private void recordTheLanguagePreference(String accountName, String tag) {
     try (Connection connection =
             DriverManager.getConnection("jdbc:sqlite:" + ServiceHarness.storeFileIn(directory));

@@ -18,18 +18,22 @@ final class FirstRunWindow {
 
   private static final String FXML = "first-run-window.fxml";
 
-  /** Every string here moves to a ResourceBundle when the interface learns a second language. */
-  private static final String FIRST_RUN_TITLE = "Primer arranque";
+  private static final String TITLE = "first-run.title";
 
   private FirstRunWindow() {}
 
-  static void show(LoginGate gate, Stage stage, Runnable onCreated) {
+  /**
+   * @param language the machine's own, because this screen is shown before the deployment holds a
+   *     single Account and so before there is any LanguagePreference in the world to read
+   */
+  static void show(LoginGate gate, Stage stage, InterfaceLanguage language, Runnable onCreated) {
     Objects.requireNonNull(gate, "gate");
     Objects.requireNonNull(stage, "stage");
+    Objects.requireNonNull(language, "language");
     Objects.requireNonNull(onCreated, "onCreated");
 
-    GateWindow window = GateWindow.loadedFrom(FXML);
-    window.controller(FirstRunController.class).createWith(gate, onCreated);
-    window.showOn(stage, FIRST_RUN_TITLE);
+    GateWindow window = GateWindow.loadedFrom(FXML, language);
+    window.controller(FirstRunController.class).createWith(gate, language, onCreated);
+    window.showOn(stage, language.say(TITLE));
   }
 }
