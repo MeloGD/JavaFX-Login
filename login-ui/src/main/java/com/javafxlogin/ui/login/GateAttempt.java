@@ -16,8 +16,8 @@ import javafx.application.Platform;
  *
  * <p>What is not an answer is named here too, for the same reason: a service that cannot be
  * reached, and a defect below that produced no answer at all, mean the same thing to a person
- * whichever window they are looking at. What comes back is the key of that sentence and not the sentence,
- * because the window asking is the one that knows which language it is being drawn in.
+ * whichever window they are looking at. What comes back is the key of that sentence and not the
+ * sentence, because the window asking is the one that knows which language it is drawn in.
  */
 final class GateAttempt {
 

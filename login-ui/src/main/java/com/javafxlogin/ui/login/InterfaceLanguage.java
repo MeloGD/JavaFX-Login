@@ -20,9 +20,9 @@ import java.util.ResourceBundle;
  *
  * <p>It is chosen twice, and the order is the whole of issue #13. The login screen and the
  * first-run wizard have to be readable <em>before</em> anybody has authenticated, so they follow
- * the machine's own locale and offer a selector for when that locale is wrong. Only once somebody has
- * proved they hold an Account can that Account's LanguagePreference apply, because until then this
- * application does not know whose preference to use — a name in a box is not an Account.
+ * the machine's own locale and offer a selector for when that locale is wrong. Only once somebody
+ * has proved they hold an Account can that Account's LanguagePreference apply, because until then
+ * this application does not know whose preference to use — a name in a box is not an Account.
  *
  * <p>Nothing in this package names a language. Which ones a build offers is {@code
  * languages.properties}, and what each of them says is a {@code messages_<tag>.properties} beside

@@ -2275,3 +2275,94 @@ standing instruction not to spawn them.
   wording for is drawn in, and the repo's own language is English. A Spanish
   deployment is drawn from `messages_es.properties` because the machine says so,
   not because a fallback happened to pick it.
+\n
+# Code review — Interface language (issue #13), the two-axis review
+
+The section above was written alongside the implementation, and its §6 was an
+**inline** review: the two axes were judged by the implementer rather than by
+the sub-agents `/code-review` spawns. This section is the skill run properly,
+from the same fixed point (`9e05fc7`), against the commit that section describes
+(`c16f6bf`) — two independent agents, one per axis, neither seeing the other's
+context and neither seeing §6.
+
+It is worth reading for what it says about the inline review: the two axes found
+seven things §6 did not, and one of them was a test the implementer wrote that
+could not fail.
+
+## Standards axis — what it found
+
+No ADR conflict. ADR-0014, ADR-0002, ADR-0003 and ADR-0007 all hold: no bundle,
+sentence or language list reaches `login-core`, `Granted` carries a tag only
+after an admission, and the codec writes the explicit `null`.
+
+**Hard violations**
+
+| Finding | What was done |
+|---|---|
+| **Google Java Style §4.4 (100 columns).** Three added javadoc lines at 102–106 columns, in paragraphs the change reflowed by hand. No formatter or checkstyle plugin exists in `pom.xml`, so nothing but a reviewer catches these. | Rewrapped. `git diff 9e05fc7...HEAD` now adds no line over 100 characters. |
+| **`CONTEXT.md` glossary, `InterfaceLanguage` `_Avoid_: locale, i18n, translation, language`.** The type is named right and then referred to by both avoided synonyms: `InterfaceLanguage.locale()`, `InterfaceLanguage language` in six signatures, `ComboBox<Locale> language` in the FXML fields — while the controllers call the same thing `saidIn`. The change disagrees with itself. | **Not acted on.** Recorded as open ground below: it is a rename across eight files, and the right target (`saidIn` everywhere, or `interfaceLanguage`, or leaving `locale()` alone because `java.util.Locale` is what it returns) is a call worth making deliberately rather than at publish time. |
+
+**Judgement calls (Fowler baseline), none acted on**
+
+- **Duplicated Code.** The anonymous `StringConverter<Locale>` whose `fromString`
+  throws `"the selector is not typed into"` is written twice, in
+  `LoginController.offerTheLanguages` and `AdministrationController.offerTheLanguages`.
+  Separately, `refusedSaying(String key)` recurs in `EnrolmentController`,
+  `FirstRunController` and, as `failedSaying`, in `LoginController`.
+- **Duplicated Code / divergence.** A language is named in itself two ways on one
+  screen: `InterfaceLanguage.nameOf` (capitalised `getDisplayLanguage`) for the
+  selector, `preference.getDisplayName(preference)` in `AccountText.preferenceOf`
+  for the column — so `es-MX` reads differently in each.
+- **Primitive Obsession.** A bundle key and a rendered sentence are both bare
+  `String`, and `AdministrationController` holds `say(String sentence)` beside
+  `theSessionEnded(String saying)`, which takes a key. Swapping them compiles.
+  ADR-0014 endorses passing keys; it does not endorse passing them untyped.
+- **Data Clumps.** `(gate, stage, protectedFeature, language)` travels through six
+  signatures in `LoginWindow` / `GateFlow`.
+- **Mysterious Name.** `saidIn`, `THE_MACHINE_S`, `wireWhatIsWorded()`, `theirs()`.
+- **Formatting churn.** `GateAttempt.make` and `EnrolmentController.enrolWith`
+  were split one parameter per line though the list fits in 99 columns.
+
+## Spec axis — what it found
+
+**(a) Missing or partial**
+
+| Finding | What was done |
+|---|---|
+| **Criterion 8, "a missing key fails visibly in tests rather than silently at runtime".** `WordingTest.fileFor()` fell back to the base bundle when a language's file was absent, so an offered language shipping **no bundle at all** compared the base bundle against itself and every completeness test passed green. The one case that must fail loudest was the one the test excused. | **Fixed.** `fileFor` no longer falls back: the first offered language is the base bundle, every other one has a file of its own, and `WordingTest.everyOfferedLanguageHasWordingOfItsOwn` names what is missing. Verified by experiment before the fix: with `offered = en, es, fr` and no French bundle, all three completeness tests passed. |
+| **Criterion 1, "adding a language touches no code".** It touched test code: `everyOfferedLanguageIsOffered` asserted `List.of(ENGLISH, SPANISH)` verbatim, and `LanguageWindowTest.theSelectorOffersEveryLanguageThisBuildShips` asserted `List.of("English", "Español")`. | **Fixed.** Both now derive from `InterfaceLanguage.offered()`: the first asserts the two languages this product ships are among those offered, the second asserts the selector renders each offered language named in itself. `theClosestOfferedLanguageIsTheOneDrawn` and `aLocaleThatNamesNoLanguageIsDrawnInTheFirstOneOffered` take the fallback from `offered().get(0)` rather than naming English. The measured breakage was two tests, not the three the axis reported. |
+| **Criterion 1, "every user-facing string comes from a `ResourceBundle`".** `protected-feature/…/feature-view.fxml` still hardcodes `text="Has accedido a la funcionalidad detrás del sistema de login"`, and it is what an admitted Operator actually reads. | **Not acted on**, and argued: `protected-feature` is the host product in this repo, and CONTEXT.md says this system knows the ProtectedFeature "only as a view it is handed". Translating it would be the gate reaching into the host. The axis is right that it ships here; the answer is that it ships as an example of a host, not as part of the gate. |
+
+**(b) Not asked for**
+
+- `LANGUAGE_PREFERENCE_CHANGED` and its `record(...)` call: the spec asks that an
+  Administrator *set* a preference, not that it be audited. **Kept**, and named as
+  scope taken: every other Account change in this service is recorded, and one
+  that was not would be the gap a reader of the exported record would trip on.
+
+**(c) Implemented but arguably wrong**
+
+- **The base bundle is English while "the product's interface is in Spanish".**
+  A machine set to a language this build does not ship is drawn in English, not
+  Spanish, and `LoginWindow.theirs()` drops an Account preference this build has
+  no wording for to English rather than back to the language the login screen was
+  in — so that person loses both their preference and the selector's choice.
+  **Not acted on; open for the maintainer.** ADR-0014 records the choice
+  deliberately, the Standards axis judged it consistent, and this axis disagrees
+  on the ticket's own words. The second half of the finding — the selector's
+  choice being lost — is the sharper half and is not settled by that ADR.
+- **`PolicyViolationText.paragraphFor` joins sentences with a hardcoded `" "`.**
+  **Not acted on.** It is a separator between whole sentences, not a fragment of
+  one; a language needing another separator can have the key then.
+
+## What this run says about the inline review
+
+Of the fourteen findings, §6 above had none. Two mattered: a test that could not
+fail, and a set of assertions that made the criterion they were checking false.
+Both are fixed here. The rest are recorded rather than acted on, with the reason
+in each row.
+
+The inline review was not worthless — it caught the hand-back language, the
+login-screen leak and the `MessageFormat` apostrophe, all before the commit —
+but it did not catch its own tests. That is the argument for the two axes running
+somewhere the implementer is not.

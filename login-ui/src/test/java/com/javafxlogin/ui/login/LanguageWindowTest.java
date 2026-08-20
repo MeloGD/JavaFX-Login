@@ -68,8 +68,8 @@ class LanguageWindowTest extends ApplicationTest {
     assertEquals(InterfaceLanguage.offered(), List.copyOf(selector().getItems()));
     assertEquals(SPANISH, selector().getValue(), "it starts on the one being read");
     assertEquals(
-        List.of("English", "Español"),
         InterfaceLanguage.offered().stream().map(InterfaceLanguage::nameOf).toList(),
+        selector().getItems().stream().map(selector().getConverter()::toString).toList(),
         "each named in itself, so that somebody can find their own without reading the screen");
   }
 

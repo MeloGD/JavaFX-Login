@@ -45,8 +45,34 @@ class WordingTest {
 
   /** Criterion 6: both bundles exist, and this is where "complete" is given a meaning. */
   @Test
-  void everyOfferedLanguageIsOffered() {
-    assertEquals(List.of(ENGLISH, SPANISH), InterfaceLanguage.offered());
+  void bothLanguagesThisProductShipsAreOffered() {
+    assertTrue(
+        InterfaceLanguage.offered().containsAll(List.of(ENGLISH, SPANISH)),
+        () -> "the two languages this product ships are not both offered: "
+            + InterfaceLanguage.offered());
+  }
+
+  /**
+   * A language offered with no wording of its own is the one failure the tests below cannot see:
+   * every one of them would read that language out of the base bundle, compare it against itself
+   * and pass, while the people it was offered to were shown a language they did not ask for.
+   *
+   * <p>It is asserted here rather than left to {@link #fileFor}, so that the sentence a developer
+   * reads names what is missing rather than a comparison that mysteriously holds.
+   */
+  @Test
+  void everyOfferedLanguageHasWordingOfItsOwn() {
+    List<Locale> offered = InterfaceLanguage.offered();
+
+    for (Locale language : offered.subList(1, offered.size())) {
+      assertNotNull(
+          WordingTest.class.getResource(bundleFor(language)),
+          () ->
+              bundleFor(language)
+                  + " is missing: "
+                  + language.toLanguageTag()
+                  + " is offered and this build has no wording for it");
+    }
   }
 
   @Test
@@ -193,7 +219,7 @@ class WordingTest {
         InterfaceLanguage.of(Locale.forLanguageTag("es-MX")).locale(),
         "a regional variant reads the language it is a variant of");
     assertEquals(
-        ENGLISH,
+        InterfaceLanguage.offered().get(0),
         InterfaceLanguage.of(Locale.forLanguageTag("fi")).locale(),
         "a language with no bundle is drawn in the first one offered");
   }
@@ -204,8 +230,10 @@ class WordingTest {
    */
   @Test
   void aLocaleThatNamesNoLanguageIsDrawnInTheFirstOneOffered() {
-    assertEquals(ENGLISH, InterfaceLanguage.of(Locale.ROOT).locale());
-    assertEquals(ENGLISH, InterfaceLanguage.of(new Locale.Builder().build()).locale());
+    Locale first = InterfaceLanguage.offered().get(0);
+
+    assertEquals(first, InterfaceLanguage.of(Locale.ROOT).locale());
+    assertEquals(first, InterfaceLanguage.of(new Locale.Builder().build()).locale());
   }
 
   /** Criterion 2 at its root: what a screen nobody has authenticated in front of follows. */
@@ -250,11 +278,16 @@ class WordingTest {
 
   /**
    * Where a language's wording lives. The first language offered is the base bundle itself, which
-   * is what a machine this build ships no wording for is drawn from.
+   * is what a machine this build ships no wording for is drawn from; every other one has a file of
+   * its own, and a missing one fails at {@link #everyOfferedLanguageHasWordingOfItsOwn} rather than
+   * quietly reading the base bundle twice.
    */
   private static String fileFor(Locale offered) {
-    String named = "messages_" + offered.toLanguageTag() + ".properties";
-    return WordingTest.class.getResource(named) == null ? BASE : named;
+    return offered.equals(InterfaceLanguage.offered().get(0)) ? BASE : bundleFor(offered);
+  }
+
+  private static String bundleFor(Locale offered) {
+    return "messages_" + offered.toLanguageTag() + ".properties";
   }
 
   private static Set<String> keysOf(String file) {

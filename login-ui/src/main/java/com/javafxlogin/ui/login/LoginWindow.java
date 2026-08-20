@@ -93,7 +93,7 @@ final class LoginWindow {
    * Puts the enrolment screen on the same stage, and puts the login window back when it is done.
    *
    * <p>Whether the enrolment succeeded or the person gave up and closed nothing, they end where
-   * they started: at the login screen, with a sentence saying which of the two happened. It is the same
+   * they started: at the login screen, with a sentence saying which of the two happened. It is one
    * language throughout: nobody has authenticated, so there is no Account whose preference could
    * have anything to say about it.
    */
