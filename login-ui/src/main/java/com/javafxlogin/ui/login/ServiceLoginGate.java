@@ -114,7 +114,7 @@ final class ServiceLoginGate implements LoginGate {
     return switch (response) {
       case AccountsListed listed -> new AccountsSeen(listed.accounts());
       case ErrorResponse error -> refused("a request for the Accounts", error);
-      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      case SessionEnded ignored -> sessionOver();
       default -> throw unexpected("a request for the Accounts", response);
     };
   }
@@ -141,7 +141,7 @@ final class ServiceLoginGate implements LoginGate {
       case EnrolmentIssued issued -> new EnrolmentSecretIssued(issued.secret(), issued.expiresAt());
       case PolicyRefused refused -> new PolicyRefusal(refused.violations());
       case ErrorResponse error -> refused(asked, error);
-      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      case SessionEnded ignored -> sessionOver();
       default -> throw unexpected(asked, response);
     };
   }
@@ -176,7 +176,7 @@ final class ServiceLoginGate implements LoginGate {
     return switch (response) {
       case Ok ignored -> new Administered();
       case ErrorResponse error -> refused(asked, error);
-      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      case SessionEnded ignored -> sessionOver();
       default -> throw unexpected(asked, response);
     };
   }
@@ -190,9 +190,17 @@ final class ServiceLoginGate implements LoginGate {
     return switch (response) {
       case AuthenticationEventsExported exported -> new EventsExported(exported.export());
       case ErrorResponse error -> refused("an export of the record", error);
-      case SessionEnded ignored -> new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
+      case SessionEnded ignored -> sessionOver();
       default -> throw unexpected("an export of the record", response);
     };
+  }
+
+  /**
+   * A Session that ended before the request arrived. Said the same way for every administration
+   * request, because it is the same thing about the same Session whichever one discovered it.
+   */
+  private static AdministrationRefused sessionOver() {
+    return new AdministrationRefused(AdministrationRefusedReason.SESSION_OVER);
   }
 
   /**

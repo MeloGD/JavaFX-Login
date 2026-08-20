@@ -1978,11 +1978,12 @@ judging rather than rediscovering, and what is deliberately left open.
 | | |
 |---|---|
 | Branch | `dev-login` |
+| Commits | `4d9d533` (implementation), `1478c85` (review fixes) |
 | Base / fixed point | `9f8f76b` ("Open the Vault with a password rather than with an answer") |
 | Diff to review | `git diff 9f8f76b...HEAD` |
 | Packages | `com.javafxlogin.core.account`, `…core.ipc`, `…core.store`, `…core.authentication` in `login-core`; `com.javafxlogin.ui.login` in `login-ui` |
 | Binding decision | ADR-0013 (`docs/adr/0013-the-account-list-crosses-the-socket-and-nothing-else-does.md`) |
-| Build | `mvn -o test` → 575 tests, 0 failures, 1 skipped by an OS guard (core 482, ui 92, feature 1) |
+| Build | `mvn -o test` → 578 tests, 0 failures, 1 skipped by an OS guard (core 482, ui 95, feature 1), after the review fixes in §5 |
 
 New at the service: `ListAccounts` / `AccountsListed`, `AccountSummary`,
 `CredentialStore.accounts()`, migration `V006__language_preference.sql`.
@@ -2003,8 +2004,8 @@ Blocked by #8 (Lockout) and #10 (enrolment), both landed. Parent spec is issue
 
 | Criterion | Status | Proof |
 |---|---|---|
-| Accounts listed with Role, band, language and Lockout | met | `AccountListingTest` (5 tests, at the service) + `AdministrationWindowTest.everyAccountIsListedWithWhatTheAdministratorNeedsToKnowAboutIt`, `…anAccountWithNoLanguagePreferenceSaysSoRatherThanNamingOne`, `…anAccountThatIsLockedOutIsListedAsLockedOut` |
-| Creating an `Operator` shows the secret once, with a warning | met | `AdministrationWindowTest.creatingAnOperatorShowsTheEnrolmentSecretOnceWithAWarning`, `…theEnrolmentSecretIsGoneOnceTheAdministratorSaysTheyHaveWrittenItDown` |
+| Accounts listed with Role, band, language and Lockout | met | `AccountListingTest` (5 tests, at the service) + `AdministrationWindowTest.everyAccountIsListedWithWhatTheAdministratorNeedsToKnowAboutIt`, `…anAccountWithNoLanguagePreferenceSaysSoRatherThanNamingOne`, `…anAccountThatIsLockedOutIsListedAsLockedOut`, `…anAccountAwaitingEnrolmentIsSaidToBeWaitingRatherThanShownABand` |
+| Creating an `Operator` shows the secret once, with a warning | met | `AdministrationWindowTest.creatingAnOperatorShowsTheEnrolmentSecretOnceWithAWarning`, `…theEnrolmentSecretIsGoneOnceTheAdministratorSaysTheyHaveWrittenItDown`, `…nothingAskedOfThePanelAfterwardsBringsTheSecretBack` |
 | An `Operator` can be deleted, consequences stated | met | `…deletingAnOperatorStatesWhatItCostsBeforeItHappens` (asserts nothing was deleted before confirming), `…theOperatorIsDeletedOnceItIsConfirmed` |
 | A reset without the `Administrator` choosing the password | met | `…aPasswordResetHandsBackASecretAndNeverAsksForAPassword` — asserts the request made **and** that the panel has no `PasswordField` at all |
 | A `Lockout` can be cleared | met | `…aLockoutCanBeCleared` |
@@ -2012,7 +2013,7 @@ Blocked by #8 (Lockout) and #10 (enrolment), both landed. Parent spec is issue
 | The audit log can be exported | met | `…theRecordCanBeExportedAndSaysWhatTheCopyCameTo`, `…anExportWhoseChainDidNotHoldSaysSoInItsOwnWords` |
 | `SecondFactor` present, visibly disabled, doing nothing | met | `…theSecondFactorControlIsThereAndDisabled` |
 | Panel reachable only by an `Administrator` `Session`, enforced by the service | met | `AccountListingTest.anOperatorIsRefusedTheListOfAccounts`, `…aSessionThatIsOverIsToldSoRatherThanAnsweredWithTheList`; every other request was already enforced (`RoleEnforcementTest`, `InactivityPeriodConfigurationTest`, `LockoutTest`, `EnrolmentTest`) |
-| UI tests drive the panel headless on Monocle against a fake `LoginGate` | met | `AdministrationWindowTest` (20 tests, 86 s) — TestFX + Monocle, `FakeLoginGate` |
+| UI tests drive the panel headless on Monocle against a fake `LoginGate` | met | `AdministrationWindowTest` (23 tests, 99 s) — TestFX + Monocle, `FakeLoginGate` |
 
 ## 3. Design decisions a reviewer should judge, not rediscover
 
@@ -2045,7 +2046,7 @@ Blocked by #8 (Lockout) and #10 (enrolment), both landed. Parent spec is issue
 - **Deleting is two clicks with the consequences in between**, in the window
   rather than in a modal dialog — a dialog is not drivable headless on Monocle,
   and this is testable.
-- **`V006` adds a nullable `language` column that nothing in this build writes.**
+- **`V006` adds a nullable `language_preference` column that nothing in this build writes.**
   Criterion 1 asks for the column; issue #13 owns choosing and applying a
   preference and is blocked by this ticket. A reviewer should decide whether the
   column belongs here or with #13; the argument for here is that #12 lists it and
@@ -2068,10 +2069,57 @@ Blocked by #8 (Lockout) and #10 (enrolment), both landed. Parent spec is issue
 - **`AdministrationController` is long** (a screen with seven jobs on it). It was
   left as one class because every job is three lines of "ask the gate, show what
   came back"; splitting it would move the wiring rather than remove it.
-- **The `language` column has no `CHECK` and no writer.** A tag naming no
-  language is refused when read, in the store and again in the codec, rather than
-  read as "said nothing" — which is the distinction #13 will depend on.
+- **The `language_preference` column has no `CHECK` and no writer in this
+  build.** A tag naming no language is refused when read, in the store and again
+  in the codec, rather than read as "said nothing" — which is the distinction #13
+  will depend on. Both branches are now tested by writing the column the way #13
+  will.
 - **Reading the list is not an AuthenticationEvent**, on the argument in
   ADR-0013. If a reviewer disagrees, the change is one line in
   `listAccounts` — and the record would then fill with the panel refreshing
   itself after every change.
+
+## 5. What the two-axis review found and what was done
+
+Both axes ran against `4d9d533`, with `9f8f76b` as the fixed point.
+
+### Acted on
+
+| Axis | Finding | What was done |
+|---|---|---|
+| Standards | **The glossary's own term was not used.** `CONTEXT.md` defines `LanguagePreference` with `_Avoid_: … language`, and this commit — the one that added the entry — named the concept `language` in the record, the column, the JSON field, the store, `AccountText` and the FXML. | Renamed throughout: `AccountSummary.languagePreference`, `language_preference` in V006, `"languagePreference"` on the wire, `AccountText.preferenceOf`. |
+| Spec | **An Account awaiting enrolment was listed as a weak password.** Story 72 asks an Administrator to find the Accounts worth nudging; one that has never had a password is not one of them, and the store's `WEAK` is V002's floor rather than a measurement. | `AccountSummary.passwordStrength` is now `Optional<PasswordStrength>`, empty while awaiting enrolment; the store asks `password_hash IS NULL` (never selecting the hash); the panel says *Pendiente de alta*. `AccountListingTest.anAccountAwaitingEnrolmentIsListedWithNoBandAtAll`, `AdministrationWindowTest.anAccountAwaitingEnrolmentIsSaidToBeWaitingRatherThanShownABand`. |
+| Spec | **The panel asserted an event the service does not make**: a reset of an Account with no password said "la contraseña … ha dejado de funcionar", while `AuthenticationService` deliberately records no `PASSWORD_RESET_INITIATED` for one. | The sentence is chosen from the Account's own state, which the panel now knows. `AdministrationWindowTest.reissuingASecretDoesNotClaimAPasswordStoppedWorking`. |
+| Spec | **The `language` column's reading half was untested** — only the empty branch was exercised, so neither the tag parsing nor its refusal ran. | `AccountListingTest.anAccountThatHasChosenALanguageIsListedWithIt` and `…aLanguagePreferenceThatNamesNoLanguageIsRefusedRatherThanReadAsSilence` write the column the way issue #13 will. |
+| Spec | **"Never built" was asserted as "not on the screen."** | The test now counts calls to the host's `Function<Session, Parent>` and asserts zero. |
+| Spec | **Nothing asserted that the secret cannot be asked for again** (criterion 2). | `AdministrationWindowTest.nothingAskedOfThePanelAfterwardsBringsTheSecretBack`. |
+| Standards | **Wording belongs in a `*Text` class** here (`SessionEndedText`, `PolicyViolationText`, `LockoutText`), and `sentenceFor(AdministrationRefusedReason)` was inlined in the controller as `case SESSION_OVER -> SESSION_OVER;`. | Extracted `AdministrationRefusedText`, which the export's own client-side refusal now shares. |
+| Standards | Duplicated Code — `showTheSecret` / `showTheDelete` were the same visible/managed triple; the repeated `SESSION_OVER` construction in `ServiceLoginGate`; a 151-column javadoc line left by widening `LockoutText.waitOf`. | `show(boolean, Node…)`; `sessionOver()`; the javadoc rewrapped and every line this change introduced brought back inside the width the rest of the tree keeps. |
+| Standards | Primitive Obsession / control flag — `LoginController` threaded `boolean administering` through two methods. | The attempt and where it leads are chosen together, once: `Supplier<Admission>` and `Consumer<Admitted>` picked in `onAdmit`. |
+| Standards + Spec | Speculative Generality — `AccountSummary.isLockedOut()` was production API used only by a test. | Removed; the test asks `lockedFor().isPresent()`. `isAwaitingEnrolment()` replaced it, and is used by the panel. |
+| Spec | The minutes box stayed enabled and unread while *Sin caducidad* was ticked. | `inactivityMinutes.disableProperty()` is bound to the checkbox. |
+
+### Deliberately not acted on
+
+- **"The log-out button was not asked for" (Spec).** True — issue #12 lists no
+  logout criterion, and story 49 is an Operator's. It stays: one machine holds
+  one Session at a time, so an Administrator with no way to leave holds the
+  machine until inactivity expires, and the alternative is closing the window
+  with the decoration and hoping.
+- **"`ServiceLoginGate` repeats a three-arm switch four times" (Standards).** The
+  repeated arms are now two lines each and the shared one is named. Folding the
+  rest behind a generic helper would replace four readable switches with one
+  signature carrying a mapper per call site.
+- **"A new `ErrorCode` forces edits in five places" (Standards, Shotgun
+  Surgery).** That is the closed-set design working: the codec, the two client
+  translations and the wording are each exhaustive on purpose, so a code added
+  and worded nowhere fails to compile rather than reaching somebody as a blank
+  refusal.
+- **"`AdministrationController` is one class for seven jobs" (Standards,
+  Divergent Change).** Still true, still recorded in §4. Every job is three lines
+  of "ask the gate, show what came back"; splitting it would move the wiring.
+- **"Story 26 (re-issue a lost code) has no button of its own" (Spec).** It is
+  the reset button, as the service has it — `InitiateReset` against an Account
+  awaiting enrolment simply has no password to take away. What the review was
+  right about is that the panel could not *tell* which Accounts those were; it
+  now can, and the wording follows.

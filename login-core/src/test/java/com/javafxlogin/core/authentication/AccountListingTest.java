@@ -29,6 +29,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -87,29 +88,64 @@ class AccountListingTest {
     List<AccountSummary> accounts = accountsSeenByTheAdministrator();
 
     assertEquals(
-        PasswordStrength.ACCEPTABLE, summaryOf(accounts, OPERATOR).passwordStrength());
+        Optional.of(PasswordStrength.ACCEPTABLE), summaryOf(accounts, OPERATOR).passwordStrength());
   }
 
   /**
-   * An Account nobody has enrolled against holds no password, and the band of a password nobody has
-   * chosen must not read as a strong one.
+   * An Account nobody has enrolled against holds no password, so there is no band of one to report.
+   * The store keeps the weakest band on that row, so that an unknown password can never read as a
+   * strong one, and passing it on here as if it were a measurement would have an Administrator
+   * nudging somebody who has not been given a password to choose.
    */
   @Test
-  void anAccountAwaitingEnrolmentIsListedAtTheWeakestBand() {
+  void anAccountAwaitingEnrolmentIsListedWithNoBandAtAll() {
     SessionToken administrator = admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD, Role.ADMINISTRATOR);
     harness.send(new CreateAccount(administrator, "juno.vale", Role.OPERATOR));
 
     List<AccountSummary> accounts = accountsOf(harness.send(new ListAccounts(administrator)));
 
-    assertEquals(PasswordStrength.WEAK, summaryOf(accounts, "juno.vale").passwordStrength());
+    AccountSummary juno = summaryOf(accounts, "juno.vale");
+    assertEquals(Optional.empty(), juno.passwordStrength());
+    assertTrue(juno.isAwaitingEnrolment(), "it is waiting for somebody to choose a password");
   }
 
   /** Nobody has said which language they read, so nothing is claimed about one. */
   @Test
-  void anAccountThatHasNotChosenALanguageIsListedWithoutOne() {
+  void anAccountThatHasChosenNoLanguageIsListedWithoutOne() {
     List<AccountSummary> accounts = accountsSeenByTheAdministrator();
 
-    assertEquals(Optional.empty(), summaryOf(accounts, OPERATOR).language());
+    assertEquals(Optional.empty(), summaryOf(accounts, OPERATOR).languagePreference());
+  }
+
+  /**
+   * The other branch of the column, which nothing in this build writes yet: issue #13 owns choosing
+   * a LanguagePreference, and until it lands the only way to put one in the store is the way that
+   * ticket will. Written here so that the reading half is not shipped untested.
+   */
+  @Test
+  void anAccountThatHasChosenALanguageIsListedWithIt() {
+    recordTheLanguagePreference(OPERATOR, "es-ES");
+
+    List<AccountSummary> accounts = accountsSeenByTheAdministrator();
+
+    assertEquals(
+        Optional.of(Locale.forLanguageTag("es-ES")),
+        summaryOf(accounts, OPERATOR).languagePreference());
+  }
+
+  /**
+   * A store edited by hand is not guessed at. Read as "said nothing" it would tell an Administrator
+   * this person expressed no preference while the store says they did.
+   */
+  @Test
+  void aLanguagePreferenceThatNamesNoLanguageIsRefusedRatherThanReadAsSilence() {
+    recordTheLanguagePreference(OPERATOR, "not a language tag at all");
+
+    SessionToken administrator = admit(ADMINISTRATOR, ADMINISTRATOR_PASSWORD, Role.ADMINISTRATOR);
+
+    assertEquals(
+        ErrorCode.STORE_UNAVAILABLE,
+        assertInstanceOf(ErrorResponse.class, harness.send(new ListAccounts(administrator))).code());
   }
 
   /** Criterion 5's other half: an Administrator can only clear what they can see. */
@@ -161,6 +197,21 @@ class AccountListingTest {
 
     assertTrue(listed.contains(OPERATOR), () -> "the Operator should be in " + listed);
     assertFalse(listed.contains(hash), () -> "a hash reached the list: " + listed);
+  }
+
+  /** Writes the column V006 added, the way the ticket that owns it eventually will. */
+  private void recordTheLanguagePreference(String accountName, String tag) {
+    try (Connection connection =
+            DriverManager.getConnection("jdbc:sqlite:" + ServiceHarness.storeFileIn(directory));
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "UPDATE accounts SET language_preference = ? WHERE name = ?")) {
+      statement.setString(1, tag);
+      statement.setString(2, accountName);
+      assertEquals(1, statement.executeUpdate(), "there is no Account named " + accountName);
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   /** Read straight out of the store, which is the only place a hash is allowed to be. */

@@ -24,12 +24,15 @@ final class AccountText {
 
   private static final String OPERATOR = "Operador";
 
+  /** An Account nobody has enrolled against has no password, and so no band to report. */
+  private static final String AWAITING_ENROLMENT = "Pendiente de alta";
+
   private static final String WEAK = "Débil";
   private static final String ACCEPTABLE = "Aceptable";
   private static final String STRONG = "Fuerte";
 
-  /** An Account that has chosen no language follows the machine's, which is not a choice of theirs. */
-  private static final String NO_LANGUAGE = "El del sistema";
+  /** An Account that has chosen none follows the machine's, which is not a choice of theirs. */
+  private static final String NO_PREFERENCE = "El del sistema";
 
   private static final String LOCKED = "Bloqueada (%s)";
 
@@ -48,8 +51,17 @@ final class AccountText {
   /**
    * The band, and never a number: the score behind it is discarded where it is estimated, precisely
    * so that no screen can rank the Accounts of a deployment by how cheap each one is to attack.
+   *
+   * <p>An Account awaiting enrolment is said to be waiting rather than shown a band. It reads as the
+   * weakest one in the store, so that an unknown password can never read as a strong one, and
+   * showing that here would have an Administrator nudging somebody about a password they have not
+   * been given the chance to choose.
    */
-  static String bandOf(PasswordStrength strength) {
+  static String bandOf(Optional<PasswordStrength> passwordStrength) {
+    return passwordStrength.map(AccountText::bandOf).orElse(AWAITING_ENROLMENT);
+  }
+
+  private static String bandOf(PasswordStrength strength) {
     return switch (strength) {
       case WEAK -> WEAK;
       case ACCEPTABLE -> ACCEPTABLE;
@@ -61,10 +73,10 @@ final class AccountText {
    * The language this Account's holder reads, in that language, with the tag beside it so that two
    * variants of one language are told apart.
    */
-  static String languageOf(Optional<Locale> language) {
-    return language
+  static String preferenceOf(Optional<Locale> languagePreference) {
+    return languagePreference
         .map(locale -> "%s (%s)".formatted(locale.getDisplayName(locale), locale.toLanguageTag()))
-        .orElse(NO_LANGUAGE);
+        .orElse(NO_PREFERENCE);
   }
 
   /**
@@ -72,6 +84,8 @@ final class AccountText {
    * screen says it in — the two are the same wait and must not round differently.
    */
   static String lockoutOf(Optional<Duration> lockedFor) {
-    return lockedFor.map(remaining -> LOCKED.formatted(LockoutText.waitOf(remaining))).orElse(NOT_LOCKED);
+    return lockedFor
+        .map(remaining -> LOCKED.formatted(LockoutText.waitOf(remaining)))
+        .orElse(NOT_LOCKED);
   }
 }

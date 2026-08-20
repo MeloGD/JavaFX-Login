@@ -183,13 +183,13 @@ class MessageCodecTest {
                 new AccountSummary(
                     "finch.mercer",
                     Role.OPERATOR,
-                    PasswordStrength.ACCEPTABLE,
+                    Optional.of(PasswordStrength.ACCEPTABLE),
                     Optional.of(Locale.forLanguageTag("es-ES")),
                     Optional.of(Duration.ofMinutes(10))),
                 new AccountSummary(
                     "wren.holloway",
                     Role.ADMINISTRATOR,
-                    PasswordStrength.STRONG,
+                    Optional.of(PasswordStrength.STRONG),
                     Optional.empty(),
                     Optional.empty())));
 
@@ -197,6 +197,29 @@ class MessageCodecTest {
         (AccountsListed) MessageCodec.decodeResponse(MessageCodec.encode(sent));
 
     assertEquals(sent.accounts(), received.accounts());
+  }
+
+  /** An Account awaiting enrolment has no band, which the wire says rather than leaves out. */
+  @Test
+  void carriesAnAccountThatHasNoBandBecauseItHasNoPassword() {
+    AccountsListed sent =
+        new AccountsListed(
+            List.of(
+                new AccountSummary(
+                    "juno.vale",
+                    Role.OPERATOR,
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty())));
+
+    AccountsListed received =
+        (AccountsListed) MessageCodec.decodeResponse(MessageCodec.encode(sent));
+
+    assertEquals(sent.accounts(), received.accounts());
+    assertTrue(
+        new String(MessageCodec.encode(sent), StandardCharsets.UTF_8)
+            .contains("\"passwordStrength\":null"),
+        "an absent band is written as something rather than as nothing");
   }
 
   @Test
@@ -214,11 +237,24 @@ class MessageCodecTest {
    * that read a tag naming no language as "said nothing" would turn one into the other.
    */
   @Test
-  void refusesAnAccountWhoseLanguageNamesNoLanguage() {
+  void refusesAnAccountWhoseLanguagePreferenceNamesNoLanguage() {
     String message =
         """
         {"type":"AccountsListed","accounts":[{"name":"finch.mercer","role":"OPERATOR",\
-        "passwordStrength":"WEAK","language":"???","lockedForMillis":null}]}\
+        "passwordStrength":"WEAK","languagePreference":"???","lockedForMillis":null}]}\
+        """;
+
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(message.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void refusesAnAccountWithNoAnswerAboutItsBandAtAll() {
+    String message =
+        """
+        {"type":"AccountsListed","accounts":[{"name":"finch.mercer","role":"OPERATOR",\
+        "languagePreference":null,"lockedForMillis":null}]}\
         """;
 
     assertThrows(
@@ -231,7 +267,7 @@ class MessageCodecTest {
     String message =
         """
         {"type":"AccountsListed","accounts":[{"name":"finch.mercer","role":"OPERATOR",\
-        "passwordStrength":"WEAK","language":null}]}\
+        "passwordStrength":"WEAK","languagePreference":null}]}\
         """;
 
     assertThrows(

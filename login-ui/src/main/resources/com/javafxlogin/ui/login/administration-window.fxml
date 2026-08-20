@@ -52,7 +52,7 @@
           <TableColumn fx:id="accountName" text="Cuenta" prefWidth="200.0"/>
           <TableColumn fx:id="role" text="Rol" prefWidth="130.0"/>
           <TableColumn fx:id="passwordStrength" text="Contraseña" prefWidth="120.0"/>
-          <TableColumn fx:id="language" text="Idioma" prefWidth="180.0"/>
+          <TableColumn fx:id="languagePreference" text="Idioma" prefWidth="180.0"/>
           <TableColumn fx:id="lockout" text="Bloqueo" prefWidth="150.0"/>
         </columns>
       </TableView>

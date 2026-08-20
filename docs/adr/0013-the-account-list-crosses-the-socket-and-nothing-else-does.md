@@ -27,6 +27,12 @@ account a list of every Account in the deployment.
 - A summary carries the name, the Role, the coarse `PasswordStrength` band, the
   `LanguagePreference` and the `Lockout`. Those five are what issue #12 asks the
   panel to show, and nothing else is sent because nothing else is shown.
+- The band is **absent** for an Account awaiting enrolment rather than weakest.
+  The store keeps `WEAK` on a row with no password — V002's rule, so that an
+  unknown password can never read as a strong one — and passing that on as if it
+  were a measurement would have an Administrator nudging somebody who has not
+  been given a password to choose. Whether an Account has one is asked of the
+  schema (`password_hash IS NULL`) and never by selecting the hash.
 - The `Lockout` is filled in by the service and not by the store. The
   CredentialStore holds the moment a refusal runs out and has neither a clock nor
   the `LockoutPolicy` to read it against; the service asks the same `Lockouts`
@@ -105,7 +111,7 @@ Two smaller consequences of that shape:
 
 ## Consequences
 
-- The CredentialStore gains a nullable `language` column (V006). Nothing in this
+- The CredentialStore gains a nullable `language_preference` column (V006). Nothing in this
   build writes it — issue #13 owns the selector, the ResourceBundles and the rule
   that an Account's own preference applies once it has authenticated — so every
   Account lists as having said nothing, which is what a deployment that has never

@@ -214,7 +214,7 @@ final class FakeLoginGate implements LoginGate {
         new AccountSummary(
             accountName,
             Role.ADMINISTRATOR,
-            PasswordStrength.STRONG,
+            Optional.of(PasswordStrength.STRONG),
             Optional.empty(),
             Optional.empty()));
   }
@@ -231,7 +231,7 @@ final class FakeLoginGate implements LoginGate {
         new AccountSummary(
             accountName,
             Role.OPERATOR,
-            PasswordStrength.ACCEPTABLE,
+            Optional.of(PasswordStrength.ACCEPTABLE),
             Optional.empty(),
             Optional.empty()));
   }
@@ -319,16 +319,12 @@ final class FakeLoginGate implements LoginGate {
     if (accounts.containsKey(accountName)) {
       return new AdministrationRefused(AdministrationRefusedReason.ACCOUNT_EXISTS);
     }
-    // As the real service does: the Account exists from here on, with no password and the weakest
-    // band, until somebody turns the secret below into one.
+    // As the real service does: the Account exists from here on, awaiting enrolment and with no
+    // band at all, until somebody turns the secret below into a password.
     accounts.put(
         accountName,
         new AccountSummary(
-            accountName,
-            Role.OPERATOR,
-            PasswordStrength.WEAK,
-            Optional.empty(),
-            Optional.empty()));
+            accountName, Role.OPERATOR, Optional.empty(), Optional.empty(), Optional.empty()));
     return issueASecret();
   }
 

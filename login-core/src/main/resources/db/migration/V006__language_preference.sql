@@ -1,4 +1,4 @@
--- The language each Account's holder reads the interface in.
+-- The LanguagePreference of each Account: the language its holder reads the interface in.
 --
 -- Recorded here because the administration panel lists it beside the Role and the coarse band: an
 -- Administrator looking at the Accounts of a deployment is looking at who is on it, and what
@@ -15,4 +15,4 @@
 -- interpretation. No CHECK constraint names the languages a build ships: adding one is issue #13's
 -- to do in a ResourceBundle, and a schema that had to be migrated for it would make adding a
 -- language a change of shape rather than of content.
-ALTER TABLE accounts ADD COLUMN language TEXT;
+ALTER TABLE accounts ADD COLUMN language_preference TEXT;

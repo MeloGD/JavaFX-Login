@@ -129,13 +129,14 @@ public final class CredentialStore implements AutoCloseable {
    * saying nothing about one, and the AuthenticationService fills it in with the same arithmetic
    * that refuses an attempt at the login screen.
    *
-   * @throws CredentialStoreException if a row names a Role, a band or a language this build does
-   *     not read — a store edited by hand is not guessed at
+   * @throws CredentialStoreException if a row names a Role, a band or a LanguagePreference this
+   *     build does not read — a store edited by hand is not guessed at
    */
   public List<AccountSummary> accounts() {
     try (PreparedStatement statement =
         connection.prepareStatement(
-            "SELECT name, role, password_strength, language FROM accounts ORDER BY name")) {
+            "SELECT name, role, password_strength, password_hash IS NULL AS awaiting_enrolment,"
+                + " language_preference FROM accounts ORDER BY name")) {
       try (ResultSet results = statement.executeQuery()) {
         List<AccountSummary> accounts = new ArrayList<>();
         while (results.next()) {
@@ -143,14 +144,30 @@ public final class CredentialStore implements AutoCloseable {
               new AccountSummary(
                   results.getString("name"),
                   Role.valueOf(results.getString("role")),
-                  PasswordStrength.valueOf(results.getString("password_strength")),
-                  languageIn(results)));
+                  bandIn(results),
+                  languagePreferenceIn(results)));
         }
         return List.copyOf(accounts);
       }
     } catch (SQLException | IllegalArgumentException e) {
       throw new CredentialStoreException("could not list the Accounts in " + file, e);
     }
+  }
+
+  /**
+   * The coarse band of an Account's password, or nothing at all where it has none yet.
+   *
+   * <p>Whether it has one is asked of the schema rather than read out of it: the query selects
+   * {@code password_hash IS NULL} and never the hash, which is the one column on this table that
+   * must not leave the process this class runs in.
+   *
+   * @throws IllegalArgumentException if the row names a band this build does not read
+   */
+  private static Optional<PasswordStrength> bandIn(ResultSet results) throws SQLException {
+    if (results.getBoolean("awaiting_enrolment")) {
+      return Optional.empty();
+    }
+    return Optional.of(PasswordStrength.valueOf(results.getString("password_strength")));
   }
 
   /**
@@ -161,16 +178,16 @@ public final class CredentialStore implements AutoCloseable {
    *     is not read as "said nothing" — an Administrator would then be told this person expressed
    *     no preference while the store says they did
    */
-  private static Optional<Locale> languageIn(ResultSet results) throws SQLException {
-    String tag = results.getString("language");
+  private static Optional<Locale> languagePreferenceIn(ResultSet results) throws SQLException {
+    String tag = results.getString("language_preference");
     if (tag == null) {
       return Optional.empty();
     }
-    Locale language = Locale.forLanguageTag(tag);
-    if (language.getLanguage().isEmpty()) {
+    Locale preference = Locale.forLanguageTag(tag);
+    if (preference.getLanguage().isEmpty()) {
       throw new IllegalArgumentException("no language is named by the tag " + tag);
     }
-    return Optional.of(language);
+    return Optional.of(preference);
   }
 
   /**

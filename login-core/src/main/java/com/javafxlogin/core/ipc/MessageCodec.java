@@ -286,16 +286,17 @@ public final class MessageCodec {
     ArrayNode accounts = MAPPER.createArrayNode();
     for (AccountSummary account : listed.accounts()) {
       ObjectNode entry =
-          MAPPER
-              .createObjectNode()
-              .put("name", account.name())
-              .put("role", account.role().name())
-              .put("passwordStrength", account.passwordStrength().name());
+          MAPPER.createObjectNode().put("name", account.name()).put("role", account.role().name());
       account
-          .language()
+          .passwordStrength()
           .ifPresentOrElse(
-              language -> entry.put("language", language.toLanguageTag()),
-              () -> entry.putNull("language"));
+              band -> entry.put("passwordStrength", band.name()),
+              () -> entry.putNull("passwordStrength"));
+      account
+          .languagePreference()
+          .ifPresentOrElse(
+              preference -> entry.put("languagePreference", preference.toLanguageTag()),
+              () -> entry.putNull("languagePreference"));
       millis(entry, "lockedForMillis", account.lockedFor());
       accounts.add(entry);
     }
@@ -318,11 +319,27 @@ public final class MessageCodec {
           new AccountSummary(
               text(account, "name"),
               constant(Role.class, account, "role"),
-              constant(PasswordStrength.class, account, "passwordStrength"),
-              language(account),
+              band(account),
+              languagePreference(account),
               millis(account, "lockedForMillis")));
     }
     return accounts;
+  }
+
+  /**
+   * The coarse band of an Account's password, or an explicit {@code null} where it has none yet —
+   * an Account awaiting enrolment has no password for there to be a band of, and a message that
+   * left the field out is one this codec does not read.
+   */
+  private static Optional<PasswordStrength> band(ObjectNode account) {
+    JsonNode value = account.get("passwordStrength");
+    if (value == null || !(value.isNull() || value.isTextual())) {
+      throw new MalformedMessageException(
+          "The passwordStrength field is missing or is neither a band nor null");
+    }
+    return value.isNull()
+        ? Optional.empty()
+        : Optional.of(constant(PasswordStrength.class, value));
   }
 
   /**
@@ -333,20 +350,20 @@ public final class MessageCodec {
    * mean different things to whoever is reading the panel, and this codec does not turn one into
    * the other.
    */
-  private static Optional<Locale> language(ObjectNode account) {
-    JsonNode value = account.get("language");
+  private static Optional<Locale> languagePreference(ObjectNode account) {
+    JsonNode value = account.get("languagePreference");
     if (value == null || !(value.isNull() || value.isTextual())) {
       throw new MalformedMessageException(
-          "The language field is missing or is neither a language tag nor null");
+          "The languagePreference field is missing or is neither a language tag nor null");
     }
     if (value.isNull()) {
       return Optional.empty();
     }
-    Locale language = Locale.forLanguageTag(value.textValue());
-    if (language.getLanguage().isEmpty()) {
+    Locale preference = Locale.forLanguageTag(value.textValue());
+    if (preference.getLanguage().isEmpty()) {
       throw new MalformedMessageException("No language is named by the tag " + value.textValue());
     }
-    return Optional.of(language);
+    return Optional.of(preference);
   }
 
   private static ObjectNode exported(AuthenticationEventExport export) {

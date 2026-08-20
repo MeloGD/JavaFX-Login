@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
@@ -56,6 +57,9 @@ class AdministrationWindowTest extends ApplicationTest {
   private FakeLoginGate gate;
   private Stage loginStage;
 
+  /** How many times the gate asked the host product to build its view. */
+  private final AtomicInteger viewsBuilt = new AtomicInteger();
+
   @Override
   public void start(Stage stage) {
     loginStage = stage;
@@ -67,7 +71,8 @@ class AdministrationWindowTest extends ApplicationTest {
   }
 
   /** The host product's view, which an Administrator must never be handed. */
-  private static Parent theHostsView() {
+  private Parent theHostsView() {
+    viewsBuilt.incrementAndGet();
     Label label = new Label("la funcionalidad protegida");
     label.setId("feature");
     return new StackPane(label);
@@ -82,7 +87,8 @@ class AdministrationWindowTest extends ApplicationTest {
   void theHostProductsViewIsNeverBuiltForAnAdministrator() {
     openThePanel();
 
-    assertTrue(lookup("#feature").tryQuery().isEmpty(), "the feature must not be on the screen");
+    assertEquals(0, viewsBuilt.get(), "the host was asked to build its view for an Administrator");
+    assertTrue(lookup("#feature").tryQuery().isEmpty(), "and it is not on the screen either");
     assertTrue(lookup("#accounts").tryQuery().isPresent(), "the panel should be");
   }
 
@@ -93,7 +99,7 @@ class AdministrationWindowTest extends ApplicationTest {
         new AccountSummary(
             "juno.vale",
             Role.OPERATOR,
-            PasswordStrength.WEAK,
+            Optional.of(PasswordStrength.WEAK),
             Optional.of(Locale.forLanguageTag("es-ES")),
             Optional.of(Duration.ofMinutes(10))));
     openThePanel();
@@ -107,9 +113,10 @@ class AdministrationWindowTest extends ApplicationTest {
     String juno = rowFor(rows, "juno.vale");
     assertTrue(juno.contains(AccountText.nameOf(Role.OPERATOR)), () -> "no Role in " + juno);
     assertTrue(
-        juno.contains(AccountText.bandOf(PasswordStrength.WEAK)), () -> "no band in " + juno);
+        juno.contains(AccountText.bandOf(Optional.of(PasswordStrength.WEAK))),
+        () -> "no band in " + juno);
     assertTrue(
-        juno.contains(AccountText.languageOf(Optional.of(Locale.forLanguageTag("es-ES")))),
+        juno.contains(AccountText.preferenceOf(Optional.of(Locale.forLanguageTag("es-ES")))),
         () -> "no language in " + juno);
     assertTrue(
         juno.contains(AccountText.lockoutOf(Optional.of(Duration.ofMinutes(10)))),
@@ -124,7 +131,7 @@ class AdministrationWindowTest extends ApplicationTest {
     String operator = rowFor(listedAccounts(), OPERATOR);
 
     assertTrue(
-        operator.contains(AccountText.languageOf(Optional.empty())),
+        operator.contains(AccountText.preferenceOf(Optional.empty())),
         () -> "a language nobody chose is claimed in " + operator);
   }
 
@@ -135,7 +142,7 @@ class AdministrationWindowTest extends ApplicationTest {
         new AccountSummary(
             "juno.vale",
             Role.OPERATOR,
-            PasswordStrength.ACCEPTABLE,
+            Optional.of(PasswordStrength.ACCEPTABLE),
             Optional.empty(),
             Optional.of(Duration.ofMinutes(10))));
     openThePanel();
@@ -149,6 +156,28 @@ class AdministrationWindowTest extends ApplicationTest {
         AccountText.lockoutOf(Optional.of(Duration.ofMinutes(10))),
         AccountText.lockoutOf(Optional.empty()),
         "a locked Account must not read the same as one that is not");
+  }
+
+  /**
+   * Story 72 asks an Administrator to find the Accounts worth nudging. One that has never had a
+   * password is not one of them, so it must not read like the weakest band — which is what the
+   * store holds for it, and deliberately.
+   */
+  @Test
+  void anAccountAwaitingEnrolmentIsSaidToBeWaitingRatherThanShownABand() {
+    gate.holding(
+        new AccountSummary(
+            "juno.vale", Role.OPERATOR, Optional.empty(), Optional.empty(), Optional.empty()));
+    openThePanel();
+
+    String juno = rowFor(listedAccounts(), "juno.vale");
+
+    assertFalse(
+        juno.contains(AccountText.bandOf(Optional.of(PasswordStrength.WEAK))),
+        () -> "an Account with no password reads as a weak one: " + juno);
+    assertTrue(
+        juno.contains(AccountText.bandOf(Optional.empty())),
+        () -> "it does not say what it is waiting for: " + juno);
   }
 
   /** Criterion 2: shown exactly once, and said so. */
@@ -179,6 +208,30 @@ class AdministrationWindowTest extends ApplicationTest {
 
     await(() -> secret().isBlank());
     assertFalse(listedAccounts().toString().contains(shown), "the secret is not on the screen");
+  }
+
+  /**
+   * Criterion 2's other half. There is no request on the LoginGate that reads a secret back — the
+   * store keeps a hash of it — so what this asserts is that going on using the panel does not
+   * produce it again either.
+   */
+  @Test
+  void nothingAskedOfThePanelAfterwardsBringsTheSecretBack() {
+    openThePanel();
+    createAnOperatorNamed("juno.vale");
+    await(() -> !secret().isBlank());
+    clickOn("#enrolmentSecretRead");
+    await(() -> secret().isBlank());
+
+    select(OPERATOR);
+    clickOn("#clearLockout");
+
+    await(() -> gate.administrations().contains("clearTheLockoutOf:" + OPERATOR));
+    assertTrue(secret().isBlank(), "the secret came back on the screen");
+    assertTrue(
+        gate.administrations().stream().filter(asked -> asked.startsWith("createOperator")).count()
+            == 1,
+        () -> "the panel asked for another secret: " + gate.administrations());
   }
 
   /** A name the AccountPolicy refuses is said in the rules it broke, not as a failure. */
@@ -245,6 +298,26 @@ class AdministrationWindowTest extends ApplicationTest {
         "there is nowhere on this panel to type somebody's password");
   }
 
+  /**
+   * The service records no PASSWORD_RESET_INITIATED for an Account that had no password to take
+   * away, and the panel must not assert an event the service did not make.
+   */
+  @Test
+  void reissuingASecretDoesNotClaimAPasswordStoppedWorking() {
+    gate.holding(
+        new AccountSummary(
+            "juno.vale", Role.OPERATOR, Optional.empty(), Optional.empty(), Optional.empty()));
+    openThePanel();
+    select("juno.vale");
+
+    clickOn("#resetPassword");
+
+    await(() -> !message().isBlank());
+    assertFalse(
+        message().toLowerCase(Locale.ROOT).contains("contraseña de"),
+        () -> "a password nobody had is said to have stopped working: " + message());
+  }
+
   /** Criterion 5. */
   @Test
   void aLockoutCanBeCleared() {
@@ -252,7 +325,7 @@ class AdministrationWindowTest extends ApplicationTest {
         new AccountSummary(
             "juno.vale",
             Role.OPERATOR,
-            PasswordStrength.ACCEPTABLE,
+            Optional.of(PasswordStrength.ACCEPTABLE),
             Optional.empty(),
             Optional.of(Duration.ofMinutes(10))));
     openThePanel();
@@ -265,7 +338,7 @@ class AdministrationWindowTest extends ApplicationTest {
         () ->
             gate.accountsHeld().stream()
                 .filter(account -> account.name().equals("juno.vale"))
-                .noneMatch(AccountSummary::isLockedOut));
+                .noneMatch(account -> account.lockedFor().isPresent()));
   }
 
   /** Criterion 6, first half. */

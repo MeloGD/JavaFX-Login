@@ -12,9 +12,11 @@ import java.time.format.FormatStyle;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
@@ -52,6 +54,13 @@ public final class AdministrationController {
   private static final String ACCOUNT_CREATED = "Cuenta «%s» creada.";
   private static final String PASSWORD_RESET =
       "La contraseña de «%s» ha dejado de funcionar ahora mismo.";
+
+  /**
+   * An Account awaiting enrolment had no password to take away, and the service records no reset
+   * for it. Saying one happened would be the panel asserting an event the service did not make.
+   */
+  private static final String ENROLMENT_SECRET_REISSUED =
+      "Se ha vuelto a emitir el código de «%s», que seguía sin contraseña.";
   private static final String ACCOUNT_DELETED = "Cuenta «%s» eliminada.";
   private static final String LOCKOUT_CLEARED = "Se ha desbloqueado «%s».";
   private static final String PERIOD_CHANGED =
@@ -69,25 +78,6 @@ public final class AdministrationController {
       "Se han copiado %d eventos a %s, pero la cadena de integridad no cuadra: el registro se ha"
           + " editado o le faltan entradas.";
 
-  /** The refusals, worded one by one: each has a different remedy and none is a failure. */
-  private static final String SESSION_OVER = "La sesión ha terminado.";
-
-  private static final String NOT_ADMINISTRATOR =
-      "El servicio no acepta esta petición desde esta sesión.";
-  private static final String NO_SUCH_ACCOUNT = "Ya no existe ninguna cuenta con ese nombre.";
-  private static final String ACCOUNT_EXISTS = "Ya hay una cuenta con ese nombre.";
-  private static final String CANNOT_ENROL_THE_ADMINISTRATOR =
-      "La cuenta de administración elige su contraseña en el asistente de primera ejecución, así"
-          + " que no se le puede entregar un código de un solo uso.";
-  private static final String CANNOT_DELETE_THE_ADMINISTRATOR =
-      "La cuenta de administración no se puede eliminar: sin ella nadie podría gestionar las"
-          + " cuentas.";
-  private static final String EXPORT_DESTINATION_REFUSED =
-      "El servicio no escribe ahí. Elige una ruta absoluta, en una carpeta que ya exista, que no"
-          + " sea la suya y donde no haya ya un archivo.";
-  private static final String EXPORT_FAILED =
-      "No se ha podido copiar el registro. No se ha dejado nada a medias en el destino.";
-
   /** The moment as this machine writes moments for a person, not as the record writes them. */
   private static final DateTimeFormatter WHEN =
       DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault());
@@ -97,7 +87,7 @@ public final class AdministrationController {
   @FXML private TableColumn<AccountSummary, String> accountName;
   @FXML private TableColumn<AccountSummary, String> role;
   @FXML private TableColumn<AccountSummary, String> passwordStrength;
-  @FXML private TableColumn<AccountSummary, String> language;
+  @FXML private TableColumn<AccountSummary, String> languagePreference;
   @FXML private TableColumn<AccountSummary, String> lockout;
 
   @FXML private TextField newOperatorName;
@@ -129,10 +119,17 @@ public final class AdministrationController {
     role.setCellValueFactory(row -> text(AccountText.nameOf(row.getValue().role())));
     passwordStrength.setCellValueFactory(
         row -> text(AccountText.bandOf(row.getValue().passwordStrength())));
-    language.setCellValueFactory(row -> text(AccountText.languageOf(row.getValue().language())));
+    languagePreference.setCellValueFactory(
+        row -> text(AccountText.preferenceOf(row.getValue().languagePreference())));
     lockout.setCellValueFactory(row -> text(AccountText.lockoutOf(row.getValue().lockedFor())));
     // Nothing is proposed about somebody else's Account until somebody is chosen.
-    accounts.getSelectionModel().selectedItemProperty().addListener((item, was, is) -> forgetTheDelete());
+    accounts
+        .getSelectionModel()
+        .selectedItemProperty()
+        .addListener((item, was, is) -> forgetTheDelete());
+    // A number of minutes means nothing while expiry is switched off, and a box that still took one
+    // would be a screen saying two things at once.
+    inactivityMinutes.disableProperty().bind(neverExpires.selectedProperty());
     // The seam issue #12 asks for: visible, disabled, and doing nothing at all. It is disabled in
     // the FXML as well; both, because this is the control whose being inert is the feature.
     secondFactor.setSelected(false);
@@ -209,16 +206,20 @@ public final class AdministrationController {
   @FXML
   private void onResetPassword() {
     withTheChosenAccount(
-        name ->
-            ask(
-                "administration-reset",
-                () -> gate.resetThePasswordOf(session, name),
-                provisioned -> {
-                  if (provisioned instanceof EnrolmentSecretIssued) {
-                    say(PASSWORD_RESET.formatted(name));
-                  }
-                  showTheSecretOf(provisioned);
-                }));
+        chosen -> {
+          String said =
+              (chosen.isAwaitingEnrolment() ? ENROLMENT_SECRET_REISSUED : PASSWORD_RESET)
+                  .formatted(chosen.name());
+          ask(
+              "administration-reset",
+              () -> gate.resetThePasswordOf(session, chosen.name()),
+              provisioned -> {
+                if (provisioned instanceof EnrolmentSecretIssued) {
+                  say(said);
+                }
+                showTheSecretOf(provisioned);
+              });
+        });
   }
 
   /**
@@ -250,13 +251,7 @@ public final class AdministrationController {
   }
 
   private void showTheSecret(boolean shown) {
-    // Unmanaged while there is nothing to show, so an empty box takes no room on the screen.
-    enrolmentSecret.setVisible(shown);
-    enrolmentSecret.setManaged(shown);
-    enrolmentSecretWarning.setVisible(shown);
-    enrolmentSecretWarning.setManaged(shown);
-    enrolmentSecretRead.setVisible(shown);
-    enrolmentSecretRead.setManaged(shown);
+    show(shown, enrolmentSecret, enrolmentSecretWarning, enrolmentSecretRead);
   }
 
   /**
@@ -266,8 +261,8 @@ public final class AdministrationController {
   @FXML
   private void onDeleteOperator() {
     withTheChosenAccount(
-        name -> {
-          deleteConsequences.setText(DELETE_CONSEQUENCES.formatted(name));
+        chosen -> {
+          deleteConsequences.setText(DELETE_CONSEQUENCES.formatted(chosen.name()));
           showTheDelete(true);
         });
   }
@@ -275,12 +270,12 @@ public final class AdministrationController {
   @FXML
   private void onConfirmDelete() {
     withTheChosenAccount(
-        name -> {
+        chosen -> {
           forgetTheDelete();
           ask(
               "administration-delete",
-              () -> gate.deleteOperator(session, name),
-              outcome -> administered(outcome, ACCOUNT_DELETED.formatted(name)));
+              () -> gate.deleteOperator(session, chosen.name()),
+              outcome -> administered(outcome, ACCOUNT_DELETED.formatted(chosen.name())));
         });
   }
 
@@ -295,22 +290,28 @@ public final class AdministrationController {
   }
 
   private void showTheDelete(boolean asked) {
-    deleteConsequences.setVisible(asked);
-    deleteConsequences.setManaged(asked);
-    confirmDelete.setVisible(asked);
-    confirmDelete.setManaged(asked);
-    cancelDelete.setVisible(asked);
-    cancelDelete.setManaged(asked);
+    show(asked, deleteConsequences, confirmDelete, cancelDelete);
+  }
+
+  /**
+   * Shows or hides a group of controls together. Unmanaged while hidden rather than merely
+   * invisible, so that a warning nobody is being shown takes no room on the screen.
+   */
+  private static void show(boolean shown, Node... controls) {
+    for (Node control : controls) {
+      control.setVisible(shown);
+      control.setManaged(shown);
+    }
   }
 
   @FXML
   private void onClearLockout() {
     withTheChosenAccount(
-        name ->
+        chosen ->
             ask(
                 "administration-clear-lockout",
-                () -> gate.clearTheLockoutOf(session, name),
-                outcome -> administered(outcome, LOCKOUT_CLEARED.formatted(name))));
+                () -> gate.clearTheLockoutOf(session, chosen.name()),
+                outcome -> administered(outcome, LOCKOUT_CLEARED.formatted(chosen.name()))));
   }
 
   /**
@@ -364,7 +365,11 @@ public final class AdministrationController {
     try {
       destination = Path.of(typed);
     } catch (InvalidPathException e) {
-      say(EXPORT_DESTINATION_REFUSED);
+      // The same sentence the service answers with, because it is the same thing: a destination
+      // this export is not going to be written to, and another path is what fixes it.
+      say(
+          AdministrationRefusedText.sentenceFor(
+              AdministrationRefusedReason.EXPORT_DESTINATION_REFUSED));
       return;
     }
     ask(
@@ -410,28 +415,21 @@ public final class AdministrationController {
    * all: a Session that has ended is the end of this window, whichever click discovered it.
    */
   private void refused(AdministrationRefused refused) {
+    String sentence = AdministrationRefusedText.sentenceFor(refused.reason());
     if (refused.reason() == AdministrationRefusedReason.SESSION_OVER) {
-      theSessionEnded(SESSION_OVER);
+      theSessionEnded(sentence);
       return;
     }
-    say(sentenceFor(refused.reason()));
+    say(sentence);
   }
 
-  private static String sentenceFor(AdministrationRefusedReason reason) {
-    return switch (reason) {
-      case SESSION_OVER -> SESSION_OVER;
-      case NOT_ADMINISTRATOR -> NOT_ADMINISTRATOR;
-      case NO_SUCH_ACCOUNT -> NO_SUCH_ACCOUNT;
-      case ACCOUNT_EXISTS -> ACCOUNT_EXISTS;
-      case CANNOT_ENROL_THE_ADMINISTRATOR -> CANNOT_ENROL_THE_ADMINISTRATOR;
-      case CANNOT_DELETE_THE_ADMINISTRATOR -> CANNOT_DELETE_THE_ADMINISTRATOR;
-      case EXPORT_DESTINATION_REFUSED -> EXPORT_DESTINATION_REFUSED;
-      case EXPORT_FAILED -> EXPORT_FAILED;
-    };
-  }
-
-  private void withTheChosenAccount(Consumer<String> then) {
-    String chosen = chosenName();
+  /**
+   * Does something to the Account somebody chose from the list, or says that nobody has been
+   * chosen. What is handed over is the Account rather than its name, because two of the three
+   * things done to one are worded differently depending on what state it is in.
+   */
+  private void withTheChosenAccount(Consumer<AccountSummary> then) {
+    AccountSummary chosen = accounts.getSelectionModel().getSelectedItem();
     if (chosen == null) {
       say(NOTHING_SELECTED);
       return;
@@ -449,7 +447,7 @@ public final class AdministrationController {
    * every other window's is: they cross a socket, and one of them copies the whole record while the
    * window waits.
    */
-  private <A> void ask(String threadName, java.util.function.Supplier<A> question, Consumer<A> answered) {
+  private <A> void ask(String threadName, Supplier<A> question, Consumer<A> answered) {
     GateAttempt.make(threadName, question, answered, this::say);
   }
 

@@ -2,6 +2,7 @@ package com.javafxlogin.ui.login;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -91,21 +92,26 @@ public final class LoginController {
   private void onAdmit() {
     String name = accountName.getText();
     char[] secret = password.getText().toCharArray();
+    // Which attempt this is, and where whoever makes it ends up, are chosen together and once:
+    // they are the two halves of one decision, and a flag carried through both would let them
+    // drift into asking for one Role and opening the other one's window.
     boolean administering = administer.isSelected();
+    Supplier<Admission> attempt =
+        administering ? () -> gate.administer(name, secret) : () -> gate.admit(name, secret);
+    Consumer<Admitted> whereTheyGo = administering ? onAdministrator : onAdmitted;
 
     showWaiting(true);
     GateAttempt.make(
         "login-attempt",
         secret,
-        () -> administering ? gate.administer(name, secret) : gate.admit(name, secret),
-        admission -> showOutcome(admission, administering),
+        attempt,
+        admission -> showOutcome(admission, whereTheyGo),
         this::failed);
   }
 
-  private void showOutcome(Admission admission, boolean administering) {
+  private void showOutcome(Admission admission, Consumer<Admitted> whereTheyGo) {
     switch (admission) {
-      case Admitted admitted ->
-          (administering ? onAdministrator : onAdmitted).accept(admitted);
+      case Admitted admitted -> whereTheyGo.accept(admitted);
       case NotAdmitted notAdmitted -> refused(notAdmitted);
     }
   }
