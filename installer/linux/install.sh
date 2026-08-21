@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#
+# Installs the AuthenticationService as a socket-activated systemd service.
+#
+# Elevation is needed here and nowhere else. Once this has run, nobody is asked for a
+# password by the operating system again: the socket is always listening, connecting to it
+# is what starts the privileged process, and that process stops by itself five minutes
+# after the last client has gone. See ADR-0002.
+#
+# Usage: sudo ./install.sh [os-account ...]
+#
+# Each named operating-system account is added to the dedicated group, which is what lets
+# the person logged in as it reach the socket at all. They must log out and back in before
+# the new group membership applies to their session.
+
+set -euo pipefail
+
+readonly UNIT_NAME='javafx-login-authd'
+readonly DEDICATED_GROUP='javafx-login'
+readonly UNIT_DIRECTORY='/etc/systemd/system'
+readonly STATE_DIRECTORY='/var/lib/javafx-login'
+readonly DOC_DIRECTORY='/usr/share/doc/javafx-login'
+readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+fail() {
+  printf 'install.sh: %s\n' "$1" >&2
+  exit 1
+}
+
+require_root() {
+  [[ ${EUID} -eq 0 ]] || fail 'this must be run as root: the units and the credential files are root-owned'
+}
+
+require_systemd() {
+  command -v systemctl >/dev/null 2>&1 || fail 'systemd is not on this machine, and socket activation is the whole of the Linux design'
+}
+
+create_dedicated_group() {
+  # A group of its own, never a person's primary group: membership of it is exactly
+  # "may reach the AuthenticationService" and must not mean anything else.
+  if getent group "${DEDICATED_GROUP}" >/dev/null; then
+    printf 'group %s already exists\n' "${DEDICATED_GROUP}"
+  else
+    groupadd --system "${DEDICATED_GROUP}"
+    printf 'created group %s\n' "${DEDICATED_GROUP}"
+  fi
+}
+
+create_state_directory() {
+  # The CredentialStore, the SecretVault, the Lockout records and the AuthenticationEvents
+  # live here, and nothing unprivileged may read them — that is what the split is for.
+  install -d -o root -g root -m 0700 "${STATE_DIRECTORY}"
+}
+
+install_units() {
+  install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.socket" "${UNIT_DIRECTORY}/${UNIT_NAME}.socket"
+  install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.service" "${UNIT_DIRECTORY}/${UNIT_NAME}.service"
+  install -d -o root -g root -m 0755 "${DOC_DIRECTORY}"
+  install -o root -g root -m 0644 \
+    "${HERE}/../../docs/manual-checks/linux-service-activation.md" \
+    "${DOC_DIRECTORY}/linux-service-activation.md"
+  systemctl daemon-reload
+}
+
+enable_the_socket_only() {
+  # The socket is enabled; the service is not, and has no [Install] section to be enabled
+  # by. An enabled service would be a privileged JVM running on a machine nobody has
+  # logged in to, which is the thing socket activation exists to avoid.
+  systemctl enable --now "${UNIT_NAME}.socket"
+  if systemctl is-enabled --quiet "${UNIT_NAME}.service" 2>/dev/null; then
+    fail "${UNIT_NAME}.service is enabled and must not be: run systemctl disable ${UNIT_NAME}.service"
+  fi
+}
+
+admit() {
+  local account="$1"
+  id "${account}" >/dev/null 2>&1 || fail "there is no operating-system account called ${account}"
+  usermod --append --groups "${DEDICATED_GROUP}" "${account}"
+  printf 'added %s to %s — they must log out and back in for it to apply\n' "${account}" "${DEDICATED_GROUP}"
+}
+
+report() {
+  printf '\n%s is listening. Nothing is running yet, and nothing will until somebody connects.\n' \
+    "${UNIT_NAME}.socket"
+  systemctl --no-pager status "${UNIT_NAME}.socket" || true
+  printf '\nVerify the installation against %s/linux-service-activation.md\n' "${DOC_DIRECTORY}"
+}
+
+main() {
+  require_root
+  require_systemd
+  create_dedicated_group
+  create_state_directory
+  install_units
+  enable_the_socket_only
+  for account in "$@"; do
+    admit "${account}"
+  done
+  report
+}
+
+main "$@"

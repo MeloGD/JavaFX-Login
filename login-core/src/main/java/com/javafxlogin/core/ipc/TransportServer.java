@@ -105,6 +105,17 @@ public final class TransportServer implements AutoCloseable {
     }
   }
 
+  /**
+   * Whether any client is still connected.
+   *
+   * <p>Asked by whatever decides that a service nobody is using should stop. A connection with no
+   * Session behind it still counts: it is a person at the login window who has not typed a password
+   * yet, and the process exiting under them would drop the connection their attempt goes over.
+   */
+  public boolean anyConnectionLive() {
+    return !liveConnections.isEmpty();
+  }
+
   /** Stops listening and drops every live connection, signalling each handle in turn. */
   @Override
   public void close() throws IOException {

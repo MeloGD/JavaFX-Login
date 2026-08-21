@@ -1,0 +1,38 @@
+# The privileged AuthenticationService: it owns the CredentialStore, the SecretVault, the
+# Lockout records and the AuthenticationEvents, and it is the only party that can verify a
+# password.
+#
+# There is deliberately no [Install] section. This unit is never enabled: it is started by
+# a client connecting to javafx-login-authd.socket, and it stops by itself five minutes
+# after the last client has gone. An enabled copy of this would be a privileged JVM
+# running on a machine nobody has logged in to.
+
+[Unit]
+Description=JavaFX Login AuthenticationService
+Documentation=file:/usr/share/doc/javafx-login/linux-service-activation.md
+Requires=javafx-login-authd.socket
+
+[Service]
+Type=simple
+
+# Load-bearing. It is what connects the listening socket to file descriptor 0, where
+# System.inheritedChannel() looks for it; systemd's own $LISTEN_FDS is deliberately not
+# set in this mode, and nothing in this product reads it. Without this line the service
+# inherits nothing and refuses to start.
+StandardInput=socket
+
+# Set explicitly, and never left at the default. The default inherits the socket, and
+# anything the JVM prints — a stack trace, a JVM warning — would then be written straight
+# into whatever client happens to be connected.
+StandardOutput=journal
+StandardError=journal
+
+# The runtime shipped with the product rather than whatever JDK the machine happens to
+# have, and no --add-opens or --add-exports: the service names only java.lang.System and
+# java.nio.channels to obtain its channel.
+ExecStart=/opt/javafx-login/runtime/bin/java -cp /opt/javafx-login/lib/* com.javafxlogin.core.authentication.ServiceProcess /var/lib/javafx-login/credentials.db
+
+# Exiting when nobody is using it is this service's normal ending, not a failure. The
+# socket unit stays listening either way, so the next connection starts it again.
+SuccessExitStatus=0
+Restart=no

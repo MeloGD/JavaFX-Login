@@ -150,6 +150,17 @@ that can verify a password. It is the security boundary of this system: nothing
 outside it can read a password hash.
 _Avoid_: daemon, server, backend, auth server
 
+**IdleShutdown**:
+The AuthenticationService stopping by itself once nobody is using it, five
+minutes after the last client has gone. It is what keeps a privileged JVM from
+sitting idle between logins, and it is why every counter this system keeps —
+a Lockout, an Enrolment, the AuthenticationEvents — is on disk rather than in
+memory: state that did not survive it would be state an attacker clears by
+waiting. The service is in use while a Session is live *or* a client is still
+connected, because a connection with no Session behind it is a person at the
+login window who has not typed a password yet.
+_Avoid_: timeout, auto-shutdown, service expiry, idle timer
+
 **Authenticator**:
 The component inside the AuthenticationService that turns a password into a hash
 and checks a password against one. It is named apart from the service on

@@ -1,0 +1,33 @@
+# The socket the AuthenticationService is reached on, and the whole of what starts it.
+#
+# This unit — and only this unit — is enabled at boot. The socket therefore always exists,
+# which is what lets a client connect without first asking for anything to be started: the
+# connection waits in the backlog while the JVM boots, so there is nothing to poll and no
+# cold-start race. See ADR-0002 and docs/spikes/linux-service-activation.md.
+
+[Unit]
+Description=AF_UNIX socket for the JavaFX Login AuthenticationService
+Documentation=file:/usr/share/doc/javafx-login/linux-service-activation.md
+
+[Socket]
+# Exactly one. A second ListenStream= silently stops systemd connecting the listening
+# socket to file descriptor 0, which is the only descriptor System.inheritedChannel()
+# looks at — and the service would then refuse to start with nothing to point at.
+ListenStream=/run/javafx-login-authd.sock
+
+# One process serves every connection in turn, rather than one JVM per connection.
+Accept=no
+
+# systemd creates the socket, so its ownership and mode are declared here rather than
+# left to whatever umask the service was started with. The socket never exists with the
+# wrong permissions: no restricted parent directory, and no chmod after bind().
+SocketUser=root
+SocketGroup=javafx-login
+SocketMode=0660
+
+# When this unit is stopped — an uninstall, or an Administrator stopping it by hand — the
+# socket file goes with it, rather than being left behind for the next start to trip over.
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
