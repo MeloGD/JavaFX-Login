@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
+import com.javafxlogin.core.ipc.ServiceUnreachableReason;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.SessionEndedReason;
 import java.io.IOException;
@@ -154,6 +155,24 @@ class WordingTest {
             assertSaysSomething(
                 language.say(AdministrationRefusedText.keyFor(reason)), reason);
           }
+        });
+  }
+
+  /**
+   * Issue #16: every reason the AuthenticationService could not be reached, worded in every language
+   * this build offers. A reason added in the transport and worded nowhere would put a blank on the
+   * one screen that exists to say something.
+   */
+  @Test
+  void everyReasonTheServiceCannotBeReachedIsWordedInEveryLanguage() {
+    forEachLanguage(
+        language -> {
+          for (ServiceUnreachableReason reason : ServiceUnreachableReason.values()) {
+            assertSaysSomething(language.say(ServiceUnreachableText.keyFor(reason)), reason);
+          }
+          assertSaysSomething(
+              language.say(ServiceUnreachableText.CANNOT_START),
+              "an application that will not start");
         });
   }
 

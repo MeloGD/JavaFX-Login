@@ -18,6 +18,7 @@ import com.javafxlogin.core.ipc.AccountsListed;
 import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
+import com.javafxlogin.core.ipc.AskWhichProtocolIsSpoken;
 import com.javafxlogin.core.ipc.Assess;
 import com.javafxlogin.core.ipc.Assessed;
 import com.javafxlogin.core.ipc.Authenticate;
@@ -49,6 +50,8 @@ import com.javafxlogin.core.ipc.ListAccounts;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
 import com.javafxlogin.core.ipc.PolicyRefused;
+import com.javafxlogin.core.ipc.ProtocolSpoken;
+import com.javafxlogin.core.ipc.ProtocolVersion;
 import com.javafxlogin.core.ipc.ReadSecret;
 import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Request;
@@ -298,6 +301,10 @@ public final class AuthenticationService implements AutoCloseable {
     try {
       return switch (request) {
         case Bootstrap bootstrap -> bootstrap(bootstrap, connection);
+        // First, and answered out of a constant: a client asks this before it has a Session, an
+        // Account or any reason to believe the two of them speak the same catalogue, so it must be
+        // answerable by a service whose store has not been touched yet.
+        case AskWhichProtocolIsSpoken ignored -> new ProtocolSpoken(ProtocolVersion.CURRENT);
         case AskIfBootstrapNeeded ignored -> new BootstrapNeeded(!store.hasAdministrator());
         case Authenticate authenticate -> authenticate(authenticate, connection);
         case Assess assess -> assess(assess);

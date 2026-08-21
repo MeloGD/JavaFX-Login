@@ -6,6 +6,10 @@ import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
 import com.javafxlogin.core.backup.Backup;
 import com.javafxlogin.core.ipc.DeniedReason;
+import com.javafxlogin.core.ipc.Reachable;
+import com.javafxlogin.core.ipc.ServiceReachability;
+import com.javafxlogin.core.ipc.ServiceUnreachableReason;
+import com.javafxlogin.core.ipc.Unreachable;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
@@ -85,6 +89,10 @@ final class FakeLoginGate implements LoginGate {
   private volatile List<PolicyViolation> nameRefusedFor;
 
   private volatile boolean reachable = true;
+
+  /** What the startup diagnostics find, which is a service that is there unless a test says not. */
+  private volatile ServiceReachability reachability = new Reachable();
+
   private volatile boolean firstRunNeeded;
   private volatile boolean aSessionIsAlreadyLive;
   private volatile Duration lockedFor;
@@ -189,6 +197,17 @@ final class FakeLoginGate implements LoginGate {
   /** Makes every later attempt fail the way an AuthenticationService that is not there fails. */
   void becomeUnreachable() {
     reachable = false;
+  }
+
+  /**
+   * A service the startup diagnostics find unreachable, for the named reason.
+   *
+   * <p>Told apart from {@link #becomeUnreachable}, which is a service that answers the question at
+   * startup and then goes away. Both happen, and the windows they produce are different.
+   */
+  FakeLoginGate unreachableBecause(ServiceUnreachableReason reason) {
+    reachability = new Unreachable(reason);
+    return this;
   }
 
   /** How long the service says a Session has left, every time it is asked. */
@@ -654,6 +673,11 @@ final class FakeLoginGate implements LoginGate {
     }
     secrets.put(name, kept);
     return new SecretKept();
+  }
+
+  @Override
+  public ServiceReachability reachability() {
+    return reachability;
   }
 
   @Override

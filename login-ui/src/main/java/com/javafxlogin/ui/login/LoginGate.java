@@ -1,5 +1,6 @@
 package com.javafxlogin.ui.login;
 
+import com.javafxlogin.core.ipc.ServiceReachability;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
 import java.nio.file.Path;
@@ -315,6 +316,26 @@ public interface LoginGate {
   SecretKeepingOutcome keepSecret(Session session, String name, char[] secret);
 
   /**
+   * Whether the AuthenticationService is there, may be reached by this account, and speaks this
+   * build's protocol — asked once, before this application draws anything at all.
+   *
+   * <p>It is asked first because ADR-0002 makes the service the only party that can verify a
+   * password: a login screen in front of a service that is not there is a gate that cannot gate
+   * anything, and looking like one is worse than plainly refusing to be one. What comes back is
+   * either reachable or one of three reasons, because the three have different remedies and telling
+   * a person "something went wrong" hands them nothing they can act on.
+   *
+   * <p>Being told the service is reachable is not being told anything about this deployment — not
+   * whether it has been set up, and not what it holds. It is answered to a peer who has proved
+   * nothing, and so it says nothing.
+   *
+   * <p>Blocks, though within a bounded time: the attempt is given up on rather than waited out.
+   * Must not be called on the JavaFX application thread — the whole point of the bound is that a
+   * person is told what is wrong, and a frozen window tells them nothing.
+   */
+  ServiceReachability reachability();
+
+  /**
    * Whether this installation is still waiting for its single Administrator, which is what decides
    * whether a person sees the first-run wizard or the login screen.
    *
@@ -377,9 +398,17 @@ public interface LoginGate {
    * the keyboard; everything opened by an admission is drawn in the LanguagePreference of the
    * Account admitted. A host product chooses none of that and is asked for none of it.
    *
-   * <p>Must be called on the JavaFX application thread. Asking which window to open is one round
-   * trip with no hashing behind it, and it happens before anything has been drawn, so it is made
-   * here rather than off the thread: there is no window yet to freeze.
+   * <p>Nothing is drawn where the AuthenticationService cannot be reached. That is story 90 and it
+   * is not a detail of this method: ADR-0002 makes the service the only party that can verify a
+   * password, so a login screen in front of one that is not there is a gate that cannot gate
+   * anything. What appears instead names which of "not running", "incompatible version" and "socket
+   * not accessible" happened, and closes.
+   *
+   * <p>Must be called on the JavaFX application thread, and returns before any window is on the
+   * stage. The two questions that decide which window it is are asked off that thread — the first
+   * of them waits on a socket for as long as {@link
+   * com.javafxlogin.core.ipc.ServiceHandshake#PATIENCE} on a machine where nothing answers — and a
+   * window drawn first would be a window frozen in front of somebody for exactly that long.
    */
   default void protect(Stage stage, Function<Session, Parent> protectedFeature) {
     GateFlow.open(this, stage, protectedFeature, InterfaceLanguage.ofTheMachine());

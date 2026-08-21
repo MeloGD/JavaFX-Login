@@ -2625,3 +2625,164 @@ mvn -o clean test
 mvn -o -pl login-core test -Dtest='IdleShutdownTest,ServiceStopsWhenNobodyIsUsingItTest,SystemdUnitFilesTest,DiagnosticsNeverReachTheClientTest'
 bash -n installer/linux/install.sh
 ```
+
+# Code review — client startup diagnostics (issue #16)
+
+The application refusing to start when the `AuthenticationService` cannot be reached, and
+saying which of three things is the reason. Written for a final reviewer who has not
+followed the ticket.
+
+## 1. Where the code is
+
+**The wire (`login-core/.../ipc`)**
+
+| File | What it is |
+| --- | --- |
+| `ProtocolVersion.java` | `CURRENT = 1`, and the rule freezing the exchange below |
+| `AskWhichProtocolIsSpoken.java` / `ProtocolSpoken.java` | the frozen question and its answer |
+| `ServiceReachability.java` + `Reachable` / `Unreachable` | what a client found before drawing anything |
+| `ServiceUnreachableReason.java` | the three: `NOT_RUNNING`, `INCOMPATIBLE_VERSION`, `SOCKET_NOT_ACCESSIBLE` |
+| `ServiceHandshake.java` | the probe: non-blocking connect + handshake against one deadline |
+| `MessageCodec.java` | both new messages, and `version()` refusing anything that is not one |
+
+**The service** — `AuthenticationService.handle` answers `AskWhichProtocolIsSpoken` first,
+out of a constant, before the `CredentialStore` is touched.
+
+**The client (`login-ui/.../login`)**
+
+| File | What it is |
+| --- | --- |
+| `LoginGate.reachability()` | the new question, off the JavaFX thread |
+| `ServiceLoginGate.reachability()` | delegates to `ServiceHandshake`; unsynchronised, cached nowhere |
+| `GateFlow.java` | asks both startup questions off-thread, then opens one of three windows |
+| `ServiceUnreachableWindow` / `Controller` / `Text` | the refusal, its FXML and its three keys |
+| `messages.properties` / `messages_es.properties` | five keys each |
+
+**Docs** — `ADR-0016`, two `CONTEXT.md` glossary entries (`ProtocolVersion`,
+`ServiceReachability`), and a paragraph in the README's "Running the pair by hand".
+
+## 2. What the ticket asked for
+
+| Criterion | Where it is met |
+| --- | --- |
+| Refuses to start rather than degrading | `GateFlow.whatToOpen`; `NoServiceAtStartupTest` |
+| Three cases distinguished, each naming its remedy | `ServiceUnreachableReason` + `ServiceUnreachableText`; `ServiceHandshakeTest` pins all three separately |
+| Version negotiated, mismatch reported as such | `AskWhichProtocolIsSpoken` → `ProtocolSpoken`; `ProtocolVersionTest`, `MessageCodecTest` |
+| Bounded timeout, UI thread not hung | `ServiceHandshake.PATIENCE` (5 s, one deadline for the whole exchange); `GateAttempt` runs it off-thread |
+| Failures in translated strings | both bundles; `WordingTest.everyReasonTheServiceCannotBeReachedIsWordedInEveryLanguage` |
+| Exercised at Seam 1 or Seam 2, no installed service | Seam 1 `ProtocolVersionTest`; Seam 2 `ServiceHandshakeTest` (11 tests, sockets in a `@TempDir`) |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+1. **The handshake is frozen forever.** Every version must read and write those two
+   messages unchanged, or two disagreeing builds lose the one exchange they can both
+   complete and the disagreement is a parse failure again. Stated on `ProtocolVersion`,
+   argued in ADR-0016, pinned by a round-trip test — which is the most a codec can do
+   about a promise spanning releases.
+2. **Silence is `NOT_RUNNING`, and that is socket activation showing through.** systemd
+   holds the socket open, so the kernel accepts the connect whether or not anything came
+   up behind it. There is nothing else for a client to observe. The deadline is what turns
+   silence into a sentence.
+3. **The probe has its own connection and its own clock.** `TransportClient` carries
+   Sessions — an Argon2id verification and a whole `Backup` cross it — and must never be
+   given up on. Bounding it would abandon work that was going fine.
+4. **The three are told apart by exception type, never by message text.** The JDK reports
+   a refused `AF_UNIX` connect as `BindException` on `EACCES`, `ConnectException` on
+   `ECONNREFUSED` and plain `SocketException` on `ENOENT`; the messages behind those are
+   the operating system's, in the machine's own language.
+5. **A non-blocking channel and a selector, not a second thread with a stopwatch.**
+   Measured: a connected, silent channel registered for `OP_READ` costs 2 `select()` calls
+   across 500 ms, so the loop blocks rather than spins.
+
+## 4. Two-axis review: what was found and what was done
+
+**Spec axis — 3 findings.**
+
+1. *Not every startup refusal named a remedy* — a service that answered the handshake and
+   not the next question produced "could not be reached" with no remedy. **Fixed**:
+   `GateFlow.whatToOpen` catches it and refuses with `NOT_RUNNING`, which names one.
+2. *Only the first of the two startup round trips is bounded* — `firstRunNeeded()` goes
+   over `TransportClient`, which has no read timeout, so a service that answers the
+   handshake and then wedges leaves the stage empty. **Not fixed, and the finding's
+   framing is corrected below** — see §6.
+3. *`INCOMPATIBLE_VERSION` is the catch-all for anything unparseable* — a foreign process
+   squatting on the socket is told "install the product again". **Accepted as recorded**:
+   ADR-0016 argues it, and the socket lives in a directory only two accounts can reach.
+   Noted as a limit rather than fixed.
+
+Also: a duplicated assertion in `ProtocolVersionTest`. **Fixed** — it now asserts the
+answer does not change once the deployment has an `Administrator`.
+
+**Standards axis — 4 hard, 4 judgement calls.**
+
+1. *Google §7.2: four Javadoc comments were a block tag with no summary fragment.*
+   **Fixed** in `GateFlow`, `ServiceUnreachableController` and both
+   `ServiceUnreachableWindow.show` overloads.
+2. *Google §4.4: one code line at 102 columns* in `GateFlow`. **Fixed.**
+3. *`ClosedByInterruptException` swallowed into `NOT_RUNNING`.* **Fixed**: caught
+   separately and the interrupt flag restored.
+4. *`waitFor` ignored `select()`'s return and answered about the clock.* **Fixed by
+   renaming** to `stillHasTimeAfterWaiting`, which is the question every caller asks; the
+   Javadoc now says why readiness is deliberately not reported.
+5. *Redundant `key.interestOps(OP_CONNECT)`.* **Fixed** — removed.
+6. *Duplicated Code: two identical catch bodies.* **Fixed** — one multi-catch.
+7. *Middle Man: the `unreachable(...)` helper.* **Fixed** — inlined.
+8. *Mysterious Name: thread named `startup-diagnostics`.* **Fixed** — `service-reachability`,
+   which is the glossary's word.
+
+**Declined, with reasons.**
+
+- *"story 90 and #16 cite two trackers."* `story NN` is established house style throughout
+  this codebase for the numbered user stories of issue #1 — `git grep "story [0-9]"` finds
+  it in a dozen files predating this change. Both identifiers are correct and mean
+  different things.
+- *Primitive Obsession: `ProtocolVersion` holds no value; the wire carries a bare `int`.*
+  The reviewer supplied the counter-argument: ADR-0016 freezes `ProtocolSpoken`'s shape, so
+  wrapping the field would be churn on a message that may not change.
+
+## 5. What a final reviewer should attack first
+
+1. **The freeze is a promise, not a mechanism.** Nothing stops a later commit editing
+   `ProtocolSpoken`. The round-trip test would still pass — it round-trips whatever the
+   record currently is. Only the Javadoc and ADR-0016 defend it.
+2. **`PATIENCE` is five seconds against a `synchronized` service.** `handle` serialises
+   every request, so a startup handshake queues behind another client's long operation. A
+   `Backup` import that takes longer than five seconds would report `NOT_RUNNING` about a
+   service that is working perfectly. Nothing in the suite covers this.
+3. **`BindException` for `EACCES` is a JDK mapping, not a specification.** It is pinned by
+   a real `chmod 000` test, which is what would catch it changing — but that test skips
+   under root, so a root CI would go green on a broken diagnosis.
+4. **Nothing has been socket-activated.** As with issue #15: the `NOT_RUNNING`-by-silence
+   case is proven against a stub that stays quiet, never against systemd.
+
+## 6. Honest limits on what the green build means
+
+- **The second startup round trip is unbounded, and this change made that strictly
+  better rather than worse.** The spec reviewer read it as a regression; it is not. Before
+  this change `GateFlow.open` called `firstRunNeeded()` **on the JavaFX application
+  thread** — `git show 2441f7a:.../GateFlow.java` — so the same wedged service froze the
+  whole toolkit. It now leaves the toolkit responsive with an empty stage. Bounding it
+  properly means a general request timeout, which the ticket did not ask for and which
+  would report `NOT_RUNNING` about a service legitimately busy with a slow `Backup`.
+  Left as it is, deliberately, and recorded here.
+- **`INCOMPATIBLE_VERSION` is wider than the ticket's word.** Anything that answers and is
+  not this build's frozen message lands there — a corrupt frame, a foreign process. The
+  remedy it names ("install the product again") is right for the case the ticket meant and
+  wrong for the ones it did not.
+- **Seam 3 drives a fake gate, as it must.** `NoServiceAtStartupTest` proves which window
+  appears for each reason; it proves nothing about how a reason is arrived at, which is
+  Seam 2's job.
+- **Windows keeps none of this.** Its client must start the service and wait for the socket
+  to appear, so "not running" is directly observable there and the timeout means something
+  else. The reasons and the handshake are shared; only what produces them differs.
+- **The JavaFX runtime surviving an empty `start()` was measured, not assumed.** A window
+  put on the stage 1.5 s after `start()` returned with nothing shown still arrives.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean verify
+mvn -o -pl login-core test -Dtest='ServiceHandshakeTest,ProtocolVersionTest,MessageCodecTest,ServiceOverTheSocketTest'
+mvn -o -pl login-ui test -Dtest='NoServiceAtStartupTest,WordingTest'
+```

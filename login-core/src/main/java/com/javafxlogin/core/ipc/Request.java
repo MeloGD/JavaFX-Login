@@ -12,6 +12,7 @@ public sealed interface Request
         Assess,
         AskIfBootstrapNeeded,
         AskIfSessionIsLive,
+        AskWhichProtocolIsSpoken,
         Authenticate,
         Bootstrap,
         ChangeInactivityPeriod,

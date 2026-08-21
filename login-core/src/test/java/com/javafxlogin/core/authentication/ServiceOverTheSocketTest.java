@@ -21,9 +21,11 @@ import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.ipc.Granted;
 import com.javafxlogin.core.ipc.Logout;
 import com.javafxlogin.core.ipc.Ok;
+import com.javafxlogin.core.ipc.Reachable;
 import com.javafxlogin.core.ipc.ReportActivity;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.ServiceClient;
+import com.javafxlogin.core.ipc.ServiceHandshake;
 import com.javafxlogin.core.ipc.SessionEnded;
 import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.ipc.TransportClient;
@@ -87,6 +89,33 @@ class ServiceOverTheSocketTest {
   @AfterEach
   void stopTheService() {
     process.close();
+  }
+
+  /**
+   * Issue #16's join: the reachability a client works out before it draws anything, worked out
+   * against the real service over the real socket rather than against a stub that agrees with it.
+   * Seam 2 tells the three failures apart; this is the one case that has to be right about a
+   * service that is genuinely there.
+   */
+  @Test
+  void findsTheRealServiceReachableAndSpeakingThisProtocol() {
+    assertInstanceOf(Reachable.class, ServiceHandshake.attemptedAt(socketPath));
+  }
+
+  /**
+   * Asking costs nothing that is later needed. The handshake takes a connection of its own and
+   * gives it back, so it must not have spent the one Session story 54 allows this machine — an
+   * application that refused to admit anybody because it had checked whether it could would be a
+   * gate that locked itself.
+   */
+  @Test
+  void askingDoesNotSpendTheOneSessionThisMachineAllows() throws IOException {
+    assertInstanceOf(Reachable.class, ServiceHandshake.attemptedAt(socketPath));
+
+    try (ServiceClient client = ServiceClient.connect(socketPath)) {
+      assertInstanceOf(
+          Granted.class, authenticate(client, OPERATOR, OPERATOR_PASSWORD, Role.OPERATOR));
+    }
   }
 
   @Test

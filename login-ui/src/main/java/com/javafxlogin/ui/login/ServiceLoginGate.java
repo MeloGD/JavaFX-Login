@@ -37,6 +37,8 @@ import com.javafxlogin.core.ipc.Request;
 import com.javafxlogin.core.ipc.Response;
 import com.javafxlogin.core.ipc.SecretRevealed;
 import com.javafxlogin.core.ipc.ServiceClient;
+import com.javafxlogin.core.ipc.ServiceHandshake;
+import com.javafxlogin.core.ipc.ServiceReachability;
 import com.javafxlogin.core.ipc.SessionEnded;
 import com.javafxlogin.core.ipc.SessionLive;
 import com.javafxlogin.core.session.InactivityPeriod;
@@ -495,6 +497,25 @@ final class ServiceLoginGate implements LoginGate {
               BACKUP_FAILED ->
           throw unexpected("an attempt to create the Administrator", error);
     };
+  }
+
+  /**
+   * Asked on a connection of its own, opened and closed inside {@link ServiceHandshake}, and never
+   * on the one a Session will live on. The two want opposite things from a clock: this one gives up
+   * after a few seconds so that somebody can be told what is wrong, while the Session's connection
+   * carries an Argon2id verification and a whole Backup and is never given up on.
+   *
+   * <p>Nothing here is remembered. A service found reachable a moment ago may have exited since —
+   * five minutes idle is all it takes, per ADR-0002 — and connecting is what brings it back, so a
+   * cached "yes" would be a promise this class is in no position to make.
+   *
+   * <p>Not synchronised, unlike everything else here. It takes no part in the connection the lock
+   * protects, and waiting for an Argon2id verification to finish before finding out whether the
+   * service is there would be exactly the wait this method exists to bound.
+   */
+  @Override
+  public ServiceReachability reachability() {
+    return ServiceHandshake.attemptedAt(socketPath);
   }
 
   private Response ask(Request request) {

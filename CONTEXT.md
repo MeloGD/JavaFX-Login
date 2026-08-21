@@ -161,6 +161,31 @@ connected, because a connection with no Session behind it is a person at the
 login window who has not typed a password yet.
 _Avoid_: timeout, auto-shutdown, service expiry, idle timer
 
+**ProtocolVersion**:
+The number naming which catalogue of messages a build speaks, which both halves
+of this product say and neither guesses. A client asks the AuthenticationService
+for its number before anything else and compares it against its own; two builds
+that disagree say so as a disagreement rather than as a parse failure, which is
+all a client could otherwise report. The exchange that carries it is frozen for
+the life of the product — every version must read and write it unchanged — because
+a version that altered it would take away the one conversation two disagreeing
+builds can complete.
+_Avoid_: API version, schema version, protocol revision
+
+**ServiceReachability**:
+What a client found when it went looking for the AuthenticationService, asked once
+before any window is drawn and remembered nowhere. Either the service is there,
+reachable by this account and speaking this ProtocolVersion, or it is not — and
+then it names which of three things happened, because the three have different
+remedies: **not running** (nothing answered, which under socket activation is what
+a service that failed to start looks like, since the socket is always present),
+**incompatible version** (something answered and it is from another release), and
+**socket not accessible** (the socket is there and the operating system refused
+this account, typically a group membership). An unreachable service is a refusal
+to start and never a degraded start: a login screen in front of a service that
+cannot verify a password is a gate that gates nothing.
+_Avoid_: health check, ping, connectivity status, service status
+
 **Authenticator**:
 The component inside the AuthenticationService that turns a password into a hash
 and checks a password against one. It is named apart from the service on

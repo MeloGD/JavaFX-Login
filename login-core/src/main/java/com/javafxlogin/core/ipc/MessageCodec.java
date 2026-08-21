@@ -88,6 +88,7 @@ public final class MessageCodec {
                   .put("accountName", assess.accountName())
                   .put("password", new String(assess.password()));
           case AskIfBootstrapNeeded ignored -> message("AskIfBootstrapNeeded");
+          case AskWhichProtocolIsSpoken ignored -> message("AskWhichProtocolIsSpoken");
           case ReportActivity report -> carrying("ReportActivity", report.token());
           case AskIfSessionIsLive ask -> carrying("AskIfSessionIsLive", ask.token());
           case Logout logout -> carrying("Logout", logout.token());
@@ -160,6 +161,7 @@ public final class MessageCodec {
           case BackupExported exported -> backup("BackupExported", exported.backup());
           case BackupImported restored -> backup("BackupImported", restored.backup());
           case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
+          case ProtocolSpoken spoken -> message("ProtocolSpoken").put("version", spoken.version());
           case PolicyRefused refused -> carrying("PolicyRefused", refused.violations());
           case SessionLive live -> sessionLive(live);
           case SessionEnded ended -> message("SessionEnded").put("reason", ended.reason().name());
@@ -186,6 +188,7 @@ public final class MessageCodec {
               constant(Role.class, message, "requestedRole"));
       case "Assess" -> new Assess(text(message, "accountName"), chars(message, "password"));
       case "AskIfBootstrapNeeded" -> new AskIfBootstrapNeeded();
+      case "AskWhichProtocolIsSpoken" -> new AskWhichProtocolIsSpoken();
       case "ReportActivity" -> new ReportActivity(token(message));
       case "AskIfSessionIsLive" -> new AskIfSessionIsLive(token(message));
       case "Logout" -> new Logout(token(message));
@@ -256,6 +259,7 @@ public final class MessageCodec {
       case "BackupExported" -> new BackupExported(backup(message));
       case "BackupImported" -> new BackupImported(backup(message));
       case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
+      case "ProtocolSpoken" -> new ProtocolSpoken(version(message));
       case "PolicyRefused" -> policyRefused(message);
       case "SessionLive" -> new SessionLive(millis(message, "expiresInMillis"));
       case "SessionEnded" ->
@@ -502,6 +506,19 @@ public final class MessageCodec {
           "The " + field + " field is missing or is not a count");
     }
     return value.longValue();
+  }
+
+  /**
+   * The number a build speaks, which starts at one and never stops being a whole number. A service
+   * claiming version zero, a fraction or something wider than this build counts in is answering the
+   * one question that exists to settle a disagreement with an answer nobody can settle it against.
+   */
+  private static int version(ObjectNode message) {
+    long version = count(message, "version");
+    if (version < 1 || version > Integer.MAX_VALUE) {
+      throw new MalformedMessageException("The version field is not a protocol version");
+    }
+    return (int) version;
   }
 
   /**

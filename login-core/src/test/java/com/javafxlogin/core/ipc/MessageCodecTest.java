@@ -95,6 +95,53 @@ class MessageCodecTest {
         () -> MessageCodec.decodeResponse(bytes("{\"type\":\"BootstrapNeeded\"}")));
   }
 
+  /**
+   * The one exchange {@link ProtocolVersion} freezes, round-tripped on both sides. A build that
+   * changed either shape would take away the only way two disagreeing builds can name their
+   * disagreement, so it is pinned here rather than left to the two places that use it.
+   */
+  @Test
+  void carriesTheProtocolQuestionAndItsAnswerUnchanged() {
+    assertEquals(
+        new AskWhichProtocolIsSpoken(),
+        MessageCodec.decodeRequest(MessageCodec.encode(new AskWhichProtocolIsSpoken())));
+    assertEquals(
+        new ProtocolSpoken(7),
+        MessageCodec.decodeResponse(MessageCodec.encode(new ProtocolSpoken(7))));
+  }
+
+  /**
+   * A version this build has never heard of still reads, which is the whole point: a client can
+   * only report "the service speaks something else" if it can read the number that says so.
+   */
+  @Test
+  void readsAVersionFarAheadOfThisBuild() {
+    assertEquals(
+        new ProtocolSpoken(Integer.MAX_VALUE),
+        MessageCodec.decodeResponse(
+            bytes("{\"type\":\"ProtocolSpoken\",\"version\":2147483647}")));
+  }
+
+  /** Nothing that is not a version reads as one; a disagreement about zero is not a version. */
+  @Test
+  void refusesAProtocolSpokenThatNamesNoVersion() {
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(bytes("{\"type\":\"ProtocolSpoken\",\"version\":0}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"ProtocolSpoken\",\"version\":2147483648}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(bytes("{\"type\":\"ProtocolSpoken\",\"version\":1.5}")));
+    assertThrows(
+        MalformedMessageException.class,
+        () -> MessageCodec.decodeResponse(bytes("{\"type\":\"ProtocolSpoken\"}")));
+  }
+
   @Test
   void carriesEverySessionRequestsTokenByteForByte() {
     SessionToken token = SessionToken.generate(new SecureRandom());

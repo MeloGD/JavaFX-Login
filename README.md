@@ -84,6 +84,15 @@ that is already restricted. On Linux in production none of this applies — the 
 socket-activated, systemd owns the socket and its mode is declarative, which is what the absence of
 `--socket` selects. Packaging that is its own ticket, as is the Windows service.
 
+Start the service first. Before it draws anything the application asks the `AuthenticationService`
+which protocol it speaks, and where it gets no answer it **refuses to start** rather than showing a
+login screen it cannot log anybody in with — ADR-0002 makes the service the only party that can
+verify a password. What it shows instead names which of three things happened, because the three
+have different remedies: the service is **not running**, the two halves are from **incompatible
+versions**, or the socket is there and this account **may not reach it**. The wait is bounded at
+five seconds and happens off the thread that draws, so a machine with nothing listening produces a
+sentence rather than a frozen window.
+
 A fresh store holds no `Account`, so what the application shows first is the first-run wizard,
 where the single `Administrator` is created. It is accepted only while no `Administrator` exists
 **and** the account running the application administers the machine — see ADR-0008 — so on a

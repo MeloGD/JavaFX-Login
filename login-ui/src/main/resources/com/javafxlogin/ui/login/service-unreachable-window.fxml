@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  What this application shows instead of starting.
+
+  ADR-0002 makes the AuthenticationService the only party that can verify a password, so an
+  application that opened its login screen without one would be a gate that cannot gate anything.
+  There is therefore no account name here, no password box and no way past this window: it says
+  which of three things happened and what to do about it, and it closes.
+
+  The sentence that names the remedy is set from Java rather than being a %key here, because which
+  of the three it is, is a thing the socket answered rather than a thing this screen knows. Every
+  other string is a %key resolved out of the bundle for the language the machine reads, which is the
+  only language anybody could be shown: nobody has authenticated, and nobody is going to.
+-->
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.javafxlogin.ui.login.ServiceUnreachableController"
+      styleClass="login" spacing="8.0" prefWidth="420.0">
+
+  <padding>
+    <Insets top="24.0" right="24.0" bottom="24.0" left="24.0"/>
+  </padding>
+
+  <Label text="%service.cannot-start" styleClass="title"/>
+
+  <Label fx:id="remedy" styleClass="warning" wrapText="true"/>
+
+  <Button fx:id="quit" text="%service.quit" onAction="#onQuit"
+          defaultButton="true" maxWidth="Infinity"/>
+</VBox>
