@@ -8,6 +8,10 @@ import java.util.function.BooleanSupplier;
 /**
  * The AuthenticationService stopping by itself once nobody is using it.
  *
+ * <p>Package-private: the process this ends is {@link ServiceProcess}, which is beside it, and a
+ * countdown that could be started against anything else is a privileged process somebody else can
+ * end.
+ *
  * <p>ADR-0002 asks for a privileged process that exists only while it is wanted: it starts when a
  * client connects and stops five minutes after the last one has gone. On Linux nothing is lost by
  * exiting — the socket belongs to systemd and stays listening, so the next connection starts the
@@ -30,10 +34,10 @@ import java.util.function.BooleanSupplier;
  * <p>Thread-safe on its own monitor: the watching thread and whatever stops the process may both
  * arrive at once, and the stop action runs exactly once whichever does.
  */
-public final class IdleShutdown implements AutoCloseable {
+final class IdleShutdown implements AutoCloseable {
 
   /** Five minutes with nothing going on, as ADR-0002 sets it. */
-  public static final Duration IDLE_PERIOD = Duration.ofMinutes(5);
+  static final Duration IDLE_PERIOD = Duration.ofMinutes(5);
 
   /**
    * How often the countdown is looked at.
@@ -68,7 +72,7 @@ public final class IdleShutdown implements AutoCloseable {
    * @param inUse whether a Session is live or a client is connected
    * @param stop what to do about it, run once and on the watching thread
    */
-  public static IdleShutdown startWatching(BooleanSupplier inUse, Runnable stop) {
+  static IdleShutdown startWatching(BooleanSupplier inUse, Runnable stop) {
     IdleShutdown shutdown = new IdleShutdown(SessionClock.system(), inUse, stop);
     shutdown.watch();
     return shutdown;
@@ -115,7 +119,7 @@ public final class IdleShutdown implements AutoCloseable {
   }
 
   /** Whether the idle period has run out and the service has been told to stop. */
-  public synchronized boolean hasStopped() {
+  synchronized boolean hasStopped() {
     return stoppedTheService;
   }
 

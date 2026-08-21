@@ -2499,3 +2499,129 @@ Both axes ran against the staged diff after the suite was green.
 mvn -o clean test
 mvn -o -pl login-core test -Dtest='Backup*Test'
 ```
+
+---
+
+# Code review — Linux service activation (issue #15)
+
+Branch `dev-login`, on top of `4fe1da6`. The AuthenticationService already served on a
+channel systemd hands over; what it could not do was go away again.
+
+## 1. Where the code is
+
+| Layer | Files |
+|---|---|
+| The countdown | `login-core/…/authentication/IdleShutdown.java` (package-private) |
+| The wiring | `ServiceProcess.serveUntilNobodyIsUsingIt/inUse/close`, `AuthenticationService.anySessionLive`, `TransportServer.anyConnectionLive` |
+| The deployment | `installer/linux/javafx-login-authd.socket`, `.service`, `install.sh` |
+| The check nobody can automate | `docs/manual-checks/linux-service-activation.md` |
+| Decisions | `CONTEXT.md` (`IdleShutdown`), ADR-0002 amended |
+
+Tests: `IdleShutdownTest` (7), `ServiceStopsWhenNobodyIsUsingItTest` (6),
+`SystemdUnitFilesTest` (10), `DiagnosticsNeverReachTheClientTest` (1). Full suite green:
+564 core, 130 UI, 1 feature.
+
+## 2. What the ticket asked for
+
+| Criterion | Where it is met |
+|---|---|
+| Connecting activates the service, connection waits in the backlog | Pre-existing `InheritedListeningChannelSource` + the shipped `.socket`; checklist §3 |
+| Several Sessions from one process (`Accept=no`) | `Accept=no` asserted by `theSocketIsServedByOneProcessRatherThanOnePerConnection`; checklist §4 |
+| Exits by itself after five idle minutes, socket stays listening | `IdleShutdownTest`, `ServiceStopsWhenNobodyIsUsingItTest.stopsTheProcessOnce…`; checklist §6 |
+| Re-activation works repeatedly | Nothing in the process removes the socket file (`InheritedListeningChannelSource.release()` is empty by design); checklist §7 |
+| `SocketUser=`/`SocketGroup=`/`SocketMode=` declarative | `theSocketsOwnershipAndModeAreDeclaredRatherThanLeftToUmask`; checklist §2 |
+| A dedicated group, not a user's primary group | `install.sh: create_dedicated_group` (`groupadd --system`); asserted against the unit by the same test |
+| Diagnostics to the journal, never into a connection | `theServicesDiagnosticsGoToTheJournalAndNotIntoAClientConnection` **and** `DiagnosticsNeverReachTheClientTest` — the second is the half that survives a unit file being edited |
+| No rate-limiting or `Lockout` state in memory across the shutdown | Pre-existing: `Lockouts` and `Enrolments` write through `CredentialStore`. This change adds no counter |
+| A documented manual verification checklist | `docs/manual-checks/linux-service-activation.md`, eight steps, each naming what *is* automated |
+
+The four silent traps are each pinned by a test that reads the shipped file: one
+`ListenStream=`, `StandardInput=socket`, both output streams set, and no `[Install]` in
+the `.service`.
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **In use means a live Session *or* a live connection, and ADR-0002 was amended to say
+  so.** The ticket says "five minutes with no `Session`s". A connection with no Session
+  behind it is a person at the login window who has not typed a password yet, and
+  `ServiceLoginGate` opens one connection on the first attempt and keeps it — exiting
+  under them would drop the channel their next attempt goes over. Nothing is given up:
+  the kernel closes a connection when the client process dies, and the five minutes
+  begin there. **This is the one place this change is wider than its ticket**, and the
+  Spec axis flagged it as such.
+- **Polling every 15 s rather than being told.** Being told means every path that opens
+  or ends a Session or a connection remembering to say so, and one that forgot would
+  leave a privileged JVM up for good. The cost is that the process can outlive its five
+  minutes by up to 15 s.
+- **The monotonic clock alone**, unlike a Session (two clocks) and a Lockout (wall clock).
+  This countdown measures nothing but this process's own life and never outlives it, so
+  setting the machine's time neither ends a privileged process early nor keeps one alive.
+- **`anySessionLive()` does not expire.** ADR-0009 makes expiry something the service
+  decides when somebody *asks about a Session*; this caller is asking whether a process
+  should stop. A Session whose clocks have run out is still held by a connected client,
+  and the connection keeps the service up in that case anyway.
+- **The units are the artifact the spike measured**, minus nothing and plus nothing:
+  `RemoveOnStop=`, `SuccessExitStatus=` and `Restart=` were written and then removed for
+  exactly that reason.
+
+## 4. Two-axis review: what was found and what was done
+
+### Standards
+
+| Finding | What was done |
+|---|---|
+| ADR conflict left unsurfaced: ADR-0002/0009/0010 all say "without Sessions", the code says "or a connection" | **Fixed.** ADR-0002 carries an explicit amendment naming issue #15, and says why the widened reading leaves ADR-0009/0010's reasoning untouched |
+| Six new lines over Google style's 100 columns | **Fixed**, all six reflowed |
+| Glossary drift: `CONTEXT.md`'s **Peer** avoids "client" | **Partly fixed.** Prose that names the far end of the socket now says "peer" where it reads naturally. Not chased into `ServiceClient`/`TransportClient` or the unit-file comments, where "client connection" is the systemd term of art the spike itself uses |
+| `anySessionLive()` sits beside `theMachineIsBusy()`, one question with two names | **Fixed** by javadoc on both: the difference is whether expiry runs first, and which caller needs it |
+| `IdleShutdown.hasStopped()`, `IDLE_PERIOD` and `ServiceProcess.inUse()` public for tests only | **Fixed.** `IdleShutdown` is package-private in full, and `inUse()` with it |
+| Test duplication: the clock-and-countdown pair repeated verbatim | **Fixed**, folded into `theCountdownAgainstThisProcess()` |
+| Redundant state in `IdleShutdown` (`stoppedTheService`, `watchingIsOver`, nullable `watching`) | **Kept.** They are three facts, not one: the service was told to stop, the loop must end, and there is a thread to interrupt. `close()` sets the second without the first |
+
+### Spec
+
+| Finding | What was done |
+|---|---|
+| `install.sh` never puts anything under `/opt/javafx-login`, so a machine it installed would have a listening socket and an `ExecStart` that dies (203/EXEC) | **Fixed.** `require_payload` reads the launcher path out of the `.service` itself and refuses to enable anything if it is not there; checklist gained a §0 for it. Building and placing the payload stays outside this ticket |
+| Scope creep: live connections keep the process alive | **Kept and argued** — §3 above, and ADR-0002 amended |
+| `RemoveOnStop=yes` not in the spike's artifact list | **Removed** |
+| `SuccessExitStatus=0`/`Restart=no` are defaults | **Removed** |
+| `CHECK_INTERVAL` of 15 s means up to 15 s past the five minutes | **Kept**; the checklist says "about five minutes" |
+
+## 5. What a final reviewer should attack first
+
+1. **The widened reading of "idle".** A client process that stays alive and connected
+   holds a privileged JVM up indefinitely. That is the login window, by design — but it
+   is the one property of this ticket that a hostile client can lean on.
+2. **`ExecStart` is a path nothing in this repo produces.** There is no packaging step
+   here: no jlink, no jars laid down, no uninstall script. `require_payload` turns that
+   into a loud failure rather than a quiet one, and nothing more.
+3. **Every unit-file assertion is a string comparison.** The tests read the shipped files
+   and check settings the spike named. They cannot tell whether systemd still reads them
+   the same way, which is what §§1-7 of the checklist are for.
+4. **`SocketGroup=javafx-login` is a name in three places** — the unit, `install.sh` and
+   `SystemdUnitFilesTest.DEDICATED_GROUP` — and nothing makes them one.
+
+## 6. Honest limits on what the green build means
+
+- **Nothing in the suite has ever been socket-activated.** systemd is not in the build.
+  Every automated assertion here is either about the countdown (with the clock moved by
+  hand) or about the text of two files. The mechanism itself was proven once, by hand,
+  in the spike, and is re-proven only by the manual checklist.
+- **`install.sh` has never been run by the suite.** It is checked by `bash -n` and by
+  reading.
+- **The idle exit is asserted through `ServiceProcess.close()`, not through a JVM
+  exiting.** That the JVM then leaves — and that systemd re-activates it — is checklist
+  §§6-7.
+- **Windows keeps none of this.** `PlatformListeningChannelSource` still refuses there,
+  and the Manual-start service with its start-then-wait dance remains designed and
+  unbuilt.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+mvn -o -pl login-core test -Dtest='IdleShutdownTest,ServiceStopsWhenNobodyIsUsingItTest,SystemdUnitFilesTest,DiagnosticsNeverReachTheClientTest'
+bash -n installer/linux/install.sh
+```

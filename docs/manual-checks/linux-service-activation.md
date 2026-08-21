@@ -14,7 +14,23 @@ Work top to bottom: several steps depend on the state the one before it left.
 
 ---
 
-## 0. Before anything has connected
+## 0. The product is where the unit says it is
+
+```
+ls -l /opt/javafx-login/runtime/bin/java   # → executable
+ls    /opt/javafx-login/lib/*.jar          # → at least one
+ls -ld /var/lib/javafx-login               # → drwx------ root root
+```
+
+- [ ] The launcher named by `ExecStart=` exists and is executable.
+- [ ] The state directory is root-owned and `0700`: nothing unprivileged may read the
+      CredentialStore, the SecretVault, the Lockout records or the AuthenticationEvents.
+
+`install.sh` refuses to enable anything when the first of these is missing, because the
+failure it would otherwise cause is the quiet one: a socket that listens, and an activation
+that dies on `ExecStart` the first time somebody tries to log in.
+
+## 1. Before anything has connected
 
 ```
 systemctl is-enabled javafx-login-authd.socket   # → enabled
@@ -32,7 +48,7 @@ the design is gone: there is a privileged JVM up on a machine nobody has logged 
 _Covered automatically:_ that the shipped `.service` has no `[Install]` section at all —
 `SystemdUnitFilesTest.onlyTheSocketIsEnabledAtBoot`.
 
-## 1. The socket's ownership and mode are what was declared
+## 2. The socket's ownership and mode are what was declared
 
 ```
 ls -l /run/javafx-login-authd.sock   # → srw-rw---- 1 root javafx-login
@@ -49,7 +65,7 @@ other permissions — there is no window here to lose a race in.
 _Covered automatically:_ that the unit declares `SocketUser=`, `SocketGroup=` and
 `SocketMode=` — `SystemdUnitFilesTest.theSocketsOwnershipAndModeAreDeclaredRatherThanLeftToUmask`.
 
-## 2. Connecting starts the service, and the connection waits
+## 3. Connecting starts the service, and the connection waits
 
 Start the application (or any client that connects to the socket) and time the first
 answer.
@@ -64,7 +80,7 @@ The connection waits in the socket's backlog while the JVM boots. The spike meas
 for the first round trip on Ubuntu 26.04; anything of that order is right, and a *failure*
 to connect is the thing to stop on.
 
-## 3. One process serves several Sessions in turn
+## 4. One process serves several Sessions in turn
 
 With the client still connected, log in, log out and log in again — three Sessions.
 
@@ -75,7 +91,7 @@ systemctl show -p MainPID --value javafx-login-authd.service
 - [ ] The PID is the same before and after all three, so `Accept=no` is doing what it says:
       one process, not one JVM per connection.
 
-## 4. Diagnostics reach the journal and never the client
+## 5. Diagnostics reach the journal and never the client
 
 ```
 journalctl -u javafx-login-authd.service --since '10 min ago'
@@ -91,7 +107,7 @@ is inheriting the socket. That is the trap this step exists for.
 _Covered automatically:_ that the unit sets both streams to the journal —
 `SystemdUnitFilesTest.theServicesDiagnosticsGoToTheJournalAndNotIntoAClientConnection`.
 
-## 5. It stops by itself once nobody is using it
+## 6. It stops by itself once nobody is using it
 
 Close every client — the application, and any `nc`/`socat` left open — and note the time.
 
@@ -110,7 +126,7 @@ watch -n 30 systemctl is-active javafx-login-authd.service
 _Covered automatically:_ the countdown itself and what counts as being in use —
 `IdleShutdownTest`, and `ServiceStopsWhenNobodyIsUsingItTest` over a real socket.
 
-## 6. It comes back, repeatedly
+## 7. It comes back, repeatedly
 
 - [ ] Connect again: the service starts, the PID is a new one, and the client is answered.
 - [ ] Let it go idle and do it a third time. Four cycles were run during the spike.
@@ -119,7 +135,7 @@ An activation that works once and not twice usually means the socket was removed
 service on the way out. Nothing that adopted an inherited channel may delete the socket
 file: it belongs to systemd and is what the next activation arrives on.
 
-## 7. Nothing was remembered across the idle exit
+## 8. Nothing was remembered across the idle exit
 
 Get an Account locked out (wrong password, as many times as the LockoutPolicy allows),
 then let the service go idle and connect again.

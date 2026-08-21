@@ -85,10 +85,10 @@ public final class ServiceProcess implements AutoCloseable {
    * machine and how the Windows service will run once it exists.
    *
    * <p>Exiting when idle is not a failure and is reported as none: the socket belongs to systemd
-   * and stays listening, so the next client to connect starts this process again. Diagnostics go to
-   * the journal by way of the standard error stream, which the {@code .service} unit sends there —
-   * never to standard output, which under {@code StandardInput=socket} is one careless unit-file
-   * line away from being the client's own connection.
+   * and stays listening, so the next peer to connect starts this process again. Diagnostics go to
+   * the journal by way of the standard error stream, which the {@code .service} unit sends
+   * there — never to standard output, which under {@code StandardInput=socket} is one careless
+   * unit-file line away from being the peer's own connection.
    */
   public static void main(String[] args) throws IOException, InterruptedException {
     if (args.length != 1 && args.length != 3) {
@@ -129,14 +129,14 @@ public final class ServiceProcess implements AutoCloseable {
   }
 
   /**
-   * Whether anything is going on: a client still connected, or a Session still live.
+   * Whether anything is going on: a peer still connected, or a Session still live.
    *
    * <p>The connection is asked about first, and not only because it is the cheaper question. A
    * Session cannot outlive the connection it was granted on, so a live Session with no live
    * connection is a state this process does not have — and asking the service costs its monitor,
    * which a request being answered is holding.
    */
-  public boolean inUse() {
+  boolean inUse() {
     return server.anyConnectionLive() || service.anySessionLive();
   }
 
@@ -150,8 +150,8 @@ public final class ServiceProcess implements AutoCloseable {
   /**
    * Stops serving and closes the store, in that order: no request outlives the channel.
    *
-   * <p>Does nothing the second time. Two things end this process — the idle period running out and
-   * the machine asking it to stop — and they can arrive together.
+   * <p>Does nothing the second time. Two things end this process — the idle period running out
+   * and the machine asking it to stop — and they can arrive together.
    */
   @Override
   public synchronized void close() {

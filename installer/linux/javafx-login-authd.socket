@@ -25,9 +25,5 @@ SocketUser=root
 SocketGroup=javafx-login
 SocketMode=0660
 
-# When this unit is stopped — an uninstall, or an Administrator stopping it by hand — the
-# socket file goes with it, rather than being left behind for the next start to trip over.
-RemoveOnStop=yes
-
 [Install]
 WantedBy=sockets.target

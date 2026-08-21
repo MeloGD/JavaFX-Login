@@ -909,17 +909,22 @@ public final class AuthenticationService implements AutoCloseable {
   /**
    * Whether a Session is live, asked from outside a request.
    *
-   * <p>Nothing is expired here on purpose. ADR-0009 makes expiry something the service decides when
-   * somebody asks about a Session, and this caller is not asking about one — it is deciding whether
-   * a process nobody is using should stop. A Session whose clocks have run out but which nobody has
-   * asked about is still held by a client that is still connected, and the connection is what keeps
-   * the service up in that case anyway.
+   * <p>Nothing is expired here on purpose. ADR-0009 makes expiry something the service decides
+   * when somebody asks about a Session, and this caller is not asking about one — it is deciding
+   * whether a process nobody is using should stop. A Session whose clocks have run out but which
+   * nobody has asked about is still held by a peer that is still connected, and the connection is
+   * what keeps the service up in that case anyway.
    */
   public synchronized boolean anySessionLive() {
     return sessions.anyLive();
   }
 
-  /** Whether a Session is live, once one that has run out has been ended. */
+  /**
+   * Whether a Session is live, once one that has run out has been ended.
+   *
+   * <p>The question a fresh authentication asks, and not the one {@link #anySessionLive()} answers:
+   * this one is about to grant a Session and must therefore settle the clocks first.
+   */
   private boolean theMachineIsBusy() {
     expireAnySessionThatIsDue(store.inactivityPeriod());
     return sessions.anyLive();

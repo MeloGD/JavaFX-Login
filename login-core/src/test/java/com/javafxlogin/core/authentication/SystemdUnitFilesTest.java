@@ -15,11 +15,12 @@ import org.junit.jupiter.api.Test;
 /**
  * The unit files that are actually shipped, read as the artifacts they are.
  *
- * <p>Socket activation cannot be exercised by a suite — systemd is not in it — but four of the ways
- * it goes wrong are ways an <em>edit to these two files</em> goes wrong, and every one of them fails
- * silently rather than loudly. A second {@code ListenStream=} breaks
- * {@code System.inheritedChannel()} without a word; a missing {@code StandardOutput=} sends whatever
- * the JVM prints into the client's connection; enabling the {@code .service} at boot leaves the
+ * <p>Socket activation cannot be exercised by a suite — systemd is not in it — but four of the
+ * ways it goes wrong are ways an <em>edit to these two files</em> goes wrong, and every one of
+ * them fails silently rather than loudly. A second {@code ListenStream=} breaks
+ * {@code System.inheritedChannel()} without a word; a missing {@code StandardOutput=} sends
+ * whatever the JVM prints into the peer's connection; enabling the {@code .service} at boot
+ * leaves the
  * privileged process running whether or not anybody logs in. The spike in
  * {@code docs/spikes/linux-service-activation.md} paid for that knowledge, and this is where it is
  * kept.
@@ -76,8 +77,8 @@ class SystemdUnitFilesTest {
 
   @Test
   void theServicesDiagnosticsGoToTheJournalAndNotIntoAClientConnection() {
-    // Left at their default these inherit the socket, and anything the JVM prints — a stack trace,
-    // a JVM warning — would be written into whatever client happens to be connected.
+    // Left at their default these inherit the socket, and anything the JVM prints — a stack
+    // trace, a JVM warning — would be written into whatever peer happens to be connected.
     assertTrue(declares(serviceUnit, "StandardOutput=journal"));
     assertTrue(declares(serviceUnit, "StandardError=journal"));
   }

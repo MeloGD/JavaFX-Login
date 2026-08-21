@@ -16,9 +16,9 @@ import org.junit.jupiter.api.Test;
  * sitting idle between logins.
  *
  * <p>Time is moved by hand here rather than waited out: a suite that waited five minutes for each
- * case would be measuring the operating system's timer. What systemd does with the process once it
- * exits — keeping the socket listening, and starting the service again on the next connection — is
- * not testable in a unit test and is covered by the checklist in
+ * case would be measuring the operating system's timer. What systemd does with the process once
+ * it exits — keeping the socket listening, and starting the service again on the next
+ * connection — is not testable in a unit test and is covered by the checklist in
  * {@code docs/manual-checks/linux-service-activation.md}.
  */
 class IdleShutdownTest {

@@ -7,6 +7,10 @@
 # is what starts the privileged process, and that process stops by itself five minutes
 # after the last client has gone. See ADR-0002.
 #
+# This script wires systemd to a product that is already on the machine: the runtime and
+# the jars must be under /opt/javafx-login before it is run, and it refuses to enable
+# anything if they are not. Putting them there belongs to whatever built the product.
+#
 # Usage: sudo ./install.sh [os-account ...]
 #
 # Each named operating-system account is added to the dedicated group, which is what lets
@@ -19,6 +23,7 @@ readonly UNIT_NAME='javafx-login-authd'
 readonly DEDICATED_GROUP='javafx-login'
 readonly UNIT_DIRECTORY='/etc/systemd/system'
 readonly STATE_DIRECTORY='/var/lib/javafx-login'
+readonly PAYLOAD_DIRECTORY='/opt/javafx-login'
 readonly DOC_DIRECTORY='/usr/share/doc/javafx-login'
 readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -33,6 +38,18 @@ require_root() {
 
 require_systemd() {
   command -v systemctl >/dev/null 2>&1 || fail 'systemd is not on this machine, and socket activation is the whole of the Linux design'
+}
+
+require_payload() {
+  # The application itself — the runtime and the jars — is put in place by whatever built
+  # this product, and this script only wires systemd to it. Checked before anything is
+  # enabled, because the failure it prevents is the quiet one: a socket that listens, and
+  # an activation that dies on ExecStart the first time somebody tries to log in.
+  local launcher
+  launcher="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "${HERE}/${UNIT_NAME}.service")"
+  [[ -x ${launcher} ]] || fail "the unit starts ${launcher}, and there is no such executable: install the product under ${PAYLOAD_DIRECTORY} first"
+  compgen -G "${PAYLOAD_DIRECTORY}/lib/*.jar" >/dev/null \
+    || fail "there are no jars in ${PAYLOAD_DIRECTORY}/lib: install the product there first"
 }
 
 create_dedicated_group() {
@@ -89,6 +106,7 @@ report() {
 main() {
   require_root
   require_systemd
+  require_payload
   create_dedicated_group
   create_state_directory
   install_units

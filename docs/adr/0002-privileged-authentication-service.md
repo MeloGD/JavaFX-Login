@@ -44,6 +44,18 @@ delegates to the setgid `unix_chkpwd`, and Windows delegates to LSASS over ALPC.
   Manual-start Windows service whose ACL grants `SERVICE_START` (never
   `SERVICE_STOP`) to normal users — and stops after five minutes without
   Sessions. Consequently no rate-limiting state may live in memory.
+- **Amended while building the Linux activation (issue #15): "without Sessions"
+  is read as "without Sessions and without connected clients".** A connection
+  with no Session behind it is a person at the login window who has not typed a
+  password yet, and a process that exited under them would drop the connection
+  their next attempt goes over — the client would then have to notice a dead
+  channel and reconnect, which is the cold-start dance socket activation exists
+  to avoid. Nothing is given up by counting it: a connection cannot outlive the
+  client process holding it, because the kernel closes it when that process
+  dies, and the five minutes begin there. ADR-0009 and ADR-0010 lean on this
+  bullet for why nothing may be remembered in memory, and that reasoning is
+  untouched — the widened reading makes the process live longer, never the
+  state.
 - Socket activation was proven on Ubuntu 26.04 with systemd 259 and JDK 21. The
   mechanism is not obvious and is easy to get silently wrong:
   `System.inheritedChannel()` inspects **only file descriptor 0**, while systemd

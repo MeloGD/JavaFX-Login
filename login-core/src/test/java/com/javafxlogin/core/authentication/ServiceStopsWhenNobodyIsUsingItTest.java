@@ -43,6 +43,8 @@ class ServiceStopsWhenNobodyIsUsingItTest {
 
   @TempDir Path runtimeDirectory;
 
+  private final TickingClock clock = TickingClock.startingAt(Instant.parse("2026-08-21T12:00:00Z"));
+
   private Path socketPath;
   private ServiceProcess process;
 
@@ -106,8 +108,7 @@ class ServiceStopsWhenNobodyIsUsingItTest {
    */
   @Test
   void stopsTheProcessOnceTheIdlePeriodHasPassedWithNobodyUsingIt() throws IOException {
-    TickingClock clock = TickingClock.startingAt(Instant.parse("2026-08-21T12:00:00Z"));
-    IdleShutdown shutdown = new IdleShutdown(clock, process::inUse, process::close);
+    IdleShutdown shutdown = theCountdownAgainstThisProcess();
 
     clock.passes(IdleShutdown.IDLE_PERIOD);
     shutdown.reconsider();
@@ -118,8 +119,7 @@ class ServiceStopsWhenNobodyIsUsingItTest {
 
   @Test
   void keepsServingWhileAClientIsStillThere() throws IOException {
-    TickingClock clock = TickingClock.startingAt(Instant.parse("2026-08-21T12:00:00Z"));
-    IdleShutdown shutdown = new IdleShutdown(clock, process::inUse, process::close);
+    IdleShutdown shutdown = theCountdownAgainstThisProcess();
 
     try (ServiceClient client = ServiceClient.connect(socketPath)) {
       client.send(new AskIfBootstrapNeeded());
@@ -132,10 +132,15 @@ class ServiceStopsWhenNobodyIsUsingItTest {
     }
   }
 
+  /** The countdown this process's own life runs against, with the five minutes moved by hand. */
+  private IdleShutdown theCountdownAgainstThisProcess() {
+    return new IdleShutdown(clock, process::inUse, process::close);
+  }
+
   /**
    * The service notices a connection go when it reads the end of it, which happens on the
-   * connection's own thread rather than on this one — so this waits for it rather than assuming it
-   * has already happened.
+   * connection's own thread rather than on this one — so this waits for it rather than assuming
+   * it has already happened.
    */
   private boolean waitUntilNobodyIsUsingIt() throws InterruptedException {
     Instant giveUpAt = Instant.now().plus(UNTIL_THE_KERNEL_NOTICES);
