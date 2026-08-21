@@ -1,5 +1,6 @@
 package com.javafxlogin.core.vault;
 
+import com.javafxlogin.core.crypto.AesGcm;
 import com.javafxlogin.core.store.OwnerOnlyFiles;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

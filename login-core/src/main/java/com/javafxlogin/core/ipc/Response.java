@@ -13,6 +13,8 @@ public sealed interface Response
         Ok,
         Assessed,
         AuthenticationEventsExported,
+        BackupExported,
+        BackupImported,
         BootstrapNeeded,
         EnrolmentIssued,
         PolicyRefused,

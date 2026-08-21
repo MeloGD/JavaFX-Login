@@ -149,5 +149,22 @@ public enum AuthenticationEventType {
    * is made, so the copy does not claim to contain the export that produced it; the next export
    * shows this one.
    */
-  AUTHENTICATION_EVENTS_EXPORTED
+  AUTHENTICATION_EVENTS_EXPORTED,
+
+  /**
+   * An Administrator wrote a Backup of the Accounts and the configuration. Recorded because a copy
+   * of every password hash in the deployment now exists somewhere this machine cannot see, sealed
+   * under a password somebody chose in a hurry — which is a fact about access whether the copy is
+   * ever restored or not. Where it was written is not here: a path is not a secret, but a record of
+   * every path an Administrator has ever backed up to is a map of where to go looking.
+   */
+  BACKUP_EXPORTED,
+
+  /**
+   * An Administrator replaced every Account and every setting with a Backup's. Recorded on the
+   * machine's own record, which is not in the Backup and does not travel — so the entries either
+   * side of this one are the deployment that was here, and this line is where it stopped being. It
+   * is the last thing said about the Session that asked, because an import ends it.
+   */
+  BACKUP_IMPORTED
 }

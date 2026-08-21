@@ -7,6 +7,8 @@ import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
 import com.javafxlogin.core.ipc.AskIfSessionIsLive;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.AuthenticationEventsExported;
+import com.javafxlogin.core.ipc.BackupExported;
+import com.javafxlogin.core.ipc.BackupImported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
@@ -19,7 +21,9 @@ import com.javafxlogin.core.ipc.Denied;
 import com.javafxlogin.core.ipc.EnrolmentIssued;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
+import com.javafxlogin.core.ipc.ExportBackup;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.ImportBackup;
 import com.javafxlogin.core.ipc.InitiateReset;
 import com.javafxlogin.core.ipc.KeepSecret;
 import com.javafxlogin.core.ipc.ListAccounts;
@@ -216,6 +220,38 @@ final class ServiceLoginGate implements LoginGate {
     };
   }
 
+  @Override
+  public synchronized BackupOutcome exportBackupTo(
+      Session session, Path destination, char[] password) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(destination, "destination");
+    Objects.requireNonNull(password, "password");
+    Response response = ask(new ExportBackup(session.token(), destination, password));
+    return switch (response) {
+      case BackupExported exported -> new BackupWritten(exported.backup());
+      case ErrorResponse error -> refused("a Backup of the deployment", error);
+      case SessionEnded ignored -> sessionOver();
+      default -> throw unexpected("a Backup of the deployment", response);
+    };
+  }
+
+  @Override
+  public synchronized RestoreOutcome importBackupFrom(
+      Session session, Path source, char[] password) {
+    Objects.requireNonNull(session, "session");
+    Objects.requireNonNull(source, "source");
+    Objects.requireNonNull(password, "password");
+    Response response = ask(new ImportBackup(session.token(), source, password));
+    return switch (response) {
+      // The Session this was asked on is over by the time this returns, because the deployment it
+      // named is. That is what was asked for, not a failure, and it is not read as one here.
+      case BackupImported restored -> new BackupRestored(restored.backup());
+      case ErrorResponse error -> refused("a Backup to restore", error);
+      case SessionEnded ignored -> sessionOver();
+      default -> throw unexpected("a Backup to restore", response);
+    };
+  }
+
   /**
    * A Session that ended before the request arrived. Said the same way for every administration
    * request, because it is the same thing about the same Session whichever one discovered it.
@@ -244,6 +280,16 @@ final class ServiceLoginGate implements LoginGate {
       case EXPORT_DESTINATION_REFUSED ->
           new AdministrationRefused(AdministrationRefusedReason.EXPORT_DESTINATION_REFUSED);
       case EXPORT_FAILED -> new AdministrationRefused(AdministrationRefusedReason.EXPORT_FAILED);
+      case BACKUP_DESTINATION_REFUSED ->
+          new AdministrationRefused(AdministrationRefusedReason.BACKUP_DESTINATION_REFUSED);
+      case BACKUP_SOURCE_REFUSED ->
+          new AdministrationRefused(AdministrationRefusedReason.BACKUP_SOURCE_REFUSED);
+      case BACKUP_NOT_READ -> new AdministrationRefused(AdministrationRefusedReason.BACKUP_NOT_READ);
+      case BACKUP_NOT_THIS_SCHEMA ->
+          new AdministrationRefused(AdministrationRefusedReason.BACKUP_NOT_THIS_SCHEMA);
+      case BACKUP_HAS_NO_ADMINISTRATOR ->
+          new AdministrationRefused(AdministrationRefusedReason.BACKUP_HAS_NO_ADMINISTRATOR);
+      case BACKUP_FAILED -> new AdministrationRefused(AdministrationRefusedReason.BACKUP_FAILED);
       case STORE_UNAVAILABLE, VAULT_UNAVAILABLE ->
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach the files it owns");
@@ -348,8 +394,8 @@ final class ServiceLoginGate implements LoginGate {
       case STORE_UNAVAILABLE, VAULT_UNAVAILABLE ->
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach the files it owns");
-      // Every one of these answers a request about an Account, a first run, or a file to copy the
-      // record into. None of them is an answer to a question about a secret.
+      // Every one of these answers a request about an Account, a first run, or a file the service
+      // writes or reads for an Administrator. None of them is an answer about a secret.
       case ADMINISTRATOR_EXISTS,
               NOT_MACHINE_ADMINISTRATOR,
               NOT_ADMINISTRATOR,
@@ -358,7 +404,13 @@ final class ServiceLoginGate implements LoginGate {
               CANNOT_ENROL_THE_ADMINISTRATOR,
               CANNOT_DELETE_THE_ADMINISTRATOR,
               EXPORT_DESTINATION_REFUSED,
-              EXPORT_FAILED ->
+              EXPORT_FAILED,
+              BACKUP_DESTINATION_REFUSED,
+              BACKUP_SOURCE_REFUSED,
+              BACKUP_NOT_READ,
+              BACKUP_NOT_THIS_SCHEMA,
+              BACKUP_HAS_NO_ADMINISTRATOR,
+              BACKUP_FAILED ->
           throw unexpected(asked, error);
     };
   }
@@ -420,10 +472,10 @@ final class ServiceLoginGate implements LoginGate {
           throw new ServiceUnreachableException(
               "The AuthenticationService could not reach its CredentialStore");
       // Every one of these is answered to a request made from an Administrator's Session — about
-      // an Account, or about a file to copy the record into. The first run is neither: it carries
-      // no Session at all, being what creates the Account that can hold one, and it asks for
-      // nothing to be written anywhere. Reaching here means the service answered a question nobody
-      // asked.
+      // an Account, or about a file the service copies the record into, writes a Backup to or reads
+      // one from. The first run is none of those: it carries no Session at all, being what creates
+      // the Account that can hold one, and it asks for nothing to be written anywhere. Reaching
+      // here means the service answered a question nobody asked.
       case NOT_ADMINISTRATOR,
               NOT_AN_OPERATOR,
               NO_SUCH_ACCOUNT,
@@ -434,7 +486,13 @@ final class ServiceLoginGate implements LoginGate {
               NO_SUCH_SECRET,
               VAULT_UNAVAILABLE,
               EXPORT_DESTINATION_REFUSED,
-              EXPORT_FAILED ->
+              EXPORT_FAILED,
+              BACKUP_DESTINATION_REFUSED,
+              BACKUP_SOURCE_REFUSED,
+              BACKUP_NOT_READ,
+              BACKUP_NOT_THIS_SCHEMA,
+              BACKUP_HAS_NO_ADMINISTRATOR,
+              BACKUP_FAILED ->
           throw unexpected("an attempt to create the Administrator", error);
     };
   }

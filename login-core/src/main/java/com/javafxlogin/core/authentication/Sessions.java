@@ -168,6 +168,23 @@ public final class Sessions {
     return liveWith(period, idleFor(live));
   }
 
+  /**
+   * Ends whatever Session is live, without being told which one it is.
+   *
+   * <p>One caller, and it is the one place in this service where a Session is ended by something
+   * other than its own holder, its own clocks or its own connection: a Backup being imported.
+   * Everything the live Session names — the Account, the Role it was granted in, the wrapped copy of
+   * the DataKey its password opened — belonged to a deployment that has just been replaced, and a
+   * Session that survived that would be a token naming an Account nobody can look up.
+   *
+   * <p>Nothing is remembered here, for the reason {@link #end} remembers nothing: the client that
+   * asked for the import knows it happened, and there is no expiry to explain.
+   */
+  public synchronized void endWhateverIsLive() {
+    shutTheVault();
+    live = null;
+  }
+
   /** Ends the Session deliberately. Nothing is remembered: the client that asked already knows. */
   public synchronized void end(SessionToken token, ConnectionHandle connection) {
     if (namesTheLiveSession(token, connection)) {

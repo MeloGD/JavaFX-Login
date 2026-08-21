@@ -135,6 +135,20 @@ final class Enrolments {
     store.forgetPasswordReset(accountName);
   }
 
+  /**
+   * An Enrolment whose secret was generated and told to nobody.
+   *
+   * <p>One caller: a Backup being restored. The Backup carries no enrolment — a secret addressed to
+   * a machine that no longer exists must not be resurrected — but it does carry the Accounts that
+   * were awaiting one, and the schema refuses an Account with neither a password nor an outstanding
+   * enrolment. So such an Account is restored waiting on this, which is the honest shape of "waiting
+   * for the Administrator to issue a secret": there are 128 bits behind it and nobody alive has
+   * them, so no offer can match it, and the panel's own reset is what turns it into a real one.
+   */
+  Enrolment oneNobodyHolds() {
+    return enrolmentOf(EnrolmentSecret.generate(random));
+  }
+
   private Enrolment enrolmentOf(EnrolmentSecret secret) {
     return new Enrolment(secret.hashed(), clock.wallTime());
   }

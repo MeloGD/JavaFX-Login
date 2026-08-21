@@ -1,5 +1,6 @@
 package com.javafxlogin.core.vault;
 
+import com.javafxlogin.core.crypto.AesGcm;
 import java.security.SecureRandom;
 import java.util.Arrays;
 

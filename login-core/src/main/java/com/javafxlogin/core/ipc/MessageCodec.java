@@ -12,6 +12,7 @@ import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
+import com.javafxlogin.core.backup.Backup;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
@@ -103,6 +104,14 @@ public final class MessageCodec {
           case ExportAuthenticationEvents export ->
               carrying("ExportAuthenticationEvents", export.token())
                   .put("destination", export.destination().toString());
+          case ExportBackup export ->
+              carrying("ExportBackup", export.token())
+                  .put("destination", export.destination().toString())
+                  .put("password", new String(export.password()));
+          case ImportBackup restore ->
+              carrying("ImportBackup", restore.token())
+                  .put("source", restore.source().toString())
+                  .put("password", new String(restore.password()));
           case CreateAccount create ->
               carrying("CreateAccount", create.token())
                   .put("accountName", create.accountName())
@@ -148,6 +157,8 @@ public final class MessageCodec {
           case Ok ignored -> message("Ok");
           case Assessed assessed -> assessed(assessed);
           case AuthenticationEventsExported exported -> exported(exported.export());
+          case BackupExported exported -> backup("BackupExported", exported.backup());
+          case BackupImported restored -> backup("BackupImported", restored.backup());
           case BootstrapNeeded needed -> message("BootstrapNeeded").put("needed", needed.needed());
           case PolicyRefused refused -> carrying("PolicyRefused", refused.violations());
           case SessionLive live -> sessionLive(live);
@@ -184,7 +195,12 @@ public final class MessageCodec {
               token(message), text(message, "accountName"), languagePreference(message));
       case "ClearLockout" -> new ClearLockout(token(message), text(message, "accountName"));
       case "ExportAuthenticationEvents" ->
-          new ExportAuthenticationEvents(token(message), destination(message));
+          new ExportAuthenticationEvents(token(message), path(message, "destination"));
+      case "ExportBackup" ->
+          new ExportBackup(
+              token(message), path(message, "destination"), chars(message, "password"));
+      case "ImportBackup" ->
+          new ImportBackup(token(message), path(message, "source"), chars(message, "password"));
       case "CreateAccount" ->
           new CreateAccount(
               token(message), text(message, "accountName"), constant(Role.class, message, "role"));
@@ -237,6 +253,8 @@ public final class MessageCodec {
           new AuthenticationEventsExported(
               new AuthenticationEventExport(
                   count(message, "events"), flag(message, "chainIntact")));
+      case "BackupExported" -> new BackupExported(backup(message));
+      case "BackupImported" -> new BackupImported(backup(message));
       case "BootstrapNeeded" -> new BootstrapNeeded(flag(message, "needed"));
       case "PolicyRefused" -> policyRefused(message);
       case "SessionLive" -> new SessionLive(millis(message, "expiresInMillis"));
@@ -387,6 +405,22 @@ public final class MessageCodec {
     return Optional.of(preference);
   }
 
+  /**
+   * What a Backup came to: two counts and nothing else. The same shape either way, because an export
+   * and the import of that file are the same fact seen twice.
+   */
+  private static ObjectNode backup(String type, Backup backup) {
+    return message(type).put("accounts", backup.accounts()).put("settings", backup.settings());
+  }
+
+  private static Backup backup(ObjectNode message) {
+    try {
+      return new Backup(count(message, "accounts"), count(message, "settings"));
+    } catch (IllegalArgumentException e) {
+      throw new MalformedMessageException("Not a Backup this build reads", e);
+    }
+  }
+
   private static ObjectNode exported(AuthenticationEventExport export) {
     return message("AuthenticationEventsExported")
         .put("events", export.events())
@@ -470,12 +504,15 @@ public final class MessageCodec {
     return value.longValue();
   }
 
-  /** A path the peer chose, read as text. What the service will write to is the service's word. */
-  private static Path destination(ObjectNode message) {
+  /**
+   * A path the peer chose, read as text. Which paths the service will write to, and which it will
+   * read from, is the service's word and not this codec's.
+   */
+  private static Path path(ObjectNode message, String field) {
     try {
-      return Path.of(text(message, "destination"));
+      return Path.of(text(message, field));
     } catch (InvalidPathException e) {
-      throw new MalformedMessageException("The destination is not a path on this machine", e);
+      throw new MalformedMessageException("The " + field + " is not a path on this machine", e);
     }
   }
 

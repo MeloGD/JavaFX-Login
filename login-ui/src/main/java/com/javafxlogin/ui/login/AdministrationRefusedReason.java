@@ -50,5 +50,43 @@ public enum AdministrationRefusedReason {
   EXPORT_DESTINATION_REFUSED,
 
   /** The record could not be read or the copy could not be written, and nothing was left behind. */
-  EXPORT_FAILED
+  EXPORT_FAILED,
+
+  /**
+   * The service will not write the Backup where it was asked to, by the same rule an export of the
+   * record follows: somewhere that is not an absolute path, a directory that does not exist, its own
+   * directory, or a file that is already there.
+   */
+  BACKUP_DESTINATION_REFUSED,
+
+  /**
+   * The service will not read a Backup from where it was asked to: somewhere that is not an absolute
+   * path, somewhere inside its own directory, or a path with nothing at it.
+   */
+  BACKUP_SOURCE_REFUSED,
+
+  /**
+   * The Backup did not open. The password is wrong, the file has been damaged, or it was never one
+   * of these. One reason for all three, as the service answers it — telling them apart would be
+   * telling whoever is guessing which guess was closest — and the store is untouched.
+   */
+  BACKUP_NOT_READ,
+
+  /**
+   * The Backup opened and was written by another version of this product. It is not restored rather
+   * than restored hopefully, and the store is untouched.
+   */
+  BACKUP_NOT_THIS_SCHEMA,
+
+  /**
+   * The Backup opened and names no Administrator, so restoring it would leave a deployment nobody
+   * could manage and no wizard would offer to fix. Refused before anything was written.
+   */
+  BACKUP_HAS_NO_ADMINISTRATOR,
+
+  /**
+   * The Backup could not be written, could not be read off the disk, or would not go into the store.
+   * Nothing is left at the destination, and nothing in the store was changed.
+   */
+  BACKUP_FAILED
 }

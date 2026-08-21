@@ -57,8 +57,10 @@ AuthenticationEvents. It is reached from the same screen as the ProtectedFeature
 and one control apart — the attempt asks for the Administrator Role rather than
 the Operator one — and every request behind it is refused by the
 AuthenticationService unless the Session naming it is an Administrator's, so
-drawing the window is never what grants it. There is nowhere on it to type
-anybody's password, and nothing it shows once can be asked for again.
+drawing the window is never what grants it. There is nowhere on it to type an
+Account's password, and nothing it shows once can be asked for again. The one
+password box it does hold is a Backup's: it seals a file, nothing verifies it
+against anything, and knowing it admits nobody.
 _Avoid_: admin screen, management console, dashboard, settings
 
 **Role**:
@@ -197,6 +199,21 @@ _Avoid_: MainController, protected screen, main app
 The record of every Account, its password hash and the configuration of the
 application. Only the AuthenticationService can read it.
 _Avoid_: user database, account table, shadow file
+
+**Backup**:
+An encrypted copy of the Accounts and the configuration of a deployment, written to
+one file an Administrator names and sealed under a password they type at the moment
+of the export — not an Account's password and not checked against one. It restores
+on any machine, which ADR-0006 chose over binding it to the one that wrote it, so it
+carries nothing that machine keeps: no SecretVault, no MachineKey, no
+AuthenticationEvents, and no Enrolment anybody is halfway through — the Account
+travels, the secret addressed to a machine that no longer exists does not, and a
+restore puts such an Account back waiting for an Administrator to issue one.
+Restoring replaces the store wholesale and never merges, refuses anything it cannot
+fully read before writing a row, drops every wrapped copy of the DataKey the
+SecretVault held, and ends the Session that asked. What is missing from a restored
+deployment, and why, is ADR-0015.
+_Avoid_: dump, snapshot, archive, sync
 
 **SecretVault**:
 The named store of secrets a ProtectedFeature needs but must not hold in the

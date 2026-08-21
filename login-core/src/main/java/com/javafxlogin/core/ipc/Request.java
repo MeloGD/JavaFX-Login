@@ -22,6 +22,8 @@ public sealed interface Request
         CreateAccount,
         DeleteAccount,
         ExportAuthenticationEvents,
+        ExportBackup,
+        ImportBackup,
         InitiateReset,
         KeepSecret,
         ListAccounts,

@@ -13,7 +13,12 @@ import java.util.Objects;
  * @param reason the service's own, carried through rather than interpreted here
  */
 public record AdministrationRefused(AdministrationRefusedReason reason)
-    implements AdministrationOutcome, AccountListing, AccountProvisioned, ExportOutcome {
+    implements AdministrationOutcome,
+        AccountListing,
+        AccountProvisioned,
+        ExportOutcome,
+        BackupOutcome,
+        RestoreOutcome {
 
   public AdministrationRefused {
     Objects.requireNonNull(reason, "reason");

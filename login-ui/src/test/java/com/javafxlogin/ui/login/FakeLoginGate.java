@@ -4,6 +4,7 @@ import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
+import com.javafxlogin.core.backup.Backup;
 import com.javafxlogin.core.ipc.DeniedReason;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
@@ -64,6 +65,16 @@ final class FakeLoginGate implements LoginGate {
 
   private volatile InactivityPeriod configuredPeriod;
   private volatile Path exportedTo;
+
+  /** Where the panel last asked for a Backup to be written, and where it asked for one to be read. */
+  private volatile Path backedUpTo;
+
+  private volatile Path restoredFrom;
+
+  /** What the panel typed as the password of the Backup file, copied out of the array at once. */
+  private volatile String backupPassword;
+
+  private volatile Backup nextBackup = new Backup(4, 3);
   private volatile AuthenticationEventExport nextExport =
       new AuthenticationEventExport(12, true);
 
@@ -284,6 +295,26 @@ final class FakeLoginGate implements LoginGate {
     return exportedTo;
   }
 
+  /** Where the panel last asked for a Backup to be written. */
+  Path backedUpTo() {
+    return backedUpTo;
+  }
+
+  /** Where the panel last asked for a Backup to be restored from. */
+  Path restoredFrom() {
+    return restoredFrom;
+  }
+
+  /** What the panel offered as the password of the Backup file. */
+  String backupPassword() {
+    return backupPassword;
+  }
+
+  /** What the next Backup written or restored comes to. */
+  void backupsComeTo(Backup backup) {
+    nextBackup = backup;
+  }
+
   @Override
   public Admission administer(String accountName, char[] password) {
     // Copied at once: the window blanks the array it handed over as soon as this returns.
@@ -465,6 +496,41 @@ final class FakeLoginGate implements LoginGate {
     }
     exportedTo = destination;
     return new EventsExported(nextExport);
+  }
+
+  @Override
+  public BackupOutcome exportBackupTo(Session session, Path destination, char[] password) {
+    Objects.requireNonNull(session, "session");
+    // Copied at once: the window is free to blank the array it handed over as soon as this returns.
+    String offered = new String(password);
+    administrations.add("exportBackupTo:" + destination);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    backedUpTo = destination;
+    backupPassword = offered;
+    return new BackupWritten(nextBackup);
+  }
+
+  @Override
+  public RestoreOutcome importBackupFrom(Session session, Path source, char[] password) {
+    Objects.requireNonNull(session, "session");
+    String offered = new String(password);
+    administrations.add("importBackupFrom:" + source);
+    if (!reachable) {
+      throw new ServiceUnreachableException("There is no AuthenticationService in this test");
+    }
+    if (administrationRefused != null) {
+      return new AdministrationRefused(administrationRefused);
+    }
+    restoredFrom = source;
+    backupPassword = offered;
+    // As the real service does: the Session that asked named a deployment that no longer exists.
+    status = new SessionOver(SessionEndedReason.NO_SUCH_SESSION);
+    return new BackupRestored(nextBackup);
   }
 
   /** What the wizard offered, as {@code name/password}, in the order it offered it. */

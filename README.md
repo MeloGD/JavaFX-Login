@@ -165,8 +165,34 @@ rather than the `Operator` one. What is on it is the `Account`s of the deploymen
 coarse `PasswordStrength` band, the `LanguagePreference` and any `Lockout` — and what an
 `Administrator` does about one of them: create an `Operator` and be handed the one-time secret,
 initiate a reset, clear a `Lockout`, delete an `Operator` after being told what that costs, change
-how long a `Session` may idle (or switch expiry off, which is what a kiosk is), and copy the audit
-record to a file. A `SecondFactor` control sits there visibly disabled, because v1 implements none.
+how long a `Session` may idle (or switch expiry off, which is what a kiosk is), copy the audit
+record to a file, and write or restore a `Backup`. A `SecondFactor` control sits there visibly
+disabled, because v1 implements none.
+
+## Surviving the machine
+
+A `Backup` is one file: every `Account` that holds a password, and the configuration, sealed under a
+password the `Administrator` types at the moment of the export. Nothing about the machine that wrote
+it goes into it, so it restores on a replacement — ADR-0006 chose that over binding it to a keyring,
+because a backup that only restores where it was made is useless on the day that machine dies. What
+is left protecting it is that password and Argon2id, which is why the screen says to keep it
+somewhere other than the file.
+
+What is **not** in it: the `SecretVault` and the `MachineKey`, the record of `AuthenticationEvent`s
+and the key its chain is computed under, and any `Enrolment` somebody is halfway through — the
+`Account` travels, the secret addressed to the machine that died does not, and a restore puts that
+`Account` back waiting for a new one. Restoring also drops every wrapped copy of the `DataKey` the
+`SecretVault` held, because those are keyed by names that now belong to nobody; the secrets
+themselves stay. So a restored `Operator` logs in with the password they always had and is refused a
+secret until an `Administrator` resets them and they enrol again. ADR-0015 says why, along with the
+other things a restore refuses rather than guesses at.
+
+Restoring replaces the store wholesale and never merges, which the panel says before it asks a
+second time; a file that will not open, one from another version of the product and one that names
+no `Administrator` are all refused before a single row is written, so the deployment is either the
+`Backup`'s or exactly what it was. Both directions are `AuthenticationEvent`s, written to the record
+this machine keeps — which is not in the `Backup`, so the lines either side of an import are the
+deployment that used to be there.
 
 Every one of those is refused in the privileged process unless the `Session` asking is an
 `Administrator`'s, so drawing the window is not what grants it — ADR-0013 says what that costs and

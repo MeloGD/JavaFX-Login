@@ -1,6 +1,7 @@
 package com.javafxlogin.core.vault;
 
 import com.javafxlogin.core.auth.Argon2Parameters;
+import com.javafxlogin.core.crypto.AesGcm;
 import com.javafxlogin.core.store.NumberedMigrations;
 import com.javafxlogin.core.store.OwnerOnlyFiles;
 import com.javafxlogin.core.store.SchemaTooNewException;
@@ -176,6 +177,30 @@ public final class SecretVault implements AutoCloseable {
       return statement.executeUpdate() > 0;
     } catch (SQLException e) {
       throw new VaultException("could not destroy a wrapped DataKey in " + file, e);
+    }
+  }
+
+  /**
+   * Destroys every wrapped copy of the DataKey, leaving the secrets themselves where they are.
+   *
+   * <p>One caller: a Backup being imported. After a wholesale replace, every wrap on this machine
+   * belongs to an Account that no longer exists — and the wraps are keyed by name, so leaving them
+   * would mean a restored Account that happens to be called what a local one was called inheriting
+   * that Account's way into this machine's Vault. Nobody decided to give it to them.
+   *
+   * <p>The secrets survive, because they are encrypted under the DataKey and the DataKey is also
+   * wrapped under the MachineKey, which is this machine's and is not keyed by anybody's name. So the
+   * Vault still opens for a Vault that is provisioned again; what is gone is every Operator's own
+   * way in, which is the state ADR-0015 says a restored deployment is in — a reset and an enrolment
+   * away from reaching a secret, uniformly, rather than depending on who was called what.
+   *
+   * @return how many wraps were destroyed
+   */
+  public int destroyEveryWrap() {
+    try (Statement statement = connection.createStatement()) {
+      return statement.executeUpdate("DELETE FROM data_key_wraps");
+    } catch (SQLException e) {
+      throw new VaultException("could not destroy the wrapped DataKeys in " + file, e);
     }
   }
 

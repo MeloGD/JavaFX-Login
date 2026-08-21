@@ -26,6 +26,12 @@ final class AdministrationRefusedText {
       case CANNOT_DELETE_THE_ADMINISTRATOR -> "refused.cannot-delete-the-administrator";
       case EXPORT_DESTINATION_REFUSED -> "refused.export-destination-refused";
       case EXPORT_FAILED -> "refused.export-failed";
+      case BACKUP_DESTINATION_REFUSED -> "refused.backup-destination-refused";
+      case BACKUP_SOURCE_REFUSED -> "refused.backup-source-refused";
+      case BACKUP_NOT_READ -> "refused.backup-not-read";
+      case BACKUP_NOT_THIS_SCHEMA -> "refused.backup-not-this-schema";
+      case BACKUP_HAS_NO_ADMINISTRATOR -> "refused.backup-has-no-administrator";
+      case BACKUP_FAILED -> "refused.backup-failed";
     };
   }
 }

@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import javafx.beans.property.ReadOnlyStringWrapper;
@@ -20,6 +21,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.PasswordField;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
@@ -28,7 +30,8 @@ import javafx.util.StringConverter;
 
 /**
  * What the administration panel does: list the Accounts of the deployment, ask the service to
- * change one of them, configure how long a Session may idle, and copy the record out.
+ * change one of them, configure how long a Session may idle, copy the record out, and back the
+ * deployment up or restore it.
  *
  * <p>It decides nothing. Every one of those is a request the AuthenticationService answers or
  * refuses, and this class shows which of the two happened — including the refusals that exist
@@ -36,9 +39,15 @@ import javafx.util.StringConverter;
  * handed an enrolment secret, and the panel says so rather than hiding the controls, because a
  * control that is not there teaches nobody why.
  *
- * <p>Nothing here chooses anybody's password, and there is nowhere on this screen to type one. That
- * is ASVS 5.0 §6.4.6 and story 21: what an Administrator gets instead is a one-time secret to hand
- * over, shown once and never readable again.
+ * <p>Nothing here chooses anybody's password, and there is nowhere on this screen to type an
+ * Account's. That is ASVS 5.0 §6.4.6 and story 21: what an Administrator gets instead is a one-time
+ * secret to hand over, shown once and never readable again.
+ *
+ * <p>There is one password box, and it is not an exception to that. What is typed in it is what a
+ * Backup file is encrypted under — it belongs to a file rather than to a person, nothing verifies it
+ * against anything, and knowing it admits nobody. ADR-0006 is why it exists at all: a backup bound
+ * to the machine that wrote it would be useless on the day that machine dies, so what is left
+ * protecting it is a password and Argon2id.
  *
  * <p>It is drawn in the language the Administrator's own Account reads, and every sentence on it
  * comes out of that language's bundle. The one thing on it that is <em>about</em> a language rather
@@ -77,6 +86,18 @@ public final class AdministrationController {
   private static final String EXPORTED_WITH_A_BROKEN_CHAIN =
       "administration.exported-with-a-broken-chain";
 
+  private static final String BACKUP_FILE_NEEDED = "administration.backup-file-needed";
+  private static final String BACKUP_PASSWORD_NEEDED = "administration.backup-password-needed";
+  private static final String BACKUP_EXPORTED = "administration.backup-exported";
+  private static final String IMPORT_CONSEQUENCES = "administration.import-consequences";
+
+  /**
+   * What the login screen says after an import, rather than what this panel says: the import is the
+   * end of this window, because the Session it ran under named an Account in a deployment that has
+   * just been replaced.
+   */
+  private static final String BACKUP_IMPORTED = "administration.backup-imported";
+
   /**
    * What an Account that has said nothing about its language is chosen from the selector as. It is
    * a Locale naming no language, which is what "follow whichever machine you are read on" is: a tag
@@ -102,6 +123,12 @@ public final class AdministrationController {
   @FXML private Button cancelDelete;
 
   @FXML private ComboBox<Locale> languageChoice;
+
+  @FXML private TextField backupFile;
+  @FXML private PasswordField backupPassword;
+  @FXML private Label importConsequences;
+  @FXML private Button confirmImport;
+  @FXML private Button cancelImport;
 
   @FXML private TextField inactivityMinutes;
   @FXML private CheckBox neverExpires;
@@ -487,6 +514,151 @@ public final class AdministrationController {
         outcome -> exported(outcome, destination));
   }
 
+  /**
+   * Writes a Backup that restores on another machine, sealed under a password typed here.
+   *
+   * <p>The password box on this screen is the one thing that looks like the thing this panel does
+   * not have. It is not an Account's password and nothing verifies it against anything: it is what
+   * the file is encrypted under, and ADR-0006 makes it the whole of what protects a file that is
+   * meant to restore anywhere. Nobody is enrolled by typing it and nobody is admitted by knowing it.
+   */
+  @FXML
+  private void onExportBackup() {
+    withTheBackupAsked(
+        AdministrationRefusedReason.BACKUP_DESTINATION_REFUSED,
+        (file, password) ->
+            ask(
+                "administration-backup-export",
+                password,
+                () -> gate.exportBackupTo(session, file, password),
+                outcome -> backedUp(outcome, file)));
+  }
+
+  /**
+   * Issue #14's sixth criterion: what an import costs is on the screen before anything is destroyed,
+   * and the import itself is a second, separate click — the same shape the delete has, because it is
+   * the same kind of thing done to every Account at once.
+   */
+  @FXML
+  private void onImportBackup() {
+    // The file only. This click asks nobody for anything and destroys nothing — it puts a sentence
+    // on the screen — so the password is left in the box it was typed into and read at the second
+    // click, which is the one that has something to do with it.
+    theBackupFile(AdministrationRefusedReason.BACKUP_SOURCE_REFUSED)
+        .ifPresent(
+            file -> {
+              importConsequences.setText(saidIn.say(IMPORT_CONSEQUENCES, file));
+              showTheImport(true);
+            });
+  }
+
+  @FXML
+  private void onConfirmImport() {
+    withTheBackupAsked(
+        AdministrationRefusedReason.BACKUP_SOURCE_REFUSED,
+        (file, password) -> {
+          forgetTheImport();
+          ask(
+              "administration-backup-import",
+              password,
+              () -> gate.importBackupFrom(session, file, password),
+              this::restored);
+        });
+  }
+
+  @FXML
+  private void onCancelImport() {
+    forgetTheImport();
+  }
+
+  private void forgetTheImport() {
+    importConsequences.setText("");
+    showTheImport(false);
+  }
+
+  private void showTheImport(boolean asked) {
+    show(asked, importConsequences, confirmImport, cancelImport);
+  }
+
+  /**
+   * Both halves a Backup needs: the file, and the password it is sealed under.
+   *
+   * @param whenItIsNoPath which refusal to say where what was typed is not a path on this machine,
+   *     because the two directions are refused in different words — see {@link #theBackupFile}
+   */
+  private void withTheBackupAsked(
+      AdministrationRefusedReason whenItIsNoPath, BiConsumer<Path, char[]> then) {
+    theBackupFile(whenItIsNoPath)
+        .ifPresent(file -> then.accept(file, backupPassword.getText().toCharArray()));
+  }
+
+  /**
+   * The file a Backup is to be written to or read from, or nothing at all where the screen does not
+   * yet say which — and then it says which half is missing.
+   *
+   * <p>The password is asked for here too, because a Backup with no password to seal it is not a
+   * Backup, and finding that out after the file had been named would be a worse moment to find it
+   * out in. What is handed back is the file alone: one of the two callers has no business with the
+   * password yet.
+   *
+   * <p>A path that is not one on this machine is said in the words the service refuses one with, for
+   * the reason the export of the record says it that way: it is the same thing — a file this is not
+   * going to happen to, and another path is what fixes it. Which of the two refusals is the caller's
+   * to say, because the service keeps them apart on purpose: an Administrator who has just been told
+   * a path was refused should not have to work out which of the two things they asked for it was
+   * about.
+   */
+  private Optional<Path> theBackupFile(AdministrationRefusedReason whenItIsNoPath) {
+    String typed = backupFile.getText().trim();
+    if (typed.isEmpty()) {
+      say(saidIn.say(BACKUP_FILE_NEEDED));
+      return Optional.empty();
+    }
+    if (backupPassword.getText().isEmpty()) {
+      say(saidIn.say(BACKUP_PASSWORD_NEEDED));
+      return Optional.empty();
+    }
+    try {
+      return Optional.of(Path.of(typed));
+    } catch (InvalidPathException e) {
+      say(saidIn.say(AdministrationRefusedText.keyFor(whenItIsNoPath)));
+      return Optional.empty();
+    }
+  }
+
+  private void backedUp(BackupOutcome outcome, Path destination) {
+    switch (outcome) {
+      case BackupWritten written -> {
+        backupPassword.clear();
+        say(
+            saidIn.say(
+                BACKUP_EXPORTED,
+                written.backup().accounts(),
+                written.backup().settings(),
+                destination));
+      }
+      case AdministrationRefused refused -> refused(refused);
+    }
+  }
+
+  /**
+   * What happens after a Backup has replaced the deployment: this window is over.
+   *
+   * <p>Not because the request failed, but because it worked. The Session this panel ran under was
+   * granted to an Account in a store that no longer exists, and the login screen it hands back to
+   * belongs to the deployment that was just restored — where the password to get back in is whatever
+   * it was on the machine the Backup came from.
+   */
+  private void restored(RestoreOutcome outcome) {
+    switch (outcome) {
+      case BackupRestored ignored -> {
+        backupPassword.clear();
+        theSessionEnded(BACKUP_IMPORTED);
+      }
+      case AdministrationRefused refused -> refused(refused);
+    }
+  }
+
   private void exported(ExportOutcome outcome, Path destination) {
     switch (outcome) {
       case EventsExported copied ->
@@ -561,6 +733,21 @@ public final class AdministrationController {
    */
   private <A> void ask(String threadName, Supplier<A> question, Consumer<A> answered) {
     GateAttempt.make(threadName, question, answered, key -> say(saidIn.say(key)));
+  }
+
+  /**
+   * The same, for the two questions on this panel that carry a password: the file a Backup is
+   * written to, and the file one is restored from.
+   *
+   * <p>The array is blanked once the attempt is over, however it ended, exactly as the login and
+   * enrolment screens blank theirs. What that is and is not worth is worth being plain about: the
+   * PasswordField it came out of holds the same characters as a String nothing here can overwrite,
+   * so this shortens the life of one copy rather than of the secret. It is the copy that goes to
+   * another thread and sits in a lambda's capture, which is the one worth shortening.
+   */
+  private <A> void ask(
+      String threadName, char[] password, Supplier<A> question, Consumer<A> answered) {
+    GateAttempt.make(threadName, password, question, answered, key -> say(saidIn.say(key)));
   }
 
   private void say(String sentence) {

@@ -4,9 +4,12 @@
   The administration panel.
 
   The Accounts of the deployment at the top, and everything an Administrator does about one of them
-  below. There is no field on this screen where anybody's password could be typed, and that is the
+  below. There is no field on this screen where an Account's password could be typed, and that is the
   point rather than an omission: an Administrator creates an Account and is handed a one-time secret
   to give away, and never knows a credential somebody goes on using.
+
+  The one password box at the bottom is not that, and the comment beside it says so: it encrypts a
+  Backup file, belongs to no Account, and admits nobody.
 -->
 
 <?import javafx.geometry.Insets?>
@@ -14,6 +17,7 @@
 <?import javafx.scene.control.CheckBox?>
 <?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.PasswordField?>
 <?import javafx.scene.control.Separator?>
 <?import javafx.scene.control.TableColumn?>
 <?import javafx.scene.control.TableView?>
@@ -24,7 +28,7 @@
 
 <BorderPane fx:id="root" xmlns="http://javafx.com/javafx" xmlns:fx="http://javafx.com/fxml"
             fx:controller="com.javafxlogin.ui.login.AdministrationController"
-            styleClass="login" prefWidth="820.0" prefHeight="640.0">
+            styleClass="login" prefWidth="820.0" prefHeight="780.0">
 
   <top>
     <HBox styleClass="session-bar" alignment="CENTER_RIGHT" spacing="8.0">
@@ -48,7 +52,7 @@
         reads and whether the Account is refused for a while. No hash and nothing derived from one:
         the list is built inside the privileged process and has no field one could travel in.
       -->
-      <TableView fx:id="accounts" prefHeight="220.0" VBox.vgrow="ALWAYS">
+      <TableView fx:id="accounts" prefHeight="130.0" VBox.vgrow="ALWAYS">
         <columns>
           <TableColumn fx:id="accountName" text="%administration.column.account" prefWidth="200.0"/>
           <TableColumn fx:id="role" text="%administration.column.role" prefWidth="130.0"/>
@@ -138,6 +142,44 @@
         <Button fx:id="export" text="%administration.export" onAction="#onExport"/>
       </HBox>
       <Label text="%administration.export-explanation"
+             styleClass="explanation" wrapText="true"/>
+
+      <Separator/>
+
+      <!--
+        Issue #14. The one password box on this screen, and it is not an exception to the rule above
+        it: what goes in here encrypts a file, belongs to no Account, and admits nobody. ADR-0006 is
+        why it has to exist — a backup bound to the machine that wrote it is useless on the day that
+        machine dies, so a password and Argon2id are what is left protecting one that is not.
+      -->
+      <Label text="%administration.backup" styleClass="field-label"/>
+      <HBox spacing="8.0" alignment="CENTER_LEFT">
+        <TextField fx:id="backupFile" promptText="%administration.backup-file" prefWidth="300.0"/>
+        <PasswordField fx:id="backupPassword" promptText="%administration.backup-password"
+                       prefWidth="180.0"/>
+        <Button fx:id="exportBackup" text="%administration.export-backup"
+                onAction="#onExportBackup"/>
+        <Button fx:id="importBackup" text="%administration.import-backup"
+                onAction="#onImportBackup"/>
+      </HBox>
+
+      <!--
+        What restoring costs, said before it happens and confirmed separately — the same shape the
+        delete has, because it is the same kind of thing done to every Account at once. Unmanaged
+        until then, so that a warning nobody is being shown takes no room. It sits above the
+        explanation rather than below it so that the two buttons stay next to the controls they are
+        about, however many lines the wording runs to in whichever language.
+      -->
+      <Label fx:id="importConsequences" styleClass="warning" wrapText="true" maxWidth="Infinity"
+             visible="false" managed="false"/>
+      <HBox spacing="8.0">
+        <Button fx:id="confirmImport" text="%administration.confirm-import"
+                onAction="#onConfirmImport" visible="false" managed="false"/>
+        <Button fx:id="cancelImport" text="%administration.cancel-import"
+                onAction="#onCancelImport" visible="false" managed="false"/>
+      </HBox>
+
+      <Label text="%administration.backup-explanation"
              styleClass="explanation" wrapText="true"/>
 
       <Label fx:id="message" styleClass="message" wrapText="true" maxWidth="Infinity"/>

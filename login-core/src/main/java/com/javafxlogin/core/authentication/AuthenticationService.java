@@ -11,6 +11,9 @@ import com.javafxlogin.core.audit.AuthenticationEventType;
 import com.javafxlogin.core.audit.FileAuthenticationEventLog;
 import com.javafxlogin.core.auth.Argon2Parameters;
 import com.javafxlogin.core.auth.Authenticator;
+import com.javafxlogin.core.backup.Backup;
+import com.javafxlogin.core.backup.BackupContents;
+import com.javafxlogin.core.backup.BackupFile;
 import com.javafxlogin.core.ipc.AccountsListed;
 import com.javafxlogin.core.ipc.AcknowledgePasswordReset;
 import com.javafxlogin.core.ipc.AskIfBootstrapNeeded;
@@ -19,6 +22,8 @@ import com.javafxlogin.core.ipc.Assess;
 import com.javafxlogin.core.ipc.Assessed;
 import com.javafxlogin.core.ipc.Authenticate;
 import com.javafxlogin.core.ipc.AuthenticationEventsExported;
+import com.javafxlogin.core.ipc.BackupExported;
+import com.javafxlogin.core.ipc.BackupImported;
 import com.javafxlogin.core.ipc.Bootstrap;
 import com.javafxlogin.core.ipc.BootstrapNeeded;
 import com.javafxlogin.core.ipc.ChangeInactivityPeriod;
@@ -35,7 +40,9 @@ import com.javafxlogin.core.ipc.EnrolmentIssued;
 import com.javafxlogin.core.ipc.ErrorCode;
 import com.javafxlogin.core.ipc.ErrorResponse;
 import com.javafxlogin.core.ipc.ExportAuthenticationEvents;
+import com.javafxlogin.core.ipc.ExportBackup;
 import com.javafxlogin.core.ipc.Granted;
+import com.javafxlogin.core.ipc.ImportBackup;
 import com.javafxlogin.core.ipc.InitiateReset;
 import com.javafxlogin.core.ipc.KeepSecret;
 import com.javafxlogin.core.ipc.ListAccounts;
@@ -66,6 +73,7 @@ import com.javafxlogin.core.vault.VaultException;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -128,6 +136,13 @@ public final class AuthenticationService implements AutoCloseable {
   private final CredentialStore store;
   private final SecretVault vault;
   private final Authenticator authenticator;
+
+  /**
+   * The Argon2id cost this deployment hashes at, kept because a Backup is sealed at the same cost.
+   * The Authenticator holds a copy for hashing passwords; this one is for the other thing a password
+   * does here, which is derive the key a file is written under.
+   */
+  private final Argon2Parameters hashingCost;
   private final AccountPolicy policy;
   private final MachineAdministrators administrators;
   private final Sessions sessions;
@@ -143,6 +158,7 @@ public final class AuthenticationService implements AutoCloseable {
       CredentialStore store,
       SecretVault vault,
       Authenticator authenticator,
+      Argon2Parameters hashingCost,
       AccountPolicy policy,
       MachineAdministrators administrators,
       SessionClock clock,
@@ -152,6 +168,7 @@ public final class AuthenticationService implements AutoCloseable {
     this.store = store;
     this.vault = vault;
     this.authenticator = authenticator;
+    this.hashingCost = hashingCost;
     this.policy = policy;
     this.administrators = administrators;
     this.sessions = new Sessions(clock);
@@ -228,6 +245,7 @@ public final class AuthenticationService implements AutoCloseable {
           store,
           vault,
           new Authenticator(parameters),
+          parameters,
           AccountPolicy.bundledExtendedBy(storeFile.resolveSibling(DEPLOYMENT_BLOCKED_NAMES)),
           administrators,
           clock,
@@ -290,6 +308,8 @@ public final class AuthenticationService implements AutoCloseable {
         case ChangeLanguagePreference change -> changeLanguagePreference(change, connection);
         case ClearLockout clear -> clearLockout(clear, connection);
         case ExportAuthenticationEvents export -> exportAuthenticationEvents(export, connection);
+        case ExportBackup export -> exportBackup(export, connection);
+        case ImportBackup restore -> importBackup(restore, connection);
         case CreateAccount create -> createAccount(create, connection);
         case InitiateReset reset -> initiateReset(reset, connection);
         case CompleteEnrolment complete -> completeEnrolment(complete);
@@ -1032,6 +1052,129 @@ public final class AuthenticationService implements AutoCloseable {
         && parent != null
         && Files.isDirectory(parent)
         && !absolute.startsWith(ownDirectory);
+  }
+
+  /**
+   * Writes a Backup of the Accounts and the configuration, sealed under a password typed for it.
+   *
+   * <p>Story 14's first half, and the half that is nearly all of ADR-0006: what leaves here restores
+   * on any machine, because nothing about the machine it was written on went into it. The SecretVault
+   * did not go into it either — an Operator's access to secrets is not a thing a Backup can carry,
+   * and saying so out loud is cheaper than a restored deployment where it silently did not work.
+   *
+   * <p>The export is recorded after the file is written, for the reason an export of the record is:
+   * a Backup that claimed to contain the event of its own writing would be claiming something the
+   * file cannot be checked against.
+   */
+  private Response exportBackup(ExportBackup request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live ->
+            onlyAnAdministrator(
+                live, () -> writeABackupTo(request.destination(), request.password(), live)));
+  }
+
+  private Response writeABackupTo(Path destination, char[] password, SessionOutcome.Live live) {
+    if (!isSomewhereThisServiceMayWrite(destination)) {
+      return new ErrorResponse(ErrorCode.BACKUP_DESTINATION_REFUSED);
+    }
+    BackupContents contents =
+        new BackupContents(
+            store.schemaVersion(), store.backedUpAccounts(), store.configuration());
+    try {
+      Backup backup = BackupFile.writeTo(destination, contents, password, hashingCost);
+      record(AuthenticationEventType.BACKUP_EXPORTED, live.accountName());
+      return new BackupExported(backup);
+    } catch (FileAlreadyExistsException e) {
+      return new ErrorResponse(ErrorCode.BACKUP_DESTINATION_REFUSED);
+    } catch (IOException e) {
+      return new ErrorResponse(ErrorCode.BACKUP_FAILED);
+    }
+  }
+
+  /**
+   * Replaces this deployment with the one a Backup carries, or refuses and changes nothing.
+   *
+   * <p>Every refusal below happens before a single row is written, which is issue #14's last
+   * criterion: a wrong password, a file somebody damaged, a file from another build and a file that
+   * would leave nobody able to administer this machine all leave the store exactly as it was. The
+   * write itself is one transaction inside the store, so even a failure there is the store as it was
+   * rather than half of each deployment.
+   *
+   * <p>Then the Session ends — every Session, which is the one that asked. It named an Account in a
+   * deployment that no longer exists, and the person is sent back to a login screen that now belongs
+   * to the deployment they restored. The event is recorded before that, against the name they still
+   * held when they asked.
+   */
+  private Response importBackup(ImportBackup request, ConnectionHandle connection) {
+    return onTheSessionNamedBy(
+        request.token(),
+        connection,
+        live ->
+            onlyAnAdministrator(
+                live, () -> restoreTheBackupAt(request.source(), request.password(), live)));
+  }
+
+  private Response restoreTheBackupAt(Path source, char[] password, SessionOutcome.Live live) {
+    if (!isSomewhereThisServiceMayRead(source)) {
+      return new ErrorResponse(ErrorCode.BACKUP_SOURCE_REFUSED);
+    }
+    Optional<BackupContents> opened;
+    try {
+      opened = BackupFile.readFrom(source, password);
+    } catch (NoSuchFileException e) {
+      // A path with nothing at it is a path to try again, like one this service will not read at
+      // all — and unlike a file that is there and will not open, which is the password's business.
+      return new ErrorResponse(ErrorCode.BACKUP_SOURCE_REFUSED);
+    } catch (IOException e) {
+      return new ErrorResponse(ErrorCode.BACKUP_FAILED);
+    }
+    if (opened.isEmpty()) {
+      return new ErrorResponse(ErrorCode.BACKUP_NOT_READ);
+    }
+    BackupContents contents = opened.get();
+    if (contents.schemaVersion() != store.schemaVersion()) {
+      return new ErrorResponse(ErrorCode.BACKUP_NOT_THIS_SCHEMA);
+    }
+    if (!contents.namesAnAdministrator()) {
+      return new ErrorResponse(ErrorCode.BACKUP_HAS_NO_ADMINISTRATOR);
+    }
+    try {
+      store.replaceEverythingWith(
+          contents.accounts(), contents.configuration(), enrolments::oneNobodyHolds);
+    } catch (CredentialStoreException e) {
+      // Said as the import failing rather than as the store being unavailable, which is what the
+      // handler above would have made of it: the store is fine, and it is this file that would not
+      // go into it — two Administrators, a repeated name. Nothing was written.
+      return new ErrorResponse(ErrorCode.BACKUP_FAILED);
+    }
+    // Every wrapped copy of the DataKey on this machine belonged to an Account that no longer
+    // exists, and the wraps are keyed by name — so one left behind would be a restored Account
+    // inheriting a local namesake's way into this machine's Vault. The secrets stay: they are
+    // encrypted under the DataKey, which is also wrapped under the MachineKey.
+    vault.destroyEveryWrap();
+    record(AuthenticationEventType.BACKUP_IMPORTED, live.accountName());
+    sessions.endWhateverIsLive();
+    return new BackupImported(contents.summary());
+  }
+
+  /**
+   * Whether this service will read a file where it was asked to.
+   *
+   * <p>Two refusals, and both are about the process being privileged rather than about the
+   * Administrator being untrusted. A relative path would be resolved against a working directory the
+   * person asking cannot see. And a path inside this service's own directory would make an import a
+   * way to have the privileged process open its own store, its own key files or the record it
+   * writes, and report on what it found there — which is the in-app log viewer, spelled differently
+   * again.
+   *
+   * <p>Whether anything is there is not decided here. It is decided by the operating system when the
+   * file is opened, for the reason {@link #isSomewhereThisServiceMayWrite} gives.
+   */
+  private boolean isSomewhereThisServiceMayRead(Path source) {
+    Path absolute = source.toAbsolutePath().normalize();
+    return source.isAbsolute() && !absolute.startsWith(ownDirectory);
   }
 
   private Response clearFor(String accountName) {

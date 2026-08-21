@@ -112,5 +112,53 @@ public enum ErrorCode {
    * The record could not be read, or the copy could not be written. Nothing is left at the
    * destination: half an export is a record that stops for a reason it does not state.
    */
-  EXPORT_FAILED
+  EXPORT_FAILED,
+
+  /**
+   * A Backup named a destination the service will not write to, by the same rule {@link
+   * #EXPORT_DESTINATION_REFUSED} states and for the same reasons. It is a code of its own rather
+   * than that one because the two files are different files: an Administrator who has just been told
+   * a path was refused should not have to work out which of the two things they asked for it was
+   * about.
+   */
+  BACKUP_DESTINATION_REFUSED,
+
+  /**
+   * An import named a source the service will not read: one that is not an absolute path, or one
+   * inside the directory the service keeps its own files in. The second is the one that matters —
+   * the privileged process reading a path a client chose must not be a way to have it open its own
+   * store, its own key files or the record it writes.
+   */
+  BACKUP_SOURCE_REFUSED,
+
+  /**
+   * The Backup did not open. The password is wrong, the file was edited, or it was never a Backup
+   * this build wrote. One code for all three because there is one remedy — the right file and the
+   * right password — and because a privileged process that told them apart would be telling whoever
+   * is guessing which of their guesses was closest. The store is untouched.
+   */
+  BACKUP_NOT_READ,
+
+  /**
+   * The Backup opened and holds a CredentialStore this build does not read: one written before or
+   * after this schema. Refused rather than migrated, because a restore that guessed at rows shaped
+   * for other columns would be the corruption a backup exists to avoid. The remedy is the build that
+   * wrote it, and the store is untouched.
+   */
+  BACKUP_NOT_THIS_SCHEMA,
+
+  /**
+   * The Backup opened and names no Administrator, so restoring it would leave a deployment nobody
+   * can manage and no wizard would offer to fix — the FirstRunWizard is offered only while no
+   * Administrator exists, and this one would have replaced the Administrator with Accounts that
+   * cannot create another. Refused before anything is written.
+   */
+  BACKUP_HAS_NO_ADMINISTRATOR,
+
+  /**
+   * The Backup could not be written, could not be read from the disk, or would not go into the
+   * store. Nothing is left at the destination on an export, and nothing is changed in the store on
+   * an import: the write is one transaction, so a failure is the store exactly as it was.
+   */
+  BACKUP_FAILED
 }

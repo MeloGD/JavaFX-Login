@@ -10,6 +10,7 @@ import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
+import com.javafxlogin.core.backup.Backup;
 import com.javafxlogin.core.policy.Assessment;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
@@ -647,6 +648,68 @@ class MessageCodecTest {
                 bytes(
                     "{\"type\":\"AuthenticationEventsExported\",\"events\":-4,"
                         + "\"chainIntact\":true}")));
+  }
+
+  @Test
+  void carriesAnExportBackupUnchanged() {
+    ExportBackup sent =
+        new ExportBackup(
+            SessionToken.generate(new SecureRandom()),
+            Path.of("/tmp/backup.jflb"),
+            "Backup-Horse-1".toCharArray());
+
+    ExportBackup received = (ExportBackup) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.destination(), received.destination());
+    assertArrayEquals(sent.password(), received.password());
+  }
+
+  @Test
+  void carriesAnImportBackupUnchanged() {
+    ImportBackup sent =
+        new ImportBackup(
+            SessionToken.generate(new SecureRandom()),
+            Path.of("/tmp/backup.jflb"),
+            "Backup-Horse-1".toCharArray());
+
+    ImportBackup received = (ImportBackup) MessageCodec.decodeRequest(MessageCodec.encode(sent));
+
+    assertArrayEquals(sent.token().copyOfBytes(), received.token().copyOfBytes());
+    assertEquals(sent.source(), received.source());
+    assertArrayEquals(sent.password(), received.password());
+  }
+
+  /** Redacted whole where it matters: neither the token nor the password may be printed. */
+  @Test
+  void neitherBackupRequestPrintsThePasswordItCarries() {
+    SessionToken token = SessionToken.generate(new SecureRandom());
+    char[] password = "Backup-Horse-1".toCharArray();
+
+    String written = new ExportBackup(token, Path.of("/tmp/backup.jflb"), password).toString();
+    String read = new ImportBackup(token, Path.of("/tmp/backup.jflb"), password).toString();
+
+    assertFalse(written.contains("Backup-Horse-1"), () -> "the password is in " + written);
+    assertFalse(read.contains("Backup-Horse-1"), () -> "the password is in " + read);
+  }
+
+  @Test
+  void carriesWhatABackupCameToUnchanged() {
+    BackupExported written = new BackupExported(new Backup(12, 4));
+    BackupImported read = new BackupImported(new Backup(12, 4));
+
+    assertEquals(written, MessageCodec.decodeResponse(MessageCodec.encode(written)));
+    assertEquals(read, MessageCodec.decodeResponse(MessageCodec.encode(read)));
+  }
+
+  /** A Backup holds none of something or some of it, and never minus four Accounts. */
+  @Test
+  void refusesABackupThatHeldFewerThanNoAccounts() {
+    assertThrows(
+        MalformedMessageException.class,
+        () ->
+            MessageCodec.decodeResponse(
+                bytes("{\"type\":\"BackupExported\",\"accounts\":-4,\"settings\":2}")));
   }
 
   @Test

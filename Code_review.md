@@ -2366,3 +2366,136 @@ The inline review was not worthless — it caught the hand-back language, the
 login-screen leak and the `MessageFormat` apostrophe, all before the commit —
 but it did not catch its own tests. That is the argument for the two axes running
 somewhere the implementer is not.
+
+---
+
+# Code review — backup export and import (issue #14)
+
+Branch `dev-login`, on top of `55013b3`. One `Administrator` writes a file that
+restores the deployment on a machine that has never seen it, and one restores it.
+
+## 1. Where the code is
+
+| Layer | Files |
+|---|---|
+| The file | `login-core/…/backup/` — `BackupFile`, `BackupContents`, `Backup` |
+| Shared crypto | `login-core/…/crypto/` — `AesGcm` and `Utf8` moved out of `vault`, plus the new `PasswordDerivedKey` |
+| The store | `CredentialStore.backedUpAccounts/configuration/schemaVersion/replaceEverythingWith`, `account/BackedUpAccount` |
+| The wire | `ipc/ExportBackup`, `ImportBackup`, `BackupExported`, `BackupImported`, six `ErrorCode`s, `MessageCodec` |
+| The service | `AuthenticationService.exportBackup/importBackup`, `Sessions.endWhateverIsLive`, `SecretVault.destroyEveryWrap`, `Enrolments.oneNobodyHolds` |
+| The panel | `LoginGate` ×2, `BackupOutcome`/`BackupWritten`, `RestoreOutcome`/`BackupRestored`, `AdministrationController`, the FXML section, both bundles |
+| Decisions | `docs/adr/0015-…`, the `Backup` entry in `CONTEXT.md` |
+
+Tests: `BackupFileTest` (12), `BackupTest` (24), `MessageCodecTest` (+5),
+`AdministrationWindowTest` (+6). Full suite green: 540 core, 130 UI, 1 feature.
+
+## 2. What the ticket asked for
+
+All eight criteria are implemented and each has a test that can fail:
+
+| Criterion | Where it is asserted |
+|---|---|
+| Accounts and configuration, under a password typed at the time | `anAdministratorWritesABackupOfTheAccountsAndTheConfiguration`, `whatTheDeploymentWasConfiguredToDoTravelsWithIt` |
+| The `SecretVault` is not in the export | `theSecretVaultDoesNotTravelWithTheBackup` — a secret readable on one machine is `NO_VAULT_ACCESS` on the other |
+| Enrolment state excluded | `anEnrolmentInProgressIsNotResurrectedOnTheRestoredMachine` — the old secret is refused, and refused as a login too |
+| Restores on a **different machine** | Two `ServiceHarness`es over two `@TempDir`s throughout; no key file is shared |
+| Wholesale, never merges | `importReplacesTheStoreWholesaleAndNeverMerges` |
+| The `Administrator` is warned first | `restoringABackupStatesWhatItDestroysBeforeItHappens`, `anImportThatIsCancelledAsksTheServiceForNothing` |
+| Both directions are `AuthenticationEvent`s | `writingABackupIsRecordedAsAnAuthenticationEvent`, `restoringABackupIsRecordedAsAnAuthenticationEvent` |
+| Wrong password or corruption rejected, store untouched | `aBackupOpenedWithTheWrongPasswordIsRefusedAndChangesNothing`, `aDamagedBackupIsRefusedAndChangesNothing` |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **`AesGcm`, `Utf8` and a new `PasswordDerivedKey` moved to `core.crypto`.** A Backup
+  needs exactly what the `SecretVault` needed: Argon2id to a key, then AES-GCM. The
+  alternative was a second spelling of AES-GCM next to the second caller, which is how
+  a product ends up with two and only one that anybody checks. `KeyEncryptionKey`
+  stays in `vault` and delegates: the *concept* is the Vault's and `CONTEXT.md` names
+  it, so only the arithmetic moved.
+- **Six `ErrorCode`s rather than reusing `EXPORT_*`.** The audit export and the Backup
+  follow the same path rule, but they are different files and an `Administrator` told
+  "that path was refused" should not have to work out which of the two it was about.
+- **The schema version travels and an import refuses anything else.** No migration on
+  the way in. An old Backup needs an old build; that cost is accepted in ADR-0015.
+- **Two refusals nobody asked for**: `BACKUP_NOT_THIS_SCHEMA` and
+  `BACKUP_HAS_NO_ADMINISTRATOR`. The second prevents an unrecoverable state — the
+  `FirstRunWizard` is offered only while no `Administrator` exists, and this store
+  would have had one. Both are argued in ADR-0015.
+- **An import ends the Session that asked.** It named an `Account` in a store that no
+  longer exists. Scope taken deliberately; the panel hands the person to the login
+  screen of the deployment they restored.
+- **A `Lockout` travels.** ADR-0010 makes a Lockout a fact in the store rather than in
+  memory, so a restore is not a way to end one.
+- **One `PasswordField` on the panel.** It seals a file, belongs to no `Account` and
+  admits nobody. `CONTEXT.md`'s `AdministrationPanel` entry now says so rather than
+  saying no password may be typed there at all, and `AdministrationWindowTest` pins
+  it: the only `PasswordField` on that screen is `#backupPassword`.
+
+## 4. Two-axis review: what was found and what was done
+
+Both axes ran against the staged diff after the suite was green.
+
+### Standards
+
+| Finding | What was done |
+|---|---|
+| **`AdministrationController` reported an unreadable path on an *import* as `BACKUP_DESTINATION_REFUSED`** — contradicting the javadoc, written in the same diff, that says the two codes are split precisely so nobody has to work out which request a refusal was about. | **Fixed.** `theBackupFile` now takes the reason to say, and the two callers pass their own. |
+| **Google Java Style §4.4, 100 columns.** ~68 added lines over. | **Partly fixed, partly argued.** Everything over 103 was trimmed. The rest sit in the 101–103 band the untouched files already occupy (`SecretVault`, `UnlockedVault`, `LoginGate`); no formatter is configured, and reflowing them alone would make this diff inconsistent with its neighbours. |
+| **Glossary drift: the record `Backup` is a summary, while `CONTEXT.md`'s `Backup` is the file.** | **Not acted on, and argued.** This is the repo's own established shape: `CONTEXT.md` defines `AuthenticationEventExport` as "a copy … written to one file" and the record of that name is `(long events, boolean chainIntact)`. Deviating here would be the inconsistency. |
+| **`BackupCopied` also named a restore**, which is not copying. | **Fixed, and further than asked.** Split into `BackupWritten`/`BackupOutcome` and `BackupRestored`/`RestoreOutcome`, following the `SecretOutcome`/`SecretKeepingOutcome` pair already in the package. |
+| **Middle Man: `MessageCodec.destination()`** became a one-line delegate to `path()`. | **Fixed** — inlined. |
+| **Speculative generality: `FakeLoginGate.backupsComeTo` unused.** | **Fixed** by using it: the export test now sets `Backup(7, 5)` and asserts both numbers reach the screen, instead of matching the fake's default. |
+| **Mysterious name: `AuthenticationService.parameters`.** | **Fixed** — `hashingCost`. |
+| **Dead ceremony: `onImportBackup` took a `char[]` only to blank it.** | **Fixed** before the finding arrived, by splitting `theBackupFile()` out so the first click never asks for the password. |
+| **Duplicated JSON helpers between `BackupFile` and `MessageCodec`.** | **Not acted on, and argued.** They differ in the exception they raise and in what they are defending against — a hostile peer versus a file somebody chose. Extracting them would couple the wire codec to the backup package through a third. |
+| **`isSomewhereThisServiceMayRead` duplicates `…MayWrite`.** | **Not acted on.** Two lines, and the two rules are genuinely different — one is about creating a file, the other about opening one. |
+| **Shotgun surgery: six codes × six files.** | **Not acted on.** Pre-existing shape of the refusal path; collapsing it is a change to how every refusal in the product travels, not to this ticket. |
+
+### Spec
+
+| Finding | What was done |
+|---|---|
+| **An `Operator` whose password an `Administrator` reset was dropped from the Backup entirely** — name, `Role`, language, `Lockout` — because `backedUpAccounts()` filtered `WHERE password_hash IS NOT NULL` and a reset nulls that column. A reset on Monday would quietly delete somebody from every Backup taken before they enrolled again. | **Fixed, and the sharpest finding of the run.** `BackedUpAccount.passwordHash` is now `Optional`; every `Account` travels, no `Enrolment` does, and a restore writes such an `Account` waiting on a secret this machine generated and told nobody. Three new tests: `anAccountThatWasAwaitingEnrolmentIsRestoredStillAwaitingOne`, `anOperatorWhosePasswordWasResetStillTravels`, `anAccountRestoredAwaitingEnrolmentCanBeGivenAFreshSecret`. ADR-0015 rewritten. |
+| **Vault wraps are keyed by name, so a restored `Account` could inherit a local namesake's way into this machine's `SecretVault`.** The original test used disjoint names and could not catch it. | **Fixed.** `SecretVault.destroyEveryWrap()`, called on import: after a wholesale replace every name in that table belongs to nobody. The secrets survive under the `MachineKey`. Asserted by `aRestoredAccountDoesNotInheritTheVaultAccessOfALocalNamesake`, which uses the same name on both machines. |
+| **The panel never zeroed the `char[]` it handed the gate**, unlike `GateAttempt`'s other callers. | **Fixed** — both backup questions go through `GateAttempt.make(threadName, password, …)`. The javadoc is plain that this shortens the life of one copy and not of the secret: the `PasswordField` holds a `String` nothing here can overwrite. |
+| **`blocked-account-names.txt` is configuration and is in no Backup.** | **Not acted on, and now named.** It is a file the installer writes beside the store rather than a row the service owns, so it travels with the installation. Recorded in ADR-0015 so the omission is a decision. |
+| Scope taken: sessions ended on import, two extra refusals, `Lockout` travelling, path policing, Argon2 cost ceilings, the `crypto` move. | **Kept**, each argued in §3 or ADR-0015. |
+
+## 5. What a final reviewer should attack first
+
+1. **The placeholder Enrolment.** A restored `Account` awaiting enrolment holds the
+   hash of 128 bits nobody was told. It cannot be matched, and `Enrolments` expires it
+   like any other — but it is the one row in this system that means "waiting for a
+   secret that was never issued", and the schema has no other way to say that.
+2. **`destroyEveryWrap` on import.** It is correct for the wholesale case and there is
+   no other case, but it is the one place an import touches the `SecretVault` at all,
+   and ADR-0006 says the Vault is not a Backup's business.
+3. **Refusing a Backup from another schema.** Defensible now, and it is the decision
+   that will hurt first — the day somebody upgrades and then needs last month's file.
+4. **`MOST_MEMORY_KIB` and friends in `BackupFile`.** The header is a number this
+   privileged process allocates against. The ceiling is a guess at what a machine can
+   stand.
+
+## 6. Honest limits on what the green build means
+
+- **The `InvalidPathException` branch in the panel is not covered.** On POSIX the only
+  string `Path.of` refuses holds a NUL, and neither the TestFX robot nor
+  `TextField.setText` will put one in the box. A test was written, could not fail, and
+  was **removed** rather than left in — the same trap §7 of the issue #3 review names.
+  The branch is asserted by inspection only.
+- **"A different machine" is two directories in one JVM.** It proves nothing is shared
+  through the two services' files, which is what portability means here; it does not
+  prove the file survives a different OS, filesystem or JDK.
+- **Nothing asserts the plaintext is unreadable without the password**, only that GCM
+  refuses the wrong key. The header test asserts no name, hash or setting appears in
+  the clear, which is the reachable half of that.
+- **Windows is untested, as everywhere else in this repo.** `OwnerOnlyFiles` narrows
+  by ACL there and this file carries every password hash in the deployment.
+
+## 7. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+mvn -o -pl login-core test -Dtest='Backup*Test'
+```

@@ -2,6 +2,7 @@ package com.javafxlogin.core.store;
 
 import com.javafxlogin.core.account.Account;
 import com.javafxlogin.core.account.AccountSummary;
+import com.javafxlogin.core.account.BackedUpAccount;
 import com.javafxlogin.core.account.Enrolment;
 import com.javafxlogin.core.account.FailedAuthentications;
 import com.javafxlogin.core.account.LockoutPolicy;
@@ -18,14 +19,18 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * The record of every Account, its password hash and the configuration of the application.
@@ -462,6 +467,212 @@ public final class CredentialStore implements AutoCloseable {
 
   private static String createdNow() {
     return ZonedDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+  }
+
+  /**
+   * Which schema this file is at, which is what a Backup names so that a restore is never a guess.
+   *
+   * <p>It is the same number {@link SchemaMigrations} raises, read back off the file rather than
+   * assumed from the build: the service migrates on open, so this is what the rows about to be
+   * copied are actually shaped like.
+   */
+  public int schemaVersion() {
+    try {
+      return NumberedMigrations.userVersionOf(connection);
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not read the schema version of " + file, e);
+    }
+  }
+
+  /**
+   * Every Account a Backup carries, which is every Account — with what each holds, and without what
+   * each is waiting for.
+   *
+   * <p>The two enrolment columns are not selected, which is issue #14's third criterion enforced by
+   * the query rather than by whoever writes the next one: a secret somebody is carrying to a machine
+   * that no longer exists must not be resurrected on a replacement. The Account itself is not
+   * transient and does travel — an Operator whose password an Administrator took away yesterday is a
+   * person, and a Backup that dropped them because of when it was taken would be losing them to the
+   * timing of a reset.
+   *
+   * <p>Written out column by column for the reason {@link #accounts()} is, and with the opposite
+   * conclusion: this query <em>does</em> select the password hash, because a Backup that did not
+   * carry it would restore a deployment nobody could log in to. What keeps that safe is not this
+   * query but where it goes — into a file sealed under a password, never into a response.
+   *
+   * @throws CredentialStoreException if a row names a Role, a band, a language or a moment this
+   *     build does not read — a store edited by hand is not guessed at
+   */
+  public List<BackedUpAccount> backedUpAccounts() {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT name, role, password_hash, password_strength, created_at, password_reset_at,"
+                + " language_preference, failed_authentications, refused_until FROM accounts"
+                + " ORDER BY name")) {
+      try (ResultSet results = statement.executeQuery()) {
+        List<BackedUpAccount> accounts = new ArrayList<>();
+        while (results.next()) {
+          accounts.add(backedUpAccountIn(results));
+        }
+        return List.copyOf(accounts);
+      }
+    } catch (SQLException | IllegalArgumentException | DateTimeParseException e) {
+      throw new CredentialStoreException("could not read the Accounts to back up in " + file, e);
+    }
+  }
+
+  private static BackedUpAccount backedUpAccountIn(ResultSet results) throws SQLException {
+    String refusedUntil = results.getString("refused_until");
+    String resetAt = results.getString("password_reset_at");
+    return new BackedUpAccount(
+        results.getString("name"),
+        Role.valueOf(results.getString("role")),
+        Optional.ofNullable(results.getString("password_hash")),
+        PasswordStrength.valueOf(results.getString("password_strength")),
+        OffsetDateTime.parse(results.getString("created_at")),
+        Optional.ofNullable(resetAt).map(Instant::parse),
+        languagePreferenceIn(results),
+        new FailedAuthentications(
+            results.getInt("failed_authentications"),
+            Optional.ofNullable(refusedUntil).map(Instant::parse)));
+  }
+
+  /**
+   * Every configured setting, which is the other half of what a Backup carries.
+   *
+   * <p>Read as the names and values they are rather than as the settings this build happens to know
+   * about: a Backup written by this build and restored by this build carries whatever the migrations
+   * put here, and a method that listed the four it can name would silently drop the fifth the day
+   * somebody adds one.
+   */
+  public Map<String, String> configuration() {
+    try (PreparedStatement statement =
+            connection.prepareStatement("SELECT name, value FROM configuration ORDER BY name");
+        ResultSet results = statement.executeQuery()) {
+      Map<String, String> settings = new LinkedHashMap<>();
+      while (results.next()) {
+        settings.put(results.getString("name"), results.getString("value"));
+      }
+      return Map.copyOf(settings);
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not read the configuration in " + file, e);
+    }
+  }
+
+  /**
+   * Replaces every Account and every setting with the ones a Backup carried, wholesale.
+   *
+   * <p>ADR-0006 refuses to merge, and this is where that refusal is enforced rather than asserted:
+   * both tables are emptied before either is written to, so there is no path through this method
+   * that leaves a row from the machine being restored onto beside a row from the Backup. Merging
+   * Accounts from two origins produces states nobody can reason about — two people who both believe
+   * they hold a name, a Lockout being served against a password that is no longer there.
+   *
+   * <p>One transaction, so that the store is either the Backup's or exactly what it was. A restore
+   * that failed halfway is the one outcome worse than a restore that failed: the Administrator would
+   * be looking at a deployment that is neither, with no copy of the first half left anywhere.
+   *
+   * @param anEnrolmentNobodyHolds asked for once per Account that was awaiting enrolment when the
+   *     Backup was taken. The schema refuses an Account with neither a password nor an outstanding
+   *     enrolment, and the Backup carries no enrolment, so what such an Account is restored as is
+   *     one waiting on a secret that was never issued to anybody — which is the honest reading of
+   *     its state, and the Administrator issues a real one from the panel
+   * @throws CredentialStoreException if the Backup does not make a store this schema will hold — two
+   *     Administrators, a repeated name — in which case nothing has been written
+   */
+  public void replaceEverythingWith(
+      List<BackedUpAccount> accounts,
+      Map<String, String> configuration,
+      Supplier<Enrolment> anEnrolmentNobodyHolds) {
+    Objects.requireNonNull(accounts, "accounts");
+    Objects.requireNonNull(configuration, "configuration");
+    Objects.requireNonNull(anEnrolmentNobodyHolds, "anEnrolmentNobodyHolds");
+    boolean autoCommit = autoCommitOf();
+    try {
+      connection.setAutoCommit(false);
+      try {
+        emptyTheStore();
+        for (BackedUpAccount account : accounts) {
+          restore(account, anEnrolmentNobodyHolds);
+        }
+        for (Map.Entry<String, String> setting : configuration.entrySet()) {
+          restore(setting.getKey(), setting.getValue());
+        }
+        connection.commit();
+      } catch (SQLException e) {
+        connection.rollback();
+        throw e;
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not restore a Backup into " + file, e);
+    }
+  }
+
+  private boolean autoCommitOf() {
+    try {
+      return connection.getAutoCommit();
+    } catch (SQLException e) {
+      throw new CredentialStoreException("could not read how " + file + " commits", e);
+    }
+  }
+
+  private void emptyTheStore() throws SQLException {
+    try (Statement statement = connection.createStatement()) {
+      statement.executeUpdate("DELETE FROM accounts");
+      statement.executeUpdate("DELETE FROM configuration");
+    }
+  }
+
+  /**
+   * Writes one Account back exactly as it was copied, with an enrolment nobody holds where it had no
+   * password.
+   *
+   * <p>The schema's own rule — a password or an outstanding enrolment, never both and never neither
+   * — is what shapes this. A Backup carries no enrolment, so an Account that had none of the first
+   * needs something in the second, and what goes there is the hash of a secret this machine
+   * generated and told nobody. That is not a way in: nobody can offer a secret nobody was given, and
+   * the Administrator issues a real one from the panel, which is the same conversation they were
+   * going to have anyway.
+   */
+  private void restore(BackedUpAccount account, Supplier<Enrolment> anEnrolmentNobodyHolds)
+      throws SQLException {
+    Optional<Enrolment> waitingOn =
+        account.isAwaitingEnrolment()
+            ? Optional.of(anEnrolmentNobodyHolds.get())
+            : Optional.empty();
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO accounts (name, role, password_hash, password_strength, created_at,"
+                + " password_reset_at, language_preference, failed_authentications, refused_until,"
+                + " enrolment_secret_hash, enrolment_issued_at)"
+                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+      statement.setString(1, account.name());
+      statement.setString(2, account.role().name());
+      statement.setString(3, account.passwordHash().orElse(null));
+      statement.setString(4, account.passwordStrength().name());
+      statement.setString(5, account.createdAt().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+      statement.setString(6, account.passwordResetAt().map(Instant::toString).orElse(null));
+      statement.setString(
+          7, account.languagePreference().map(Locale::toLanguageTag).orElse(null));
+      statement.setInt(8, account.failures().inARow());
+      statement.setString(
+          9, account.failures().refusedUntil().map(Instant::toString).orElse(null));
+      statement.setString(10, waitingOn.map(Enrolment::secretHash).orElse(null));
+      statement.setString(
+          11, waitingOn.map(enrolment -> enrolment.issuedAt().toString()).orElse(null));
+      statement.executeUpdate();
+    }
+  }
+
+  private void restore(String setting, String value) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement("INSERT INTO configuration (name, value) VALUES (?, ?)")) {
+      statement.setString(1, setting);
+      statement.setString(2, value);
+      statement.executeUpdate();
+    }
   }
 
   /**

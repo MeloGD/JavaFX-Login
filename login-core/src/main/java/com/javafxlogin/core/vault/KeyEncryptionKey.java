@@ -1,9 +1,7 @@
 package com.javafxlogin.core.vault;
 
 import com.javafxlogin.core.auth.Argon2Parameters;
-import com.password4j.Argon2Function;
-import com.password4j.types.Argon2;
-import java.util.Arrays;
+import com.javafxlogin.core.crypto.PasswordDerivedKey;
 
 /**
  * The key a password derives, and the only thing that unwraps an Operator's copy of the DataKey.
@@ -19,41 +17,30 @@ import java.util.Arrays;
  * mean larger: both currently sit at the same numbers, because both sit at the OWASP minimums, and
  * either can be raised without touching the other.
  *
- * <p>The output length is not configurable and is not read from {@link Argon2Parameters}: it is
- * AES-256's key length, because that is what this key is for. What a deployment configures is the
- * cost — memory, time and lanes — which is the part that is about how expensive guessing should be.
+ * <p>The derivation itself is {@link PasswordDerivedKey}, which a Backup uses as well. The name
+ * stays here because the idea is the Vault's: these bytes are what an Operator's password does to
+ * their wrapped copy of the DataKey, and calling that by the general name would lose which of the
+ * two things a password can produce this one is.
  */
 final class KeyEncryptionKey {
 
-  private final byte[] material;
+  private final PasswordDerivedKey derived;
 
-  private KeyEncryptionKey(byte[] material) {
-    this.material = material;
+  private KeyEncryptionKey(PasswordDerivedKey derived) {
+    this.derived = derived;
   }
 
   static KeyEncryptionKey derivedFrom(char[] password, byte[] salt, Argon2Parameters parameters) {
-    Argon2Function argon2id =
-        Argon2Function.getInstance(
-            parameters.memoryKib(),
-            parameters.iterations(),
-            parameters.parallelism(),
-            AesGcm.KEY_BYTES,
-            Argon2.ID);
-    byte[] passwordBytes = Utf8.bytesOf(password);
-    try {
-      return new KeyEncryptionKey(argon2id.hash(passwordBytes, salt).getBytes());
-    } finally {
-      Arrays.fill(passwordBytes, (byte) 0);
-    }
+    return new KeyEncryptionKey(PasswordDerivedKey.from(password, salt, parameters));
   }
 
   byte[] material() {
-    return material;
+    return derived.material();
   }
 
   /** Overwrites the key. Every derivation here is used once, inside one request, and then gone. */
   void destroy() {
-    Arrays.fill(material, (byte) 0);
+    derived.destroy();
   }
 
   @Override

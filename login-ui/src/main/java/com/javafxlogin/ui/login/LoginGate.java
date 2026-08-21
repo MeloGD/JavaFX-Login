@@ -186,6 +186,46 @@ public interface LoginGate {
   ExportOutcome exportAuthenticationEventsTo(Session session, Path destination);
 
   /**
+   * Writes a Backup of the Accounts and the configuration of this deployment, sealed under a
+   * password typed for it, to a file the Administrator names.
+   *
+   * <p>The password is not anybody's credential and is checked against nothing. It is what the file
+   * is encrypted under and the whole of what protects it once it leaves the machine, because
+   * ADR-0006 refused to bind a backup to the machine that wrote it — one that only restores where it
+   * was made is useless on the day that machine dies.
+   *
+   * <p>What is in the file is every Account that holds a password and every configured setting. What
+   * is not is the SecretVault, the keys this machine keeps, the record of AuthenticationEvents, and
+   * any Enrolment somebody is halfway through. A restored Operator can log in and cannot reach a
+   * secret until they are reset and enrol again.
+   *
+   * <p>Blocks: it crosses the socket, and a password is stretched with Argon2id while it does. Must
+   * not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  BackupOutcome exportBackupTo(Session session, Path destination, char[] password);
+
+  /**
+   * Replaces every Account and every setting in this deployment with the ones a Backup carries.
+   *
+   * <p><b>Wholesale, and never a merge</b> — ADR-0006 again, because Accounts from two origins in
+   * one store produce states nobody can reason about. Whatever this machine held is gone when this
+   * returns successfully, which is why the screen that calls it says so and asks a second time.
+   *
+   * <p>A refusal changes nothing: the file has to open, be read whole and be found to be this
+   * build's before a row is written, and then it is written in one transaction. The Session ends
+   * with the deployment it belonged to, so the caller's part afterwards is to say what was restored
+   * and send the person back to the login screen.
+   *
+   * <p>Blocks: it crosses the socket, and a password is stretched with Argon2id while it does. Must
+   * not be called on the JavaFX application thread.
+   *
+   * @throws ServiceUnreachableException if the AuthenticationService could not be asked at all
+   */
+  RestoreOutcome importBackupFrom(Session session, Path source, char[] password);
+
+  /**
    * Reports that the Operator did something, which is what starts the Session's countdown again.
    *
    * <p>This is the SessionGuard's whole job. It reports; it does not decide, and the answer that

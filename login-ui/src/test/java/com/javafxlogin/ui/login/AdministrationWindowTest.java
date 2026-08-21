@@ -9,6 +9,7 @@ import com.javafxlogin.core.account.AccountSummary;
 import com.javafxlogin.core.account.PasswordStrength;
 import com.javafxlogin.core.account.Role;
 import com.javafxlogin.core.audit.AuthenticationEventExport;
+import com.javafxlogin.core.backup.Backup;
 import com.javafxlogin.core.policy.PolicyViolation;
 import com.javafxlogin.core.session.InactivityPeriod;
 import com.javafxlogin.core.session.Session;
@@ -308,9 +309,16 @@ class AdministrationWindowTest extends ApplicationTest {
         List.of("resetThePasswordOf:" + OPERATOR),
         gate.administrations().stream().filter(asked -> !asked.equals("accounts")).toList(),
         "the panel asks for a reset and asks for nothing else");
-    assertTrue(
-        lookup(node -> node instanceof PasswordField).queryAll().isEmpty(),
-        "there is nowhere on this panel to type somebody's password");
+    // Issue #14 put one PasswordField on this screen, and this is where it is kept honest: the
+    // only one is the Backup file's, which belongs to a file rather than to a person and admits
+    // nobody. A second one appearing here would be the panel growing somewhere to type a
+    // credential somebody goes on using, which is the thing story 21 forbids.
+    assertEquals(
+        List.of("backupPassword"),
+        lookup(node -> node instanceof PasswordField).queryAll().stream()
+            .map(Node::getId)
+            .toList(),
+        "there is nowhere on this panel to type an Account's password");
   }
 
   /**
@@ -418,6 +426,113 @@ class AdministrationWindowTest extends ApplicationTest {
         message().toLowerCase(Locale.ROOT).contains("cadena")
             || message().toLowerCase(Locale.ROOT).contains("integridad"),
         () -> "an edited record is not reported: " + message());
+  }
+
+  /**
+   * Issue #14, criterion 1 at this seam: the panel asks for a Backup with the path and the password
+   * that were typed for it, and says what the file came to.
+   */
+  @Test
+  void aBackupIsWrittenWithThePasswordTypedForIt() {
+    gate.backupsComeTo(new Backup(7, 5));
+    openThePanel();
+
+    write("#backupFile", "/tmp/copia.jflb");
+    write("#backupPassword", "Copia-Caballo-7");
+    clickOn("#exportBackup");
+
+    await(() -> gate.backedUpTo() != null);
+    assertEquals(Path.of("/tmp/copia.jflb"), gate.backedUpTo());
+    assertEquals("Copia-Caballo-7", gate.backupPassword());
+    await(() -> message().contains("7") && message().contains("5"));
+  }
+
+  /** A file with no password to seal it is not written, and the panel says which half is missing. */
+  @Test
+  void aBackupIsNotWrittenWithoutAPasswordForTheFile() {
+    openThePanel();
+
+    write("#backupFile", "/tmp/copia.jflb");
+    clickOn("#exportBackup");
+
+    assertFalse(message().isBlank(), "nothing was said about the missing password");
+    assertEquals(null, gate.backedUpTo(), "a Backup was asked for without a password");
+  }
+
+  /**
+   * Issue #14, criterion 6: what an import destroys is on the screen before anything is destroyed,
+   * and the import itself is a second, separate click.
+   */
+  @Test
+  void restoringABackupStatesWhatItDestroysBeforeItHappens() {
+    openThePanel();
+
+    write("#backupFile", "/tmp/copia.jflb");
+    write("#backupPassword", "Copia-Caballo-7");
+    clickOn("#importBackup");
+
+    String consequences = textOf("#importConsequences").toLowerCase(Locale.ROOT);
+    assertFalse(consequences.isBlank(), "nothing was said about what restoring destroys");
+    assertTrue(
+        consequences.contains("no se puede deshacer"),
+        () -> "the warning does not say it cannot be undone: " + consequences);
+    assertTrue(
+        gate.administrations().stream().noneMatch(asked -> asked.startsWith("importBackupFrom")),
+        () -> "the store was replaced before anybody confirmed: " + gate.administrations());
+  }
+
+  /** Cancelling leaves the warning off the screen and the deployment where it was. */
+  @Test
+  void anImportThatIsCancelledAsksTheServiceForNothing() {
+    openThePanel();
+
+    write("#backupFile", "/tmp/copia.jflb");
+    write("#backupPassword", "Copia-Caballo-7");
+    clickOn("#importBackup");
+    clickOn("#cancelImport");
+
+    assertTrue(textOf("#importConsequences").isBlank(), "the warning is still on the screen");
+    assertTrue(
+        gate.administrations().stream().noneMatch(asked -> asked.startsWith("importBackupFrom")),
+        () -> "the store was replaced by a cancel: " + gate.administrations());
+  }
+
+  /**
+   * And once it is confirmed the panel is over, because the Session it ran under named an Account in
+   * a deployment that has just been replaced. The person is handed back to the login screen of the
+   * one they restored.
+   */
+  @Test
+  void confirmingTheImportRestoresTheBackupAndHandsThePersonBackToTheLoginScreen() {
+    openThePanel();
+
+    write("#backupFile", "/tmp/copia.jflb");
+    write("#backupPassword", "Copia-Caballo-7");
+    clickOn("#importBackup");
+    clickOn("#confirmImport");
+
+    await(() -> gate.restoredFrom() != null);
+    assertEquals(Path.of("/tmp/copia.jflb"), gate.restoredFrom());
+    assertEquals("Copia-Caballo-7", gate.backupPassword());
+    awaitTheLoginScreen();
+  }
+
+  /** A refusal is said and nothing else happens, as every other refusal on this panel is. */
+  @Test
+  void aBackupTheServiceWillNotOpenIsSaidRatherThanSwallowed() {
+    openThePanel();
+    gate.refuseAdministrationWith(AdministrationRefusedReason.BACKUP_NOT_READ);
+
+    write("#backupFile", "/tmp/copia.jflb");
+    write("#backupPassword", "Copia-Caballo-7");
+    clickOn("#importBackup");
+    clickOn("#confirmImport");
+
+    await(() -> !message().isBlank());
+    assertEquals(
+        SPANISH.say(AdministrationRefusedText.keyFor(AdministrationRefusedReason.BACKUP_NOT_READ)),
+        message());
+    assertTrue(lookup("#accounts").tryQuery().isPresent(), "the panel should still be open");
   }
 
   /** Criterion 8: present, visibly disabled, and doing nothing. */
