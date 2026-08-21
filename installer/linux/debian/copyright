@@ -1,0 +1,68 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: javafx-login
+Source: https://github.com/MeloGD/JavaFX-Login
+
+Comment: This file is written by hand and shipped whole, rather than generated from
+ jpackage's template. What the template produces is one licence for one product, and this
+ package is a product plus a runtime image plus a toolkit — two of which are under the GNU
+ General Public License and must say so here. The same notice, at greater length and with
+ the source locations, is at /opt/javafx-login/lib/doc/THIRD-PARTY-NOTICES.md.
+
+Files: *
+Copyright: The JavaFX Login authors
+License: Apache-2.0
+
+Files: lib/runtime/*
+Copyright: Oracle and/or its affiliates, and other contributors
+License: GPL-2.0-with-classpath-exception
+Comment: The runtime image jlink assembled from a subset of the OpenJDK 21 modules.
+ Corresponding source: https://github.com/openjdk/jdk21u
+
+Files: lib/app/javafx-*.jar
+Copyright: Oracle and/or its affiliates, and other contributors
+License: GPL-2.0-with-classpath-exception
+Comment: OpenJFX 21.0.12, jars and native libraries.
+ Corresponding source: https://github.com/openjdk/jfx (tag 21.0.12)
+
+Files: lib/app/sqlite-jdbc-*.jar lib/app/password4j-*.jar lib/app/jackson-*.jar
+Copyright: The respective authors
+License: Apache-2.0
+
+Files: lib/app/passay-*.jar
+Copyright: The Passay authors
+License: Apache-2.0 or LGPL-3.0
+
+Files: lib/app/nbvcxz-*.jar lib/app/slf4j-api-*.jar
+Copyright: The respective authors, and QOS.ch Sarl for slf4j
+License: MIT
+
+License: Apache-2.0
+ On Debian systems the full text is at /usr/share/common-licenses/Apache-2.0, and the
+ canonical copy is at https://www.apache.org/licenses/LICENSE-2.0.txt
+
+License: GPL-2.0-with-classpath-exception
+ GNU General Public License, version 2, with the Classpath Exception: the full text is at
+ https://openjdk.org/legal/gplv2+ce.html and the GPL itself is on Debian systems at
+ /usr/share/common-licenses/GPL-2. The exception is what allows software that is not
+ itself GPL to be linked against this runtime and shipped as one package.
+
+License: LGPL-3.0
+ GNU Lesser General Public License, version 3: on Debian systems at
+ /usr/share/common-licenses/LGPL-3, and at https://www.gnu.org/licenses/lgpl-3.0.txt
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy of this
+ software and associated documentation files (the "Software"), to deal in the Software
+ without restriction, including without limitation the rights to use, copy, modify, merge,
+ publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+ to whom the Software is furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all copies or
+ substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+ PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+ FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.

@@ -6,7 +6,9 @@ import com.javafxlogin.core.ipc.ListeningChannelSource;
 import com.javafxlogin.core.ipc.PlatformListeningChannelSource;
 import com.javafxlogin.core.ipc.TransportServer;
 import com.javafxlogin.core.machine.MachineAdministrators;
+import com.javafxlogin.core.store.SchemaTooNewException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
@@ -23,7 +25,13 @@ import java.util.concurrent.CountDownLatch;
 public final class ServiceProcess implements AutoCloseable {
 
   private static final String USAGE =
-      "Usage: ServiceProcess <credential-store-file> [--socket <path>]";
+      "Usage: ServiceProcess <credential-store-file> [--socket <path> | --upgrade]";
+
+  /** The argument an installer runs this under, having just replaced one build with another. */
+  private static final String UPGRADE = "--upgrade";
+
+  /** What {@link #bringTheFilesUpToDate(Path)} answers where there is no CredentialStore yet. */
+  private static final int NO_STORE_YET = 0;
 
   private final AuthenticationService service;
   private final TransportServer server;
@@ -84,6 +92,9 @@ public final class ServiceProcess implements AutoCloseable {
    * {@code --socket} binds one instead, which is how the service is run by hand on a development
    * machine and how the Windows service will run once it exists.
    *
+   * <p>{@code --upgrade} serves nothing and migrates instead: it is what a package runs after it
+   * has replaced one build with another, and it is described on {@link #bringTheFilesUpToDate}.
+   *
    * <p>Exiting when idle is not a failure and is reported as none: the socket belongs to systemd
    * and stays listening, so the next peer to connect starts this process again. Diagnostics go to
    * the journal by way of the standard error stream, which the {@code .service} unit sends
@@ -91,10 +102,17 @@ public final class ServiceProcess implements AutoCloseable {
    * unit-file line away from being the peer's own connection.
    */
   public static void main(String[] args) throws IOException, InterruptedException {
-    if (args.length != 1 && args.length != 3) {
+    if (args.length == 0) {
       throw new IllegalArgumentException(USAGE);
     }
     Path storeFile = Path.of(args[0]);
+    if (args.length == 2 && UPGRADE.equals(args[1])) {
+      upgradeAndReport(storeFile);
+      return;
+    }
+    if (args.length != 1 && args.length != 3) {
+      throw new IllegalArgumentException(USAGE);
+    }
     ListeningChannelSource source =
         args.length == 1
             ? PlatformListeningChannelSource.forCurrentPlatform()
@@ -102,6 +120,59 @@ public final class ServiceProcess implements AutoCloseable {
 
     ServiceProcess process = start(source, storeFile);
     process.serveUntilNobodyIsUsingIt();
+  }
+
+  /**
+   * Brings the files this process owns up to the schema this build understands, and answers the
+   * version the CredentialStore is now at — or {@code 0} where there is no CredentialStore yet.
+   *
+   * <p>Opening those files is what migrates them, so this opens them and closes them again and is
+   * nothing more than that. What it is <em>for</em> is when it runs: an installer replacing one
+   * build with another can do this while somebody is watching, and under socket activation nobody
+   * is watching afterwards. A migration left to the first activation fails into a login screen
+   * saying the service is not running — which is also what a service that started perfectly well
+   * and was never connected to looks like — in front of a person who was told minutes ago that the
+   * installation succeeded.
+   *
+   * <p>A machine with no CredentialStore is left with none. An upgrade is not what creates a
+   * deployment: the FirstRunWizard is, and a store, a SecretVault and an event log written by an
+   * installer would make a machine nobody has logged in to look like one somebody has.
+   *
+   * @throws SchemaTooNewException if either file was written by a build that understood more, in
+   *     which case nothing is written to it — the remedy is the build that wrote it, not this one
+   */
+  public static int bringTheFilesUpToDate(Path storeFile) {
+    Objects.requireNonNull(storeFile, "storeFile");
+    if (!Files.exists(storeFile)) {
+      return NO_STORE_YET;
+    }
+    try (AuthenticationService service = AuthenticationService.open(storeFile)) {
+      return service.schemaVersion();
+    }
+  }
+
+  /**
+   * The {@code --upgrade} mode: migrate, say what was found, and fail the installation that ran it
+   * where the files are from a later build than this one.
+   *
+   * <p>Both lines go to the standard error stream, like every other thing this process says. The
+   * rule is worth more than the exception would be: standard output is one careless unit-file line
+   * away from being a client's own connection, and a rule with a mode-shaped hole in it is one
+   * somebody has to hold in their head.
+   */
+  private static void upgradeAndReport(Path storeFile) {
+    int version;
+    try {
+      version = bringTheFilesUpToDate(storeFile);
+    } catch (SchemaTooNewException e) {
+      System.err.println(e.getMessage());
+      System.exit(1);
+      return;
+    }
+    System.err.println(
+        version == NO_STORE_YET
+            ? "there is no CredentialStore at " + storeFile + ", and an upgrade does not make one"
+            : "the CredentialStore at " + storeFile + " is at schema version " + version);
   }
 
   /**

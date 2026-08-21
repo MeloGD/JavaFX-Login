@@ -283,6 +283,17 @@ public final class AuthenticationService implements AutoCloseable {
   }
 
   /**
+   * The schema version the CredentialStore is at, having been migrated by the open above.
+   *
+   * <p>Package-private: the only caller is {@link ServiceProcess}'s upgrade, which has just
+   * migrated these files on an installer's behalf and owes it a number. No request carries this,
+   * and nothing across the socket asks for it.
+   */
+  int schemaVersion() {
+    return store.schemaVersion();
+  }
+
+  /**
    * Answers a request. Every request is answered: a store that cannot be read becomes an {@link
    * ErrorResponse} rather than an exception thrown at whatever is carrying the request, because the
    * caller is owed an outcome and must not be told which failure produced it.

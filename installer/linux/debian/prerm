@@ -1,0 +1,45 @@
+#!/bin/sh
+# prerm script for javafx-login
+#
+# Runs before the payload is taken away or replaced. Its whole job is that no privileged
+# JVM is left running on top of files that are about to change underneath it: the service
+# is stopped, and on a removal the socket is stopped and disabled with it.
+#
+# Stopping the service is not a loss. It holds no state — every Lockout, Enrolment and
+# AuthenticationEvent is on disk precisely so that it survives the process — and any
+# Session it held ends with the connection, which is what an upgrade should do to a Session
+# anyway.
+
+set -e
+
+package_type=deb
+UNIT=javafx-login-authd
+
+systemd_is_running() {
+    [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1
+}
+
+case "$1" in
+    remove|upgrade|deconfigure)
+DESKTOP_COMMANDS_UNINSTALL
+
+        if systemd_is_running; then
+            # The service first and the socket second: stopping the socket while the
+            # service is up leaves the process running with nothing to be reached on.
+            systemctl stop "${UNIT}.service" >/dev/null 2>&1 || true
+            if [ "$1" = remove ]; then
+                systemctl disable --now "${UNIT}.socket" >/dev/null 2>&1 || true
+            fi
+        fi
+    ;;
+
+    failed-upgrade)
+    ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

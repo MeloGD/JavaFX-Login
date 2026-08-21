@@ -1,0 +1,202 @@
+# Manual check — Linux packaging
+
+What a `.deb` does to a machine cannot be exercised by a suite: dpkg is not in it, and what is
+being checked is what a machine is left like rather than what any code computes. What *is*
+tested automatically is named under each step, so that this checklist covers the machine and
+nothing else. `DebianPackageTest` holds the maintainer scripts to what is written below.
+
+Run it on a machine nothing has been installed on — a fresh Ubuntu virtual machine is the
+honest version of this — from an ordinary account that can `sudo`. Half of what is being
+checked is that a person who installs this product can then log into it without being told
+one more thing to do.
+
+Work top to bottom: every step depends on the state the one before it left.
+
+---
+
+## 0. Building the package
+
+On the build machine, from the repository root:
+
+```
+sudo apt install fakeroot           # jpackage shells out to it and skips the DEB bundler without it
+./installer/linux/build-deb.sh      # runs the suite; --skip-tests where it has just been run
+ls target/package/dist/*.deb
+```
+
+- [ ] The build ends with a `.deb` of about 55 MB, most of which is the trimmed runtime.
+- [ ] It said nothing about a skipped bundler. jpackage reports a missing `fakeroot` by
+      *skipping* the DEB bundler with a message, and then exits successfully having built
+      nothing.
+
+_Covered automatically:_ that the launcher the `.service` unit starts runs on the runtime that
+was just linked — `build-deb.sh` asks it, in its upgrade mode, before it packages anything.
+
+## 1. A first installation
+
+```
+sudo apt install ./javafx-login_0.1.0_amd64.deb
+```
+
+- [ ] It ends without an error, and without asking anything.
+- [ ] `getent group javafx-login` names the group, and your own account is in it.
+- [ ] `ls -ld /var/lib/javafx-login` → `drwx------ root root`.
+- [ ] `systemctl is-enabled javafx-login-authd.socket` → `enabled`, and
+      `systemctl is-enabled javafx-login-authd.service` → `static`.
+- [ ] The last line of the installation said there is no CredentialStore yet. A first
+      installation has nothing to migrate, and must not be what creates a deployment.
+- [ ] `ls /var/lib/javafx-login` is empty: no store, no SecretVault, no event log.
+
+_Covered automatically:_ that the upgrade mode creates nothing where there is nothing —
+`UpgradeBringsTheFilesForwardTest`.
+
+## 2. The one manual step there is
+
+```
+id -nG          # javafx-login is not here yet in this shell
+```
+
+- [ ] Log out and back in, and `id -nG` now names `javafx-login`.
+
+A group membership does not apply to a session that already existed. Nothing can be done
+about that from a package, and it is the one thing the installation cannot finish on its own.
+If your account is not in the group at all, the installation was run from a root shell rather
+than through `sudo`, and nobody was named to admit: `sudo /opt/javafx-login/lib/systemd/install.sh <account>`.
+
+## 3. Logging in, with nothing else done to the machine
+
+Start **JavaFX Login** from the applications menu.
+
+- [ ] The menu offers exactly one entry. There is no entry for the AuthenticationService: it
+      is not something a person starts.
+- [ ] The first-run wizard appears — a fresh deployment holds no Administrator — and creates
+      the Administrator without complaint. It refuses if the account is not a
+      MachineAdministrator, which is ADR-0008 and not a packaging fault.
+- [ ] Log in as that Administrator. The whole of steps 1 to 3 was: install, log out, log in.
+- [ ] The language selector offers **Español**, spelled that way. A trimmed runtime that lost
+      its locale data names it "Spanish", and nothing else goes wrong.
+
+_Covered automatically:_ that the packaged runtime is linked with locale data for every
+language the selector offers — `TheTrimmedRuntimeCarriesEveryOfferedLanguageTest`.
+
+## 4. The service is where socket activation left it
+
+```
+systemctl is-active javafx-login-authd.service    # → active, while the window is open
+ls -l /run/javafx-login-authd.sock                # → srw-rw---- root javafx-login
+```
+
+- [ ] The service started only when the application connected.
+- [ ] The socket is the one the application connects to. A packaged installation is where the
+      two halves would disagree about that path and nobody would find out: the client would
+      report the service as not running, on a machine where it is installed and well.
+
+_Covered automatically:_ that the application's installed path is the unit's `ListenStream=` —
+`TheInstalledSocketIsTheOneSystemdListensOnTest`. The rest of the activation behaviour has a
+checklist of its own: `linux-service-activation.md`.
+
+## 5. Reinstalling reasserts what an upgrade could have loosened
+
+Close the application. Then loosen the deployment by hand and put it back with a reinstall:
+
+```
+sudo chmod 0755 /var/lib/javafx-login
+sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb
+ls -ld /var/lib/javafx-login                      # → drwx------ root root again
+```
+
+- [ ] The mode is `0700` and the owner is `root`, without anybody having repaired it.
+- [ ] The installation reported the CredentialStore's schema version, rather than saying there
+      was nothing there.
+- [ ] Log in again as the same Administrator with the same password. The Accounts, the
+      configuration and the SecretVault came through the reinstall untouched.
+
+An upgrade that quietly loosened that directory would take away the only real security
+property this product has, and everything would go on working.
+
+## 6. A store from a later build stops the installation
+
+```
+sudo apt install sqlite3
+sudo sqlite3 /var/lib/javafx-login/credentials.db 'PRAGMA user_version = 99'
+sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb    # → fails
+```
+
+- [ ] The installation **fails**, and the message names both numbers: the version found and
+      the version this build understands.
+- [ ] Put it back — `sudo sqlite3 ... 'PRAGMA user_version = <the number it named>'` — and the
+      reinstall succeeds again.
+
+This is the downgrade path, and it must fail here rather than at the next login: under socket
+activation a service that refuses to start is indistinguishable from one nobody has connected
+to yet.
+
+_Covered automatically:_ the refusal and the two numbers in it —
+`UpgradeBringsTheFilesForwardTest`, `CredentialStoreSchemaTest`.
+
+## 7. Removing keeps the deployment
+
+```
+sudo apt remove javafx-login
+```
+
+- [ ] It says `/var/lib/javafx-login` has been kept, and names what is in it.
+- [ ] `/opt/javafx-login` is gone; `/var/lib/javafx-login` is still there, still `0700`.
+- [ ] `systemctl is-enabled javafx-login-authd.socket` → the unit is gone, and nothing is
+      listening on `/run/javafx-login-authd.sock`.
+- [ ] The menu entry is gone.
+
+Then install it again and log in as the same Administrator:
+
+- [ ] The Accounts, their passwords, the Lockout state and the AuthenticationEvents are all
+      where they were. A reinstall is not a way to lose a deployment.
+
+## 8. Purging destroys it, and says so
+
+```
+sudo apt purge javafx-login
+```
+
+- [ ] Before it is gone, the message names what is being destroyed: every Account and its
+      password, the SecretVault and every secret in it, the configuration, and the record of
+      every authentication ever attempted — and that a Backup taken earlier is the only copy
+      that survives.
+- [ ] `/var/lib/javafx-login` is gone.
+- [ ] `getent group javafx-login` names nothing.
+
+_Covered automatically:_ that only the purge destroys anything, and that it says what —
+`DebianPackageTest`.
+
+## 9. The attribution the licences require
+
+```
+cat /opt/javafx-login/share/doc/copyright                  # before the purge above
+cat /opt/javafx-login/lib/doc/THIRD-PARTY-NOTICES.md
+```
+
+- [ ] Both are there, and both name OpenJDK and OpenJFX under the GPL with the Classpath
+      Exception.
+
+_Covered automatically:_ that the notices name them and that the package ships the file —
+`DebianPackageTest`.
+
+---
+
+## Verifying the trimmed runtime against the whole suite
+
+Not part of an installation, and the strongest check there is that the module list in
+`build-deb.sh` covers what this product actually reaches for. Run the suite **on the runtime
+that ships** rather than on the JDK it was linked from:
+
+```
+jlink --add-modules "$(sed -n "s/^readonly RUNTIME_MODULES='\(.*\)'/\1/p" installer/linux/build-deb.sh),java.management" \
+      --include-locales en,es --output /tmp/shipped-runtime
+mvn test -Djvm=/tmp/shipped-runtime/bin/java
+```
+
+- [ ] The whole suite passes, including the JavaFX windows.
+
+`java.management` is added for the test harness and not for the product: Surefire's forked
+booter asks for it, and a package that shipped it would be shipping a module only the suite
+ever needed. That difference is the only one between the image linked here and the image in
+the `.deb`; this is how the missing `jdk.localedata` was found.

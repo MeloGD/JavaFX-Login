@@ -15,6 +15,36 @@ mvn test
 
 Everything runs headless: no display is needed, and no test needs privileges.
 
+## Installing it on Ubuntu
+
+```bash
+sudo apt install fakeroot        # jpackage shells out to it, and skips the .deb without it
+./installer/linux/build-deb.sh   # jlink trims a runtime, jpackage packages it
+sudo apt install ./target/package/dist/javafx-login_0.1.0_amd64.deb
+```
+
+That is the whole of it: log out and back in — a group membership does not reach a session that
+already existed — and the product is in the applications menu. Nothing else is asked of the
+machine, and nothing is running until the window is opened, which is what socket activation is
+for. `docs/manual-checks/linux-packaging.md` is the checklist to hold an installation against.
+
+The package installs an application and never a `Deployment`. The Accounts, the `SecretVault`,
+the configuration and the `AuthenticationEvents` live in `/var/lib/javafx-login`, owner-only and
+root-owned, and the package neither creates them — that is the first-run wizard's, once somebody
+has logged in — nor removes them:
+
+```bash
+sudo apt remove javafx-login   # the application goes; the Deployment stays, and it says so
+sudo apt purge  javafx-login   # the other word: it destroys the Deployment, and says what
+```
+
+An upgrade reasserts that directory's owner and mode rather than assuming they survived, and
+brings the schema forward while somebody is still watching the installation: a store written by
+a later build than the package stops the upgrade, naming both versions. ADR-0017 has the
+reasoning, and the runtime the package carries is trimmed to the modules the product actually
+reaches for — including the locale data the language selector needs, without which it offers
+"Spanish" rather than "Español" and nothing fails.
+
 ## Integrating
 
 A host product depends on `login-ui` and calls the `LoginGate`. That is the whole interface:
@@ -82,7 +112,8 @@ Let the service create that directory rather than creating it yourself: a socket
 process takes its permissions from the `umask` at `bind()`, so it has to appear inside a directory
 that is already restricted. On Linux in production none of this applies — the service is
 socket-activated, systemd owns the socket and its mode is declarative, which is what the absence of
-`--socket` selects. Packaging that is its own ticket, as is the Windows service.
+`--socket` selects — the `.deb` above is where that comes from. The Windows service is still its own
+ticket.
 
 Start the service first. Before it draws anything the application asks the `AuthenticationService`
 which protocol it speaks, and where it gets no answer it **refuses to start** rather than showing a

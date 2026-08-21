@@ -1,0 +1,63 @@
+#!/bin/sh
+# postinst script for javafx-login
+#
+# Runs as root, on a first installation and on every upgrade, after the payload is in
+# place. Three things happen here and they are in this order on purpose: the machine is
+# wired, then the files are brought forward, then the person who installed the product is
+# admitted to the group that may reach the socket.
+#
+# It is deliberately thin. Everything it does to systemd is install.sh, which ships in the
+# payload and is the same script a developer runs by hand — a package that reimplemented
+# that wiring would be a second place for it to be wrong, and only one of the two would
+# ever be run by the person debugging it.
+
+set -e
+
+package_type=deb
+PAYLOAD=/opt/javafx-login
+STORE=/var/lib/javafx-login/credentials.db
+
+# Whoever ran the installation, as the operating system names them. Reaching the socket is
+# a group membership and nothing else — it admits nobody to anything without a password,
+# because the AuthenticationService still asks for one — but without it the person who has
+# just installed the product cannot connect to it at all, and the product would ship with a
+# manual step nobody is told about. sudo and pkexec each say who they are acting for; an
+# `apt install` run from a root shell says nothing, and then nobody is admitted here.
+installing_account() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        echo "${SUDO_USER}"
+    elif [ -n "${PKEXEC_UID:-}" ]; then
+        getent passwd "${PKEXEC_UID}" | cut -d: -f1
+    fi
+}
+
+case "$1" in
+    configure)
+DESKTOP_COMMANDS_INSTALL
+
+        # The group, the state directory and its 0700 are asserted again on every upgrade
+        # rather than assumed to have survived one. An upgrade that quietly loosened the
+        # mode on the directory holding the CredentialStore, the SecretVault and the
+        # AuthenticationEvents would undo the only real security property this product has,
+        # and it would do it silently — everything would go on working.
+        "${PAYLOAD}/lib/systemd/install.sh" $(installing_account)
+
+        # Migrations run here rather than at the next activation, while somebody is
+        # watching. Under socket activation nobody is watching afterwards: a service that
+        # cannot open its files looks exactly like a service that has not been connected
+        # to yet, so a failed migration would reach its owner as "the AuthenticationService
+        # is not running" long after this installation said it had succeeded. A store from
+        # a later build than this one stops the installation here, with both versions named.
+        "${PAYLOAD}/bin/javafx-login-authd" "${STORE}" --upgrade
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

@@ -332,3 +332,23 @@ How many failed authentications in a row make a Lockout, and how long that
 Lockout lasts. Configuration, held beside the Accounts in the CredentialStore
 and read again on every decision, so that changing it changes what happens next.
 _Avoid_: retry limit, throttle settings, rate limit
+
+### The installed product
+
+**Deployment**:
+Everything one machine holds about who may log into it: the Accounts and their
+password hashes, the SecretVault, the configuration and the AuthenticationEvents.
+It is not part of the product and is never installed by it — the FirstRunWizard is
+what brings one into existence, and an installer that wrote a CredentialStore
+would be creating a deployment on a machine nobody has logged into yet. It is what
+a Backup is a copy of, what survives an uninstall, and what a Purge destroys. See
+ADR-0017.
+_Avoid_: user data, database, installation, instance
+
+**Purge**:
+Destroying a Deployment on purpose, by name. Removing the product takes the
+application and leaves the Deployment where it is, because a reinstall must not be
+a way to lose one; a Purge is the other word, is never a default, and says what it
+is destroying while it destroys it. Nothing else in this system deletes an Account
+that has not been deleted by an Administrator.
+_Avoid_: uninstall, clean up, wipe, reset

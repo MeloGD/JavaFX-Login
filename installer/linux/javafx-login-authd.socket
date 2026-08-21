@@ -7,7 +7,7 @@
 
 [Unit]
 Description=AF_UNIX socket for the JavaFX Login AuthenticationService
-Documentation=file:/usr/share/doc/javafx-login/linux-service-activation.md
+Documentation=file:/opt/javafx-login/lib/doc/linux-service-activation.md
 
 [Socket]
 # Exactly one. A second ListenStream= silently stops systemd connecting the listening

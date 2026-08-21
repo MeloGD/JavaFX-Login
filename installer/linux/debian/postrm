@@ -1,0 +1,68 @@
+#!/bin/sh
+# postrm script for javafx-login
+#
+# Where the difference between removing this product and destroying a deployment is
+# written down. Removing takes away the application; the Accounts, the SecretVault, the
+# configuration and the AuthenticationEvents stay exactly where they are, because a
+# reinstall must not be a way to lose them and because an uninstall that silently emptied
+# a password store would be the worst behaviour this product could have.
+#
+# Purging is the other word, and it is never a default: dpkg only ever passes `purge` when
+# somebody asked for it by name. It says what it is about to destroy while destroying it,
+# because by then the sentence is the only record left.
+
+set -e
+
+UNIT=javafx-login-authd
+UNIT_DIRECTORY=/etc/systemd/system
+STATE_DIRECTORY=/var/lib/javafx-login
+DEDICATED_GROUP=javafx-login
+
+systemd_is_running() {
+    [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1
+}
+
+forget_the_units() {
+    rm -f "${UNIT_DIRECTORY}/${UNIT}.socket" "${UNIT_DIRECTORY}/${UNIT}.service"
+    if systemd_is_running; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+}
+
+case "$1" in
+    remove)
+        forget_the_units
+        if [ -d "${STATE_DIRECTORY}" ]; then
+            echo "javafx-login: ${STATE_DIRECTORY} has been kept: the Accounts, the SecretVault," >&2
+            echo "  the configuration and the AuthenticationEvents are still there, and reinstalling" >&2
+            echo "  this package picks them up again. To destroy them: apt purge javafx-login" >&2
+        fi
+    ;;
+
+    purge)
+        forget_the_units
+        if [ -d "${STATE_DIRECTORY}" ]; then
+            echo "javafx-login: destroying ${STATE_DIRECTORY} — every Account and its password, the" >&2
+            echo "  SecretVault and every secret in it, the configuration, and the record of every" >&2
+            echo "  authentication ever attempted. None of it can be recovered from this machine." >&2
+            echo "  A Backup exported before now is the only copy that survives this." >&2
+            rm -rf "${STATE_DIRECTORY}"
+        fi
+        # The group goes last and only here: it is what membership of "may reach the
+        # AuthenticationService" means, and a removed group whose gid is later handed to
+        # another group would quietly give that meaning to somebody else.
+        if getent group "${DEDICATED_GROUP}" >/dev/null 2>&1; then
+            groupdel "${DEDICATED_GROUP}" >/dev/null 2>&1 || true
+        fi
+    ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

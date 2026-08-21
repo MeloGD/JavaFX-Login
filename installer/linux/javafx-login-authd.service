@@ -9,7 +9,7 @@
 
 [Unit]
 Description=JavaFX Login AuthenticationService
-Documentation=file:/usr/share/doc/javafx-login/linux-service-activation.md
+Documentation=file:/opt/javafx-login/lib/doc/linux-service-activation.md
 Requires=javafx-login-authd.socket
 
 [Service]
@@ -27,10 +27,16 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 
-# The runtime shipped with the product rather than whatever JDK the machine happens to
-# have, and no --add-opens or --add-exports: the service names only java.lang.System and
-# java.nio.channels to obtain its channel.
-ExecStart=/opt/javafx-login/runtime/bin/java -cp /opt/javafx-login/lib/* com.javafxlogin.core.authentication.ServiceProcess /var/lib/javafx-login/credentials.db
+# The launcher jpackage builds, rather than a java command written out here. It loads the
+# runtime shipped with the product — never whatever JDK the machine happens to have — in
+# this process rather than a child of it, which is what keeps the inherited socket on file
+# descriptor 0 where System.inheritedChannel() looks for it. There is no --add-opens and no
+# --add-exports: the service names only java.lang.System and java.nio.channels to obtain
+# its channel.
+#
+# The store's path is written out rather than baked into the launcher, because the upgrade
+# the package runs at install time names the same file and the two must be read together.
+ExecStart=/opt/javafx-login/bin/javafx-login-authd /var/lib/javafx-login/credentials.db
 
 # Nothing is set about restarting, deliberately: exiting when nobody is using it is this
 # service's normal ending and the defaults already read it that way. The socket unit stays

@@ -9,7 +9,13 @@
 #
 # This script wires systemd to a product that is already on the machine: the runtime and
 # the jars must be under /opt/javafx-login before it is run, and it refuses to enable
-# anything if they are not. Putting them there belongs to whatever built the product.
+# anything if they are not. Putting them there belongs to whatever built the product — the
+# .deb built by build-deb.sh, or a hand-assembled payload on a development machine.
+#
+# The package runs this same script from its postinst rather than repeating it. There is
+# one implementation of what a machine needs and one place a mistake in it can be, and
+# every line of it is written to be run again: the group, the directory and its mode are
+# reasserted on an upgrade, never assumed to have survived one.
 #
 # Usage: sudo ./install.sh [os-account ...]
 #
@@ -24,7 +30,7 @@ readonly DEDICATED_GROUP='javafx-login'
 readonly UNIT_DIRECTORY='/etc/systemd/system'
 readonly STATE_DIRECTORY='/var/lib/javafx-login'
 readonly PAYLOAD_DIRECTORY='/opt/javafx-login'
-readonly DOC_DIRECTORY='/usr/share/doc/javafx-login'
+readonly DOC_DIRECTORY='/opt/javafx-login/lib/doc'
 readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
@@ -48,8 +54,8 @@ require_payload() {
   local launcher
   launcher="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "${HERE}/${UNIT_NAME}.service")"
   [[ -x ${launcher} ]] || fail "the unit starts ${launcher}, and there is no such executable: install the product under ${PAYLOAD_DIRECTORY} first"
-  compgen -G "${PAYLOAD_DIRECTORY}/lib/*.jar" >/dev/null \
-    || fail "there are no jars in ${PAYLOAD_DIRECTORY}/lib: install the product there first"
+  compgen -G "${PAYLOAD_DIRECTORY}/lib/app/*.jar" >/dev/null \
+    || fail "there are no jars in ${PAYLOAD_DIRECTORY}/lib/app: install the product there first"
 }
 
 create_dedicated_group() {
@@ -72,11 +78,17 @@ create_state_directory() {
 install_units() {
   install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.socket" "${UNIT_DIRECTORY}/${UNIT_NAME}.socket"
   install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.service" "${UNIT_DIRECTORY}/${UNIT_NAME}.service"
-  install -d -o root -g root -m 0755 "${DOC_DIRECTORY}"
-  install -o root -g root -m 0644 \
-    "${HERE}/../../docs/manual-checks/linux-service-activation.md" \
-    "${DOC_DIRECTORY}/linux-service-activation.md"
   systemctl daemon-reload
+}
+
+install_documentation() {
+  # What both units name in Documentation=, which must be a file that is there. The package
+  # already ships these beside the payload, so there is nothing to do in that case and this
+  # returns; an installation from a clone is where they have to be put in place.
+  local source="${HERE}/../../docs/manual-checks"
+  [[ -d ${source} ]] || return 0
+  install -d -o root -g root -m 0755 "${DOC_DIRECTORY}"
+  install -o root -g root -m 0644 "${source}"/linux-*.md "${DOC_DIRECTORY}/"
 }
 
 enable_the_socket_only() {
@@ -110,6 +122,7 @@ main() {
   create_dedicated_group
   create_state_directory
   install_units
+  install_documentation
   enable_the_socket_only
   for account in "$@"; do
     admit "${account}"
