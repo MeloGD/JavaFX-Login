@@ -2786,3 +2786,225 @@ mvn -o clean verify
 mvn -o -pl login-core test -Dtest='ServiceHandshakeTest,ProtocolVersionTest,MessageCodecTest,ServiceOverTheSocketTest'
 mvn -o -pl login-ui test -Dtest='NoServiceAtStartupTest,WordingTest'
 ```
+
+# Code review — Linux packaging (issue #17)
+
+Branch `dev-login`, on top of `94990a3`. The machine already knew how to start the
+AuthenticationService on demand; what nothing in this repository could do was put the
+product on a machine in the first place.
+
+## 1. Where the code is
+
+| Layer | Files |
+|---|---|
+| The build | `installer/linux/build-deb.sh` (jlink, jpackage, one payload and two launchers) |
+| What the package does to a machine | `installer/linux/debian/postinst`, `prerm`, `postrm` |
+| The wiring itself | `installer/linux/install.sh` — unchanged in what it does, now run by the postinst too |
+| The units | `javafx-login-authd.socket`, `.service` (`ExecStart=` is now the packaged launcher) |
+| Migrating at install time | `ServiceProcess.bringTheFilesUpToDate` / `--upgrade`, `AuthenticationService.schemaVersion` (package-private) |
+| The licence obligation | `installer/linux/THIRD-PARTY-NOTICES.md`, `installer/linux/debian/copyright` |
+| The check nobody can automate | `docs/manual-checks/linux-packaging.md` |
+| Decisions | ADR-0017, `CONTEXT.md` (`Deployment`, `Purge`) |
+
+Tests: `UpgradeBringsTheFilesForwardTest` (4), `DebianPackageTest` (13),
+`TheTrimmedRuntimeCarriesEveryOfferedLanguageTest` (1),
+`TheInstalledSocketIsTheOneSystemdListensOnTest` (1). Full suite green: 599 core, 138 UI,
+2 feature. The `.deb` was built and inspected on Ubuntu 26.04 with JDK 21.0.12, and the
+packaged application was started from the built image.
+
+## 2. What the ticket asked for
+
+| Criterion | Where it is met |
+|---|---|
+| `jlink` trims a runtime, `jpackage` makes an installable `.deb` | `build-deb.sh: link_the_runtime`, `build_the_application_image`, `build_the_package`; built and inspected with `dpkg-deb -c/-I` |
+| The protected directory, with the right owner and mode | `install.sh: create_state_directory` (`install -d -o root -g root -m 0700`), run by the postinst |
+| The dedicated group `SocketGroup=` names, both units registered, only the `.socket` enabled | `install.sh: create_dedicated_group`, `install_units`, `enable_the_socket_only`; `SystemdUnitFilesTest.onlyTheSocketIsEnabledAtBoot` |
+| The OpenJFX attribution ships with the package | `THIRD-PARTY-NOTICES.md` at `/opt/javafx-login/lib/doc/`, `debian/copyright` at `/opt/javafx-login/share/doc/copyright`; `DebianPackageTest.theAttributionTheGplRequiresIsInThePackageRatherThanInTheRepository` |
+| Reinstalling reasserts permissions | The postinst runs `install.sh` on every `configure`; `DebianPackageTest.everyUpgradeAssertsThePermissionsOnTheDirectoryItCannotSeeInside`; checklist §5 |
+| Reinstalling preserves Accounts, configuration, `SecretVault` | Nothing in any maintainer script touches `/var/lib/javafx-login` outside `purge`; `DebianPackageTest.anUninstallKeepsTheDeploymentAndOnlyAPurgeDestroysIt`; checklist §5, §7 |
+| Uninstalling keeps that data by default | `postrm remove` says it kept it and how to destroy it; same test; checklist §7 |
+| An explicit purge that states what it destroys | `postrm purge`; `DebianPackageTest.thePurgeSaysWhatItIsDestroyingWhileItIsStillThere` asserts it says it *before* it does it; checklist §8 |
+| Migrations on upgrade; a newer store refuses to start | `ServiceProcess --upgrade` from the postinst; `UpgradeBringsTheFilesForwardTest` (4 cases, including the refusal with both version numbers); checklist §6 |
+| A clean Ubuntu machine yields a working login with no manual step | `postinst` admits the installing account to the group; checklist §§1-3 — with one honest exception, below |
+
+## 3. Design decisions a reviewer should judge, not rediscover
+
+- **The package installs an application and never a deployment (ADR-0017).** A `postinst`
+  that created a CredentialStore would bring a deployment into existence on a machine
+  nobody has logged into, which ADR-0008 and ADR-0012 give to the FirstRunWizard alone.
+  So `bringTheFilesUpToDate` returns `0` and writes nothing where there is no store, and
+  `apt remove` leaves every Account where it is.
+- **The postinst runs `install.sh` rather than repeating it.** Two implementations of
+  "what a machine needs" would be two places for a mistake, and the one being debugged
+  would be whichever the person happened to be reading.
+- **Migrations move to install time.** Under socket activation a service that cannot open
+  its files is indistinguishable from one nobody has connected to, so a failed migration
+  would surface as "the AuthenticationService is not running", days later, to somebody who
+  was told the installation succeeded.
+- **The `--add-modules` list is written out, not derived.** `jdeps` reads bytecode, and
+  neither of the two modules that matter is visible there: `java.sql` is reached through a
+  driver loaded by name, and `jdk.localedata` holds the names languages call themselves.
+- **The installing account is admitted to the group.** `sudo` and `pkexec` each say who
+  they are acting for; membership admits nobody to anything without a password, and
+  without it the person who just installed the product cannot reach the socket at all.
+- **One payload, two launchers.** The window and the privileged process share every jar,
+  because they share a protocol and a package with two copies of it could ship two
+  versions of it. The service launcher is kept out of the applications menu
+  (`linux-shortcut=false`): started by hand it inherits no socket and refuses to start.
+- **`--launcher-as-service` was rejected.** jpackage would generate a service unit and
+  enable it at boot, which is the privileged JVM on an unattended machine that ADR-0002
+  and the whole of issue #15 exist to avoid.
+
+## 4. What the packaging found in code that was already green
+
+Two disagreements that install cleanly, run, and say nothing:
+
+1. **The two halves named different sockets.** `ProtectedFeatureApplication` connected to
+   `/run/javafx-login/authentication.sock` while the shipped `.socket` unit listened on
+   `/run/javafx-login-authd.sock`. Nothing reconciles those at run time, and under socket
+   activation the client's report for "nothing answered" is *not running* — so a packaged
+   installation would have said the AuthenticationService was down on a machine where it
+   was installed and well. `TheInstalledSocketIsTheOneSystemdListensOnTest` now holds the
+   constant against the unit file.
+2. **A trimmed runtime loses the name of a language.** Without `jdk.localedata` the
+   selector offers "Spanish" instead of "Español" — in the one screen ADR-0014 exists for,
+   to the person who is choosing that language because the other one is not theirs. Found
+   by running the whole suite on the trimmed runtime (`mvn test -Djvm=…`);
+   `TheTrimmedRuntimeCarriesEveryOfferedLanguageTest` now fails when a language is added
+   to `languages.properties` and not to the build.
+
+## 5. What the two-axis review found and what was done
+
+Both axes ran against `94990a3...baabc8d`. Eleven findings on Standards, eleven on Spec;
+the ones that mattered were three ways a machine could be left in a state nobody would
+notice.
+
+### Applied — the three that were real faults
+
+1. **The socket stayed listening through an upgrade.** (Spec, c1.) `prerm` stopped the
+   `.service` and disabled the `.socket` only on `remove`. dpkg unpacks the new payload
+   immediately afterwards, so any connection in that window activated a privileged JVM on
+   a half-replaced `/opt/javafx-login` — the exact thing that file's header claims to
+   prevent. The socket is now stopped for `upgrade` as well, and the postinst enables it
+   again once the machine is wired. `theSocketStopsForAnUpgradeAndNotOnlyForARemoval`.
+2. **The downgrade refusal fired after the socket was already listening.** (Spec, c4.) The
+   postinst wired the machine and *then* migrated, so a store from a later build failed an
+   installation that had already enabled the socket: the next login would activate a
+   service that dies on a file it cannot read, and be told the AuthenticationService is not
+   running — which is the silence ADR-0017 says the install-time migration exists to avoid.
+   The two steps are now the other way round, and the reason is written where the order is.
+   `aRefusedUpgradeLeavesNothingForAnybodyToConnectTo`.
+3. **A `systemctl` that cannot run failed the installation.** (Spec, c2.) `install.sh`
+   assumed a booted systemd, so `apt install` inside a chroot or a container image died and
+   left the package half-configured. `systemd_is_running` now separates *installed* from
+   *running*: the group, the directory, the units and the documents are put in place either
+   way, and what could not be enabled is said out loud with the command that enables it.
+   Checklist §9.
+
+### Applied — the smaller ones
+
+4. **A deleted `SUDO_USER` failed a finished installation.** (Spec, c3.) `install.sh`
+   refuses a name it cannot find, which is right for somebody typing one; arriving through
+   the postinst it failed an installation whose group, directory and units were already
+   correct, over the last and least important step. The postinst now treats an account that
+   does not exist as nobody — and says so, with the command to fix it, rather than leaving
+   a person at a login window reporting that the service is not running. (That message also
+   answers Spec (a): `apt` from a root shell or from PackageKit admits nobody.)
+5. **Nothing held `SocketGroup=` against the group the installer creates.** (Spec, a2.) The
+   identical drift for `ListenStream=` had a test and this did not.
+   `theGroupTheSocketIsReadableByIsTheGroupTheInstallerCreates`.
+6. **`stage_the_deployment_files` inverted the glossary.** (Standards, 2.) A `Deployment` is
+   precisely what the package must never carry — ADR-0017 is named after it. Renamed
+   `stage_the_units_and_documents`.
+7. **`bringTheFilesUpToDate` was public** with no caller outside its package, while the
+   `schemaVersion()` it reads had been made package-private with a sentence saying why.
+   (Standards, 5.) Both are package-private now, and both say so.
+8. **`main` tested `args.length` in three places.** (Standards, 11.) One method,
+   `channelNamedIn`, now decides the arity and `boundToTheSocketNamedIn` is gone with it.
+9. **`DESKTOP_SCRIPTS` had been dropped from the prerm.** (Spec, c5.) It expands to nothing
+   today and to jpackage's mime-type helpers the day this product declares a file
+   association; leaving it out would produce a prerm calling functions nobody defined. It is
+   back — and `package_type=deb`, which only `services_utils.sh` reads and this package does
+   not use, is gone (Standards, 10).
+10. Wording and naming: `read()` → `readTheInitialSchema()`, a comment on `PAYLOAD` that
+    described `lib` while naming the payload root, `--include-locales` described as tags
+    rather than as languages the glossary keeps apart, and `FirstRunWizard` spelled as the
+    glossary spells it in the README. (Standards, 3, 4, 7, 8.)
+
+### Judged and not applied
+
+- **"No manual step" is not literally true, and the checklist says so in a heading.**
+  (Spec, a1.) A group membership does not reach a session that already existed, and no
+  package can change that. What *was* in scope — that somebody is admitted at all, and that
+  a person is told when nobody was — is finding 4.
+- **`installerDirectory()` is copied into three test classes in three modules.**
+  (Standards, 6.) Sharing ten lines across Maven modules means a `test-jar` and a new
+  dependency in two poms, to hold a walk-up that has not changed since it was written.
+  Recorded here rather than paid for.
+- **The scope the Spec axis flagged.** (Spec, b.) The socket-path fix is what makes a
+  packaged login work at all, `jdk.localedata` is what makes it work in Spanish, the smoke
+  check is what keeps a broken image from being packaged, and admitting the installing
+  account is the difference between an installation and an installation plus an
+  undocumented step. `install_documentation` follows from `Documentation=` having to name a
+  path that exists. Each is named in §3 above, and each is defended there.
+- **`$(installing_account)` is deliberately unquoted** (Standards, 10), because an empty
+  result must become no argument rather than an empty one. The comment above it now says so.
+
+## 6. What a final reviewer should attack first
+
+1. **`postinst` is `set -e` over three commands that touch the machine.** If `install.sh`
+   fails halfway — no `systemctl`, a `groupadd` that is refused — the package is left
+   unconfigured with its payload in place, which is dpkg's normal failure shape but is
+   worth judging against what a half-wired machine looks like to its owner.
+2. **The `--upgrade` run in `postinst` opens the real files with production Argon2
+   parameters and then closes them.** It writes nothing but migrations, and it is the only
+   time this product's privileged code runs outside socket activation.
+3. **Nobody is admitted when `apt` is run from a root shell.** `SUDO_USER` and
+   `PKEXEC_UID` are how the installing person is identified, and neither is set then. The
+   checklist says so and names the remedy, but it is the one case where "no manual step"
+   is not true.
+4. **The layout knowledge is in four files.** jpackage puts `--app-content` under the
+   image's `lib/`; the postinst, both units and `install.sh` name those paths.
+   `DebianPackageTest` holds them to each other, but nothing holds them to jpackage.
+5. **`groupdel` on purge.** If a person is still a member and a gid is later reused, the
+   meaning of that membership moves. It is done on purge only, and never on removal.
+
+## 7. Honest limits on what the green build means
+
+- **No test installs anything.** dpkg is not in the suite, and every automated assertion
+  about the package reads a maintainer script as text. The install, upgrade, remove and
+  purge paths are `docs/manual-checks/linux-packaging.md` and nothing else.
+- **The `.deb` in this review was built and inspected, not installed.** `dpkg-deb -c`,
+  `dpkg-deb -I` and reading the substituted maintainer scripts out of the package: the
+  token substitution, the single desktop entry, the `0755` on `lib/systemd/install.sh` that
+  the postinst invokes directly, and the order of the two steps in the postinst. The smoke
+  check in `build-deb.sh` ran the packaged service launcher on the linked runtime, and the
+  packaged window was started by hand from the built image — it drew and stayed up, with no
+  output but the classpath warning ADR-0007 predicts. It was not looked at: this machine has
+  no screenshot tool, so "a login window appeared" is not something this review can claim.
+- **The trimmed runtime was verified by running the whole suite on it**, with
+  `java.management` added for Surefire's forked booter and for nothing the product uses.
+  That is the only difference between the image tested and the image shipped.
+- **`fakeroot` is jpackage's dependency, not this repository's.** Without it jpackage
+  *skips* the DEB bundler and exits successfully, which is a build that produces nothing
+  and says so quietly. `require_tools` refuses first.
+- **Windows keeps none of this.** The `.deb`, the units and `install.sh` are Linux, and
+  the Windows service remains designed and unbuilt.
+
+## 8. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+mvn -o -pl login-core test -Dtest='UpgradeBringsTheFilesForwardTest,DebianPackageTest,SystemdUnitFilesTest'
+mvn -o -pl login-ui test -Dtest='TheTrimmedRuntimeCarriesEveryOfferedLanguageTest'
+mvn -o -pl protected-feature test -Dtest='TheInstalledSocketIsTheOneSystemdListensOnTest'
+
+sudo apt install fakeroot
+./installer/linux/build-deb.sh --skip-tests
+dpkg-deb -I target/package/dist/javafx-login_0.1.0_amd64.deb
+dpkg-deb -c target/package/dist/javafx-login_0.1.0_amd64.deb | grep -E 'systemd|lib/doc|bin/'
+
+bash -n installer/linux/build-deb.sh installer/linux/install.sh
+sh   -n installer/linux/debian/postinst installer/linux/debian/prerm installer/linux/debian/postrm
+```

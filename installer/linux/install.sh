@@ -46,6 +46,14 @@ require_systemd() {
   command -v systemctl >/dev/null 2>&1 || fail 'systemd is not on this machine, and socket activation is the whole of the Linux design'
 }
 
+systemd_is_running() {
+  # Installed and running are different questions. A container image being built, or a
+  # chroot, has the units and the group and everything else this script puts in place, and
+  # a systemctl that refuses because nothing was booted. Everything that does not need a
+  # running systemd is still done there, and what is left is said out loud.
+  [[ -d /run/systemd/system ]]
+}
+
 require_payload() {
   # The application itself — the runtime and the jars — is put in place by whatever built
   # this product, and this script only wires systemd to it. Checked before anything is
@@ -78,13 +86,14 @@ create_state_directory() {
 install_units() {
   install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.socket" "${UNIT_DIRECTORY}/${UNIT_NAME}.socket"
   install -o root -g root -m 0644 "${HERE}/${UNIT_NAME}.service" "${UNIT_DIRECTORY}/${UNIT_NAME}.service"
-  systemctl daemon-reload
+  systemd_is_running && systemctl daemon-reload
 }
 
 install_documentation() {
-  # What both units name in Documentation=, which must be a file that is there. The package
-  # already ships these beside the payload, so there is nothing to do in that case and this
-  # returns; an installation from a clone is where they have to be put in place.
+  # The manual checks, one of which is what both units name in Documentation= — a path that
+  # must be a file that is there. This copies them out of a clone, and finds nothing to copy
+  # when it is the package running it: there they are already in the payload, put there by
+  # dpkg, and this returns.
   local source="${HERE}/../../docs/manual-checks"
   [[ -d ${source} ]] || return 0
   install -d -o root -g root -m 0755 "${DOC_DIRECTORY}"
@@ -95,6 +104,11 @@ enable_the_socket_only() {
   # The socket is enabled; the service is not, and has no [Install] section to be enabled
   # by. An enabled service would be a privileged JVM running on a machine nobody has
   # logged in to, which is the thing socket activation exists to avoid.
+  if ! systemd_is_running; then
+    printf 'systemd is not running here, so nothing was enabled. On a machine that has\n'
+    printf 'booted it: systemctl enable --now %s.socket\n' "${UNIT_NAME}"
+    return 0
+  fi
   systemctl enable --now "${UNIT_NAME}.socket"
   if systemctl is-enabled --quiet "${UNIT_NAME}.service" 2>/dev/null; then
     fail "${UNIT_NAME}.service is enabled and must not be: run systemctl disable ${UNIT_NAME}.service"
@@ -109,6 +123,7 @@ admit() {
 }
 
 report() {
+  systemd_is_running || return 0
   printf '\n%s is listening. Nothing is running yet, and nothing will until somebody connects.\n' \
     "${UNIT_NAME}.socket"
   systemctl --no-pager status "${UNIT_NAME}.socket" || true

@@ -12,7 +12,6 @@
 
 set -e
 
-package_type=deb
 UNIT=javafx-login-authd
 
 systemd_is_running() {
@@ -21,14 +20,22 @@ systemd_is_running() {
 
 case "$1" in
     remove|upgrade|deconfigure)
+DESKTOP_SCRIPTS
 DESKTOP_COMMANDS_UNINSTALL
 
         if systemd_is_running; then
             # The service first and the socket second: stopping the socket while the
             # service is up leaves the process running with nothing to be reached on.
             systemctl stop "${UNIT}.service" >/dev/null 2>&1 || true
+
+            # The socket stops for an upgrade as well, and this is the load-bearing half.
+            # dpkg unpacks the new payload over the old one immediately after this script,
+            # and a socket left listening through that would let any connection activate a
+            # privileged JVM on a half-replaced /opt/javafx-login. The postinst enables it
+            # again once the machine is wired, so nothing is lost by stopping it here.
+            systemctl stop "${UNIT}.socket" >/dev/null 2>&1 || true
             if [ "$1" = remove ]; then
-                systemctl disable --now "${UNIT}.socket" >/dev/null 2>&1 || true
+                systemctl disable "${UNIT}.socket" >/dev/null 2>&1 || true
             fi
         fi
     ;;

@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
  */
 class DebianPackageTest {
 
-  /** Where jpackage puts {@code --app-content}: inside the image's {@code lib}, not beside it. */
+  /** Where the package puts the product. What jpackage stages goes under its {@code lib}. */
   private static final String PAYLOAD = "/opt/javafx-login";
 
   private static final String STATE_DIRECTORY = "/var/lib/javafx-login";
@@ -97,6 +97,45 @@ class DebianPackageTest {
     assertTrue(
         postinst.contains("--upgrade"),
         "the postinst leaves migrations to the next activation, where nobody sees them fail");
+  }
+
+  @Test
+  void aRefusedUpgradeLeavesNothingForAnybodyToConnectTo() {
+    // The order is the whole of the refusal's worth. Migrating after the socket is enabled leaves
+    // a machine whose upgrade was refused listening anyway: the next login activates a service
+    // that dies on the store it cannot read, and reports it as a service that is not running.
+    int migrated = postinst.indexOf("\"${STORE}\" --upgrade");
+    int wired = postinst.indexOf("\"${PAYLOAD}/lib/systemd/install.sh\" ${admitted}");
+
+    assertTrue(migrated >= 0 && wired >= 0, "the postinst no longer does both of those things");
+    assertTrue(
+        migrated < wired,
+        "the postinst enables the socket before it finds out whether the files can be opened");
+  }
+
+  @Test
+  void theSocketStopsForAnUpgradeAndNotOnlyForARemoval() {
+    // dpkg unpacks the new payload immediately after the prerm. A socket still listening through
+    // that lets any connection activate a privileged JVM on a half-replaced /opt/javafx-login.
+    int stopped = prerm.indexOf("systemctl stop \"${UNIT}.socket\"");
+    int onlyOnARemoval = prerm.indexOf("if [ \"$1\" = remove ]");
+
+    assertTrue(stopped >= 0, "the prerm never stops the socket");
+    assertTrue(
+        stopped < onlyOnARemoval,
+        "the socket is stopped only on a removal, and stays listening through an upgrade");
+  }
+
+  @Test
+  void theGroupTheSocketIsReadableByIsTheGroupTheInstallerCreates() {
+    // Two files name it and nothing else does: the unit that hands the socket to a group, and the
+    // script that creates that group. A drift here is a socket nobody on the machine can open,
+    // and the client reports it as an account that may not reach the service.
+    String declared = valueOf(lines("javafx-login-authd.socket"), "SocketGroup=");
+    assertEquals(
+        "'" + declared + "'",
+        settingIn(read("install.sh"), "readonly DEDICATED_GROUP"),
+        "the socket's group is not the group the installer creates");
   }
 
   @Test

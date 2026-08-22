@@ -93,7 +93,8 @@ public final class ServiceProcess implements AutoCloseable {
    * machine and how the Windows service will run once it exists.
    *
    * <p>{@code --upgrade} serves nothing and migrates instead: it is what a package runs after it
-   * has replaced one build with another, and it is described on {@link #bringTheFilesUpToDate}.
+   * has replaced one build with another, and it is described on {@link
+   * #bringTheFilesUpToDate(Path)}.
    *
    * <p>Exiting when idle is not a failure and is reported as none: the socket belongs to systemd
    * and stays listening, so the next peer to connect starts this process again. Diagnostics go to
@@ -110,15 +111,8 @@ public final class ServiceProcess implements AutoCloseable {
       upgradeAndReport(storeFile);
       return;
     }
-    if (args.length != 1 && args.length != 3) {
-      throw new IllegalArgumentException(USAGE);
-    }
-    ListeningChannelSource source =
-        args.length == 1
-            ? PlatformListeningChannelSource.forCurrentPlatform()
-            : boundToTheSocketNamedIn(args);
 
-    ServiceProcess process = start(source, storeFile);
+    ServiceProcess process = start(channelNamedIn(args), storeFile);
     process.serveUntilNobodyIsUsingIt();
   }
 
@@ -138,10 +132,13 @@ public final class ServiceProcess implements AutoCloseable {
    * deployment: the FirstRunWizard is, and a store, a SecretVault and an event log written by an
    * installer would make a machine nobody has logged in to look like one somebody has.
    *
+   * <p>Package-private, like the version it reads: the callers are {@code main} above and the test
+   * beside it, and nothing outside this package migrates anything.
+   *
    * @throws SchemaTooNewException if either file was written by a build that understood more, in
    *     which case nothing is written to it — the remedy is the build that wrote it, not this one
    */
-  public static int bringTheFilesUpToDate(Path storeFile) {
+  static int bringTheFilesUpToDate(Path storeFile) {
     Objects.requireNonNull(storeFile, "storeFile");
     if (!Files.exists(storeFile)) {
       return NO_STORE_YET;
@@ -211,11 +208,18 @@ public final class ServiceProcess implements AutoCloseable {
     return server.anyConnectionLive() || service.anySessionLive();
   }
 
-  private static ListeningChannelSource boundToTheSocketNamedIn(String[] args) {
-    if (!"--socket".equals(args[1])) {
-      throw new IllegalArgumentException(USAGE);
+  /**
+   * The channel these arguments name, and the only place that decides how many of them there may
+   * be: with none of its own the platform's, and with {@code --socket} one bound to that path.
+   */
+  private static ListeningChannelSource channelNamedIn(String[] args) {
+    if (args.length == 1) {
+      return PlatformListeningChannelSource.forCurrentPlatform();
     }
-    return new BoundListeningChannelSource(Path.of(args[2]));
+    if (args.length == 3 && "--socket".equals(args[1])) {
+      return new BoundListeningChannelSource(Path.of(args[2]));
+    }
+    throw new IllegalArgumentException(USAGE);
   }
 
   /**

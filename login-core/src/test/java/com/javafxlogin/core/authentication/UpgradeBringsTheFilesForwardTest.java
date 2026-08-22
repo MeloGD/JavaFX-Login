@@ -107,7 +107,7 @@ class UpgradeBringsTheFilesForwardTest {
   private static void createStoreAtTheInitialSchema(Path storeFile) {
     try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + storeFile);
         Statement statement = connection.createStatement()) {
-      statement.executeUpdate(read());
+      statement.executeUpdate(readTheInitialSchema());
       statement.execute("PRAGMA user_version = 1");
       statement.executeUpdate(
           "INSERT INTO accounts (name, role, password_hash, created_at)"
@@ -117,7 +117,7 @@ class UpgradeBringsTheFilesForwardTest {
     }
   }
 
-  private static String read() {
+  private static String readTheInitialSchema() {
     try (InputStream stream =
         UpgradeBringsTheFilesForwardTest.class
             .getClassLoader()

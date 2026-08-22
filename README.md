@@ -30,7 +30,7 @@ for. `docs/manual-checks/linux-packaging.md` is the checklist to hold an install
 
 The package installs an application and never a `Deployment`. The Accounts, the `SecretVault`,
 the configuration and the `AuthenticationEvents` live in `/var/lib/javafx-login`, owner-only and
-root-owned, and the package neither creates them — that is the first-run wizard's, once somebody
+root-owned, and the package neither creates them — that is the `FirstRunWizard`'s, once somebody
 has logged in — nor removes them:
 
 ```bash

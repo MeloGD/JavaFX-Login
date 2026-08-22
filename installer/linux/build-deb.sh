@@ -34,9 +34,9 @@ readonly WORK="${REPOSITORY}/target/package"
 # packaged build quietly disagreeing with ADR-0014 and nothing failing anywhere.
 readonly RUNTIME_MODULES='java.base,java.desktop,java.logging,java.scripting,java.sql,java.xml,jdk.jfr,jdk.localedata,jdk.net,jdk.unsupported'
 
-# The locales that data is kept for, which are the languages this build offers. A language
-# added to languages.properties belongs here too, and
-# TheTrimmedRuntimeCarriesEveryOfferedLanguageTest is what fails when it is forgotten.
+# What jlink keeps locale data for: one tag per InterfaceLanguage this build offers, in the
+# form --include-locales takes. A language added to languages.properties belongs here too,
+# and TheTrimmedRuntimeCarriesEveryOfferedLanguageTest is what fails when it is forgotten.
 readonly RUNTIME_LOCALES='en,es'
 
 fail() {
@@ -82,7 +82,7 @@ link_the_runtime() {
         --output "${WORK}/runtime"
 }
 
-stage_the_deployment_files() {
+stage_the_units_and_documents() {
   # What the package carries besides the application: the units, the script that registers
   # them, and the documents both units name in Documentation=. They travel inside the
   # payload, which is the only place jpackage puts files, and the maintainer scripts reach
@@ -186,7 +186,7 @@ main() {
   install -d "${WORK}"
   build_the_jars "${skip}"
   link_the_runtime
-  stage_the_deployment_files
+  stage_the_units_and_documents
   build_the_application_image "${version}"
   smoke_check_the_image
   build_the_package "${version}"

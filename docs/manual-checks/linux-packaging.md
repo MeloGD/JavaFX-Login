@@ -43,8 +43,9 @@ sudo apt install ./javafx-login_0.1.0_amd64.deb
 - [ ] `ls -ld /var/lib/javafx-login` → `drwx------ root root`.
 - [ ] `systemctl is-enabled javafx-login-authd.socket` → `enabled`, and
       `systemctl is-enabled javafx-login-authd.service` → `static`.
-- [ ] The last line of the installation said there is no CredentialStore yet. A first
-      installation has nothing to migrate, and must not be what creates a deployment.
+- [ ] The installation said there is no CredentialStore yet — before it said anything about
+      the machine. A first installation has nothing to migrate, and must not be what creates
+      a deployment.
 - [ ] `ls /var/lib/javafx-login` is empty: no store, no SecretVault, no event log.
 
 _Covered automatically:_ that the upgrade mode creates nothing where there is nothing —
@@ -60,8 +61,16 @@ id -nG          # javafx-login is not here yet in this shell
 
 A group membership does not apply to a session that already existed. Nothing can be done
 about that from a package, and it is the one thing the installation cannot finish on its own.
-If your account is not in the group at all, the installation was run from a root shell rather
-than through `sudo`, and nobody was named to admit: `sudo /opt/javafx-login/lib/systemd/install.sh <account>`.
+
+If your account is not in the group at all, the installation was run from somewhere that does
+not say who it was for — a root shell rather than `sudo`, or a package manager that discards
+the environment:
+
+- [ ] The installation said so, in as many words, and named the command to run:
+      `sudo /opt/javafx-login/lib/systemd/install.sh <account>`.
+
+Run it, log out and back in, and carry on. An installation that admitted nobody and said
+nothing would end at a login window reporting that the AuthenticationService is not running.
 
 ## 3. Logging in, with nothing else done to the machine
 
@@ -124,8 +133,12 @@ sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb    # → fails
 
 - [ ] The installation **fails**, and the message names both numbers: the version found and
       the version this build understands.
+- [ ] Nothing is listening: `ls /run/javafx-login-authd.sock` finds nothing, and starting the
+      application reports the service as not running rather than opening a login window.
+      The refusal happens before the machine is wired, on purpose — a refused upgrade must
+      leave nothing for anybody to connect to rather than a service that dies on activation.
 - [ ] Put it back — `sudo sqlite3 ... 'PRAGMA user_version = <the number it named>'` — and the
-      reinstall succeeds again.
+      reinstall succeeds again, and the socket is listening once more.
 
 This is the downgrade path, and it must fail here rather than at the next login: under socket
 activation a service that refuses to start is indistinguishable from one nobody has connected
@@ -167,7 +180,22 @@ sudo apt purge javafx-login
 _Covered automatically:_ that only the purge destroys anything, and that it says what —
 `DebianPackageTest`.
 
-## 9. The attribution the licences require
+## 9. A machine whose systemd has not booted
+
+Only worth running if this product is ever installed into a container image or a chroot,
+where `systemctl` is present and nothing has been booted:
+
+```
+sudo chroot <an image with the package> apt install ./javafx-login_0.1.0_amd64.deb
+```
+
+- [ ] The installation succeeds. The group, the state directory and both unit files are in
+      place, and it said plainly that nothing was enabled and which command enables it.
+
+An installation that failed here would be a package that cannot be built into an image; one
+that claimed success without saying anything would be an image with a socket nobody enabled.
+
+## 10. The attribution the licences require
 
 ```
 cat /opt/javafx-login/share/doc/copyright                  # before the purge above
