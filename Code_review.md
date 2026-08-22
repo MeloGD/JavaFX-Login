@@ -2978,10 +2978,20 @@ notice.
   `dpkg-deb -I` and reading the substituted maintainer scripts out of the package: the
   token substitution, the single desktop entry, the `0755` on `lib/systemd/install.sh` that
   the postinst invokes directly, and the order of the two steps in the postinst. The smoke
-  check in `build-deb.sh` ran the packaged service launcher on the linked runtime, and the
-  packaged window was started by hand from the built image — it drew and stayed up, with no
-  output but the classpath warning ADR-0007 predicts. It was not looked at: this machine has
-  no screenshot tool, so "a login window appeared" is not something this review can claim.
+  check in `build-deb.sh` ran the packaged service launcher on the linked runtime.
+- **The packaged application was driven end to end, and looked at.** On a virtual display
+  (Xvfb, extracted rather than installed, with a bare window manager for keyboard focus),
+  both packaged launchers on the trimmed runtime: the FirstRunWizard created the
+  Administrator, the login screen offered the language as **Español** — the word that
+  becomes "Spanish" when `jdk.localedata` is missing — and an admission reached the
+  AdministrationPanel, with `AUTHENTICATION_SUCCEEDED` in the AuthenticationEvents beside
+  the store. The service also refused the first attempt with `WRONG_ROLE`, which is
+  ADR-0005 working in a packaged build.
+
+  What that does **not** cover: the socket was a temporary one rather than
+  `/run/javafx-login-authd.sock`, because only root creates that path; systemd was not
+  involved, so nothing there was socket-activated; and dpkg never installed the package.
+  Those three are the checklist's, on a machine.
 - **The trimmed runtime was verified by running the whole suite on it**, with
   `java.management` added for Surefire's forked booter and for nothing the product uses.
   That is the only difference between the image tested and the image shipped.
