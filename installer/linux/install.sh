@@ -109,10 +109,29 @@ enable_the_socket_only() {
     printf 'booted it: systemctl enable --now %s.socket\n' "${UNIT_NAME}"
     return 0
   fi
+
+  # Asked first, and nothing is listening while it is. A refusal that arrived after the socket
+  # was enabled would leave a machine that dpkg records as half-configured and is listening
+  # anyway — and apt will not reinstall over that, so the way out would be dpkg by hand. It is
+  # the same order, and for the same reason, as the migration in the postinst.
+  #
+  # The word, never the exit status. `systemctl is-enabled` exits 0 for every state a unit can
+  # be in bar disabled and masked, and `static` — a unit with no [Install] section, which is
+  # exactly what the service is built to be — is one of them. Read as a status this refuses
+  # every installation there is, on the one machine state it exists to bless.
+  #
+  # Only the two states that mean "systemd will start this at boot" are refused. The rest —
+  # linked, alias, indirect, generated — are not that, and a check that refused them would be
+  # the same mistake in a narrower form: an installation stopped over a machine that is right.
+  local service_state
+  service_state="$(systemctl is-enabled "${UNIT_NAME}.service" 2>/dev/null || true)"
+  case "${service_state}" in
+    enabled | enabled-runtime)
+      fail "${UNIT_NAME}.service is ${service_state} and must not be: run systemctl disable ${UNIT_NAME}.service"
+      ;;
+  esac
+
   systemctl enable --now "${UNIT_NAME}.socket"
-  if systemctl is-enabled --quiet "${UNIT_NAME}.service" 2>/dev/null; then
-    fail "${UNIT_NAME}.service is enabled and must not be: run systemctl disable ${UNIT_NAME}.service"
-  fi
 }
 
 admit() {
@@ -145,4 +164,10 @@ main() {
   report
 }
 
-main "$@"
+# Run, unless something is reading this file rather than running it. Sourcing is how the
+# suite reaches the functions above: what a machine is left like cannot be exercised by a
+# test, but what this script does with the words systemd answers can be, with a stub
+# systemctl on the PATH. See TheInstallerReadsWhatSystemdAnswersTest.
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+  main "$@"
+fi

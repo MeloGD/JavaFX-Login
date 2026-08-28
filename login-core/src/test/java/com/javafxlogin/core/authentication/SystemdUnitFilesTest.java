@@ -71,6 +71,17 @@ class SystemdUnitFilesTest {
   }
 
   @Test
+  void theSocketNodeGoesWhenTheUnitDoes() {
+    // systemd's default is to leave it. On this product that node is root-owned and names the
+    // dedicated group, so an uninstall that left it behind would leave a path in /run naming a
+    // gid the purge has just freed for reuse — and an uninstalled product that reads as
+    // installed to anybody who looks there.
+    assertTrue(
+        declares(socketUnit, "RemoveOnStop=yes"),
+        "the socket node must not outlive the unit: an uninstall would leave it in /run");
+  }
+
+  @Test
   void theServiceIsHandedTheListeningSocketOnFileDescriptorZero() {
     assertTrue(declares(serviceUnit, "StandardInput=socket"));
   }
@@ -109,7 +120,7 @@ class SystemdUnitFilesTest {
     // The spike proved a scoped polkit rule works and then rejected the design that needed one.
     // Socket activation grants the Operator no privilege at all, so a rule here would be a
     // privilege nobody asked for.
-    try (Stream<Path> shipped = Files.walk(installerDirectory())) {
+    try (Stream<Path> shipped = Files.walk(ShippedInstaller.directory())) {
       assertTrue(
           shipped.noneMatch(path -> path.getFileName().toString().endsWith(".rules")),
           "socket activation needs no polkit rule, and one must not be shipped");
@@ -151,7 +162,7 @@ class SystemdUnitFilesTest {
 
   private static List<String> linesOf(String unitFile) {
     try {
-      return Files.readAllLines(installerDirectory().resolve(unitFile)).stream()
+      return Files.readAllLines(ShippedInstaller.directory().resolve(unitFile)).stream()
           .map(String::strip)
           .toList();
     } catch (IOException e) {
@@ -159,16 +170,4 @@ class SystemdUnitFilesTest {
     }
   }
 
-  /** Walks up from wherever the suite was started until the shipped installer is found. */
-  private static Path installerDirectory() {
-    for (Path directory = Path.of("").toAbsolutePath();
-        directory != null;
-        directory = directory.getParent()) {
-      Path installer = directory.resolve("installer").resolve("linux");
-      if (Files.isDirectory(installer)) {
-        return installer;
-      }
-    }
-    throw new IllegalStateException("installer/linux is not in any directory above this one");
-  }
 }

@@ -3018,3 +3018,245 @@ dpkg-deb -c target/package/dist/javafx-login_0.1.0_amd64.deb | grep -E 'systemd|
 bash -n installer/linux/build-deb.sh installer/linux/install.sh
 sh   -n installer/linux/debian/postinst installer/linux/debian/prerm installer/linux/debian/postrm
 ```
+
+# Manual check run — Linux packaging on a machine (issue #17)
+
+Branch `dev-login`, on top of `d1deaa0`. The review above ended by saying, twice, that no
+test installs anything and that the `.deb` in it had been **built and inspected, not
+installed**. This is that gap closed: `docs/manual-checks/linux-packaging.md` run top to
+bottom on a real Ubuntu machine, and what it found.
+
+## 1. The machine, and what it was given
+
+| | |
+|---|---|
+| Machine | Ubuntu 26.04.1 LTS, GNOME Shell 50.1 on Wayland, x86_64, 5.2 GB RAM |
+| Account | `test_user`, autologged into the desktop by GDM, `sudo` by a sudoers line |
+| Before | Nothing of this product installed: no group, no `/opt/javafx-login`, no `/var/lib/javafx-login`, no units |
+| Package | `javafx-login_0.1.0_amd64.deb`, 55 MB, built by `installer/linux/build-deb.sh` with the whole suite green |
+
+`fakeroot` was not installed on the build machine and did not need to be: the Ubuntu
+`fakeroot` and `libfakeroot` packages were unpacked into a directory with `dpkg-deb -x` and
+a three-line wrapper put on the `PATH`. Every one of the 186 entries in the resulting `.deb`
+is `root/root`, which is the only thing jpackage wants fakeroot for.
+
+## 2. What it found on the first try: **every installation failed**
+
+```
+Configurando javafx-login (0.1.0) ...
+there is no CredentialStore at /var/lib/javafx-login/credentials.db, and an upgrade does not make one
+created group javafx-login
+Created symlink '/etc/systemd/system/sockets.target.wants/javafx-login-authd.socket' → ...
+install.sh: javafx-login-authd.service is enabled and must not be: run systemctl disable javafx-login-authd.service
+dpkg: error al procesar el paquete javafx-login (--configure):
+ old javafx-login package postinst maintainer script subprocess failed with exit status 1
+```
+
+`enable_the_socket_only` read `systemctl is-enabled javafx-login-authd.service` as an
+**exit status**:
+
+```bash
+if systemctl is-enabled --quiet "${UNIT_NAME}.service" 2>/dev/null; then
+```
+
+`systemctl is-enabled` answers a *word* and exits 0 for every state a unit can be in bar
+`disabled` and `masked` — `static` among them. `static` is what systemd calls a unit with no
+`[Install]` section, which is exactly what `javafx-login-authd.service` is built to be and
+what the checklist's own step 1 says to expect. So the guard against "somebody enabled the
+privileged service" fired on the one machine state it exists to bless, and it did so on
+**every installation on every machine**:
+
+- `dpkg` left the package half-configured (`iF`).
+- The socket was enabled and listening, but `admit` never ran — the installing account was
+  never added to `javafx-login`, so the product it had just installed was unreachable to it.
+- Acceptance criterion *"Installing on a clean Ubuntu machine yields a working login without
+  any manual step"* was false by the widest possible margin.
+
+Nothing in the suite could see this. `DebianPackageTest` and `SystemdUnitFilesTest` read the
+installer as text, and the text was reasonable.
+
+### The fix, and the test that would have caught it
+
+`install.sh` now reads the word:
+
+```bash
+service_state="$(systemctl is-enabled "${UNIT_NAME}.service" 2>/dev/null || true)"
+case "${service_state}" in
+  enabled | enabled-runtime) fail "..." ;;
+esac
+```
+
+`TheInstallerReadsWhatSystemdAnswersTest` is new and is the first test in this repository
+that **runs** a shipped shell script rather than reading it. `install.sh` grew a
+`[[ ${BASH_SOURCE[0]} == "${0}" ]]` guard so the suite can source it, redefine
+`systemd_is_running`, and call `enable_the_socket_only` with a stub `systemctl` on the
+`PATH` that answers a canned word with the real one's exit status. Three cases: `static`
+must go through, `enabled` must stop the installation and name the unit, and a machine whose
+systemd has not booted must say what was not done and ask systemd nothing. Written red — it
+reproduced the machine's failure exactly — then green.
+
+## 3. What it found second: a socket node that outlives the product
+
+`RemoveOnStop=` defaults to off, so after `apt remove` and after `apt purge` this was still
+in place:
+
+```
+srw-rw---- 1 root 973 0 Aug 28 13:53 /run/javafx-login-authd.sock
+```
+
+Nothing was listening on it, which is what the checklist asked about and what it got right.
+What it left behind is worse than untidy: `973` is the gid of the group the `postrm` had
+just deleted, so a purge that goes out of its way not to `groupdel` on removal — because a
+reused gid would move the meaning of that membership — leaves a filesystem node carrying
+that same gid to whoever is handed it next. It also makes an uninstalled product read as
+installed to anybody who looks at the path.
+
+`RemoveOnStop=yes` is now in the socket unit, `SystemdUnitFilesTest` holds it there, and the
+node is gone after both `apt remove` and `apt purge` on the machine.
+
+## 4. What it found third: the documented way back from a refused upgrade does not work
+
+Step 6 sets the CredentialStore to a schema version this build does not understand, watches
+the installation refuse, and then says to put the version back and that "the reinstall
+succeeds again". On this machine it does not:
+
+```
+$ sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb
+Error: Internal Error, No file name for javafx-login:amd64
+```
+
+A package whose postinst failed is half-configured, and apt will not reinstall it — it is
+`sudo dpkg --configure javafx-login` that re-runs the postinst, and that does work: `ii`,
+socket listening, nothing lost. The checklist now says so, and says why.
+
+## 5. What the machine confirmed, step by step
+
+| Step | Result |
+|---|---|
+| 0. Build | 55 MB `.deb`, no skipped bundler, all 186 entries `root/root` |
+| 1. First installation | Group created with the installing account in it; `/var/lib/javafx-login` `drwx------ root root` and empty; socket `enabled`, service `static`; it said there was no CredentialStore **before** it said anything about the machine |
+| 2. The one manual step | The desktop session that predates the installation has group `1001` only; a session started after it has `javafx-login`. Exactly the one thing a package cannot finish on its own |
+| 3. Logging in | First-run wizard appeared **in Spanish**, created the Administrator, and a login with the administration box ticked reached the AdministrationPanel. The language selector offers **Español** — the word a runtime without `jdk.localedata` renders as "Spanish" |
+| 4. Socket activation | `TriggeredBy=javafx-login-authd.socket`; the service went `active` in the same second the client was launched; `srw-rw---- root javafx-login` on the path the unit declares |
+| 5. Reinstall | Directory loosened by hand to `0755` came back `drwx------ root root` without anybody repairing it; the five files under `/var/lib/javafx-login` were **byte-identical** across the reinstall; the installation reported "schema version 6"; the same Administrator logged in with the same password |
+| 6. A store from a later build | Refused, naming both numbers — "is at schema version 99, but this build understands only version 6". Nothing listening, and the application said *"El servicio de autenticación no está en marcha"* instead of opening a login window |
+| 7. Removing | Said what it kept; `/opt/javafx-login` gone, `/var/lib/javafx-login` still `0700`, unit gone, menu entry gone, group kept. Installed again: the deployment was byte-identical and the same Administrator logged in |
+| 8. Purging | Named every kind of thing it destroyed before destroying it; directory gone, group gone, socket node gone |
+| 9. A machine whose systemd has not booted | **Not run.** No container image or chroot was built for it. The branch is now covered by `TheInstallerReadsWhatSystemdAnswersTest` instead, which is a test of the script and not of a machine |
+| 10. Attribution | Both files present; both name OpenJDK 21 and OpenJFX 21.0.12 under GPLv2 with the Classpath Exception, with the source locations |
+
+## 6. Left standing, for a final reviewer
+
+1. **`/usr/share/doc/javafx-login/copyright` does not exist.** jpackage puts the copyright
+   at `/opt/javafx-login/share/doc/copyright`, which is where the checklist looks and where
+   it is. Debian policy §12.5 puts it under `/usr/share/doc/<package>/`, and that is where
+   `lintian`, `licensecheck` and anybody auditing the machine will look. The licence
+   obligation is met; the convention is not.
+2. **A `sudo` line in `/etc/sudoers` is not a MachineAdministrator.** `test_user` installed
+   the package and could `sudo`, and the wizard refused it: `PosixMachineAdministrators`
+   reads `/etc/group` for `root`, `sudo`, `wheel` and `admin`, and a sudoers entry is in
+   neither. Its javadoc names the directory-service case as the limit and not this one. It
+   is the safe direction to be wrong in, and it is a way the "no manual step" criterion can
+   be false on a machine somebody set up by hand. Adding `test_user` to `sudo` — which the
+   owner of the machine approved — was what let steps 3 to 8 run.
+3. **The wizard elides the sentence that says what to do about it.** At the size the window
+   opens at, the refusal reads *"Solo puede crear esta cuenta quien administre el equipo.
+   Cierra la aplicación y vuelve a abrirla desde una cuenta del …"* — the remedy is cut off,
+   and the window does not grow to fit it. The AdministrationPanel's last line is elided the
+   same way. Not packaging, and worth an issue of its own.
+4. **Three SLF4J warnings are printed into every installation transcript**, before the line
+   that says what the upgrade found. Cosmetic, and the first thing a person reads when an
+   installation goes wrong.
+5. **The menu entry is called `javafx-login`, not "JavaFX Login".** jpackage names it after
+   the package. The checklist now says the word to look for; a `<name>.desktop` template in
+   the resource directory is what would change it.
+
+## 7. What the two-axis review of this run found and what was done
+
+**Spec found the fix was in the wrong half of the function.** `enable_the_socket_only` read
+`is-enabled` *after* `systemctl enable --now …socket`, so the true positive it exists for —
+somebody really did enable the privileged service — would enable the socket and *then* fail
+the postinst: a machine dpkg records as half-configured and that is listening anyway, which
+§4 above has just established apt will not reinstall over. The question is now asked first
+and nothing is enabled until it has been answered, which is the same ordering, and for the
+same reason, as the migration in the postinst. `TheInstallerReadsWhatSystemdAnswersTest`
+asserts it: on the refusing path the stub `systemctl` records no `enable --now` at all.
+
+That path was then walked on the machine, which is the only place it means anything. The
+service has no `[Install]` section so `systemctl enable` will not touch it; the symlink was
+made by hand, which is exactly what the check exists to catch:
+
+```
+sudo ln -s /etc/systemd/system/javafx-login-authd.service \
+           /etc/systemd/system/multi-user.target.wants/
+sudo systemctl disable --now javafx-login-authd.socket
+sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb   # → refused, naming the unit
+systemctl is-enabled javafx-login-authd.socket                # → disabled
+ss -lx | grep javafx                                          # → nothing
+```
+
+The installation was refused and **left nothing listening**. Before the reorder it would
+have enabled the socket first and failed afterwards. Removing the symlink and
+`sudo dpkg --configure javafx-login` put the machine back: `ii`, socket enabled and
+listening, and the Administrator logged in again through the packaged window.
+
+**Spec asked why only two states are refused.** `enabled` and `enabled-runtime` are the two
+that mean systemd will start the unit at boot. `linked`, `alias`, `indirect` and `generated`
+are not that, and refusing them would be the same mistake this whole section is about in a
+narrower form — an installation stopped over a machine that is right. The reasoning is now
+written where the `case` is.
+
+**Spec is right that acceptance criterion 10 is not met**, and the table above should not be
+read as ticking it. *"Installing on a clean Ubuntu machine yields a working login without any
+manual step"* is false in two ways this run demonstrated: a group membership does not reach a
+session that already existed, which no package can fix from a postinst; and an account that
+administers the machine only through a sudoers line is not a MachineAdministrator, so the
+wizard refuses it. The first is inherent. The second is §6 item 2, and belongs to ADR-0008.
+
+**Standards found three lines over the Google 100-column limit** in the new test, and a
+fourth copy of the walk that finds `installer/linux` from wherever the suite was started.
+The lines are wrapped, and the walk is now `ShippedInstaller` — `DebianPackageTest` and
+`SystemdUnitFilesTest` were carrying their own copies and use it too. `protected-feature`
+keeps a fourth: it is another Maven module and test code does not cross between them.
+
+**Standards found a flag argument.** `enableTheSocketOnly("static", false)` said nothing at
+the call site about what `false` meant. It is two named helpers now —
+`onAMachineSystemdIsRunningOn` and `onAMachineWhoseSystemdHasNotBooted` — and the record it
+returns is `WhatItDid` rather than `Ran`.
+
+**Not done:** the shell's over-long `fail` lines, which Standards read as this file's house
+style and which predate the change; and the coupling of a comment in `install.sh` to a Java
+class name, which is the price of saying where the test is.
+
+## 8. Honest limits on what this run means
+
+- **One machine, one release of Ubuntu.** 26.04.1 with GNOME on Wayland. The `.deb` was not
+  installed on any other, and nothing here says what a different systemd would do.
+- **The application was driven over XWayland, and looked at.** Screenshots are of the real
+  X window under GNOME; the desktop root cannot be captured on Wayland, so `x11-utils`,
+  `imagemagick`, `xdotool` and `sqlite3` were installed on the machine as instruments —
+  none of them a Java runtime, and none of them installed before step 1. Mouse clicks do not
+  move keyboard focus into the JavaFX text fields under XWayland; the form was filled by Tab
+  navigation. That is a property of the harness, not a bug found in the product.
+- **The desktop session was started by GDM autologin**, and "log out and back in" was done
+  by terminating the session and rebooting, because GDM only autologins once per boot.
+- **Nothing here re-checks what the suite already covers.** The trimmed runtime, the token
+  substitution and the maintainer scripts as text are the review above.
+
+## 9. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+mvn -o -pl login-core test -Dtest='TheInstallerReadsWhatSystemdAnswersTest,SystemdUnitFilesTest,DebianPackageTest'
+
+# a build machine without fakeroot installed
+cd /tmp && apt-get download fakeroot libfakeroot
+mkdir -p fakeroot-local && dpkg-deb -x fakeroot_*.deb fakeroot-local && dpkg-deb -x libfakeroot_*.deb fakeroot-local
+# a wrapper named `fakeroot` on the PATH that execs fakeroot-sysv with --lib and --faked
+PATH=/tmp/fakeroot-bin:$PATH ./installer/linux/build-deb.sh
+
+# then, on a machine nothing has been installed on
+scp target/package/dist/javafx-login_0.1.0_amd64.deb <machine>:
+# and docs/manual-checks/linux-packaging.md, top to bottom
+```

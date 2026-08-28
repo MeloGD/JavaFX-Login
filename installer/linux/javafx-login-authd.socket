@@ -25,5 +25,12 @@ SocketUser=root
 SocketGroup=javafx-login
 SocketMode=0660
 
+# The socket node goes when the unit does, which is not systemd's default. Under socket
+# activation this unit is only ever stopped by an upgrade or an uninstall, and what the
+# default leaves behind is a root-owned node in /run naming a group the purge has just
+# deleted — carrying that group's meaning to whoever is handed the gid next. It also makes
+# an uninstalled product look installed to anybody reading the path.
+RemoveOnStop=yes
+
 [Install]
 WantedBy=sockets.target

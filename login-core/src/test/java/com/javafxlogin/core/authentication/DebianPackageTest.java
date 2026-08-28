@@ -75,7 +75,7 @@ class DebianPackageTest {
           named.startsWith(PAYLOAD + "/lib/doc/"),
           () -> unit + " names documentation outside the payload: " + named);
       assertTrue(
-          Files.isRegularFile(manualChecks().resolve(fileNameOf(named))),
+          Files.isRegularFile(ShippedInstaller.manualChecks().resolve(fileNameOf(named))),
           () -> unit + " names " + named + ", which is not a document this repository has");
     }
   }
@@ -249,26 +249,10 @@ class DebianPackageTest {
 
   private static String read(String file) {
     try {
-      return Files.readString(installerDirectory().resolve(file));
+      return Files.readString(ShippedInstaller.directory().resolve(file));
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
   }
 
-  private static Path manualChecks() {
-    return installerDirectory().getParent().getParent().resolve("docs").resolve("manual-checks");
-  }
-
-  /** Walks up from wherever the suite was started until the shipped installer is found. */
-  private static Path installerDirectory() {
-    for (Path directory = Path.of("").toAbsolutePath();
-        directory != null;
-        directory = directory.getParent()) {
-      Path installer = directory.resolve("installer").resolve("linux");
-      if (Files.isDirectory(installer)) {
-        return installer;
-      }
-    }
-    throw new IllegalStateException("installer/linux is not in any directory above this one");
-  }
 }

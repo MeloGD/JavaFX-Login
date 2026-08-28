@@ -74,7 +74,8 @@ nothing would end at a login window reporting that the AuthenticationService is 
 
 ## 3. Logging in, with nothing else done to the machine
 
-Start **JavaFX Login** from the applications menu.
+Start **javafx-login** from the applications menu — jpackage names the entry after the
+package, so that is the word to look for.
 
 - [ ] The menu offers exactly one entry. There is no entry for the AuthenticationService: it
       is not something a person starts.
@@ -133,12 +134,22 @@ sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb    # → fails
 
 - [ ] The installation **fails**, and the message names both numbers: the version found and
       the version this build understands.
-- [ ] Nothing is listening: `ls /run/javafx-login-authd.sock` finds nothing, and starting the
-      application reports the service as not running rather than opening a login window.
-      The refusal happens before the machine is wired, on purpose — a refused upgrade must
-      leave nothing for anybody to connect to rather than a service that dies on activation.
-- [ ] Put it back — `sudo sqlite3 ... 'PRAGMA user_version = <the number it named>'` — and the
-      reinstall succeeds again, and the socket is listening once more.
+- [ ] Nothing is listening: `ss -lx | grep javafx` finds nothing, `/run/javafx-login-authd.sock`
+      is gone with the unit that made it, and starting the application reports the service as
+      not running rather than opening a login window. The refusal happens before the machine
+      is wired, on purpose — a refused upgrade must leave nothing for anybody to connect to
+      rather than a service that dies on activation.
+- [ ] Put it back, and finish the configuration dpkg left half-done:
+
+      ```
+      sudo sqlite3 /var/lib/javafx-login/credentials.db 'PRAGMA user_version = <the number it named>'
+      sudo dpkg --configure javafx-login
+      ```
+
+      `apt install --reinstall` is **not** the way back: a package whose postinst failed is
+      half-configured, and apt refuses it with `Internal Error, No file name for
+      javafx-login:amd64` rather than running the postinst again. dpkg is what re-runs it.
+- [ ] It succeeds, `dpkg -l javafx-login` reads `ii`, and the socket is listening once more.
 
 This is the downgrade path, and it must fail here rather than at the next login: under socket
 activation a service that refuses to start is indistinguishable from one nobody has connected
@@ -155,8 +166,10 @@ sudo apt remove javafx-login
 
 - [ ] It says `/var/lib/javafx-login` has been kept, and names what is in it.
 - [ ] `/opt/javafx-login` is gone; `/var/lib/javafx-login` is still there, still `0700`.
-- [ ] `systemctl is-enabled javafx-login-authd.socket` → the unit is gone, and nothing is
-      listening on `/run/javafx-login-authd.sock`.
+- [ ] `systemctl is-enabled javafx-login-authd.socket` → the unit is gone, nothing is
+      listening, and `/run/javafx-login-authd.sock` is gone too. `RemoveOnStop=` in the socket
+      unit is what takes the node with it; systemd's default would leave a root-owned socket
+      in `/run` naming the product's group on a machine the product has left.
 - [ ] The menu entry is gone.
 
 Then install it again and log in as the same Administrator:
@@ -175,7 +188,9 @@ sudo apt purge javafx-login
       every authentication ever attempted — and that a Backup taken earlier is the only copy
       that survives.
 - [ ] `/var/lib/javafx-login` is gone.
-- [ ] `getent group javafx-login` names nothing.
+- [ ] `getent group javafx-login` names nothing, and `ls /run/javafx-login-authd.sock` finds
+      nothing. A socket node left behind here would name a gid the `groupdel` above has just
+      freed, and would go on meaning it to whoever is handed that gid next.
 
 _Covered automatically:_ that only the purge destroys anything, and that it says what —
 `DebianPackageTest`.
