@@ -7,3 +7,7 @@ target/
 # Scratch worktrees. Tracking these recorded them as gitlinks pinned to stale
 # commits, which every merge then dragged along.
 .claude/worktrees/
+
+# Scripts for reaching the machines the manual checks run on. They hold that machine's
+# sudo password, and a password in a repository is a password everybody has.
+tools/
