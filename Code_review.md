@@ -3402,3 +3402,54 @@ sudo apt install imagemagick x11-utils xdotool sqlite3 ydotool
 sudo ydotoold --socket-path=/tmp/.ydotool_socket --socket-own=$(id -u):$(id -g) &
 # then docs/manual-checks/linux-packaging.md, top to bottom
 ```
+
+# What the packaging work left open (issue #17, closed)
+
+Issue #17 is closed and all ten of its acceptance criteria were met on a machine. None of
+what follows was a packaging fault and none of it blocked that. It is written down here
+because two hand-runs of `docs/manual-checks/linux-packaging.md` are where it was found, and
+a list that lives only in a closed ticket's comment is a list nobody reads again.
+
+| | What | Where | Why it matters | Weight |
+|---|---|---|---|---|
+| 1 | `/usr/share/doc/javafx-login/copyright` does not exist | `build-deb.sh`; jpackage puts it at `/opt/javafx-login/share/doc/copyright` | The licence obligation is met — the file is there, it names OpenJDK and OpenJFX under GPLv2+CE, and the checklist reads it. Debian policy §12.5 puts it under `/usr/share/doc/<package>/`, which is where `lintian` (`no-copyright-file`), `licensecheck` and anybody auditing the machine look | Medium-low |
+| 2 | The wizard elides the sentence that says what to do | `login-ui`, `FirstRunWizard` and `AdministrationPanel` | When it refuses somebody who does not administer the machine, the remedy is cut off with "…" and the window does not grow to fit it. That is the one moment a person is stuck and reading | Medium |
+| 3 | Three SLF4J warnings head every installation transcript | The `postinst` runs the launcher in its `--upgrade` mode | Cosmetic, and it is the first thing somebody reads when an installation goes wrong — before the line that says what the upgrade found | Low |
+| 4 | The menu entry is called `javafx-login` | jpackage names it after the package | A `javafx-login.desktop` in the `--resource-dir` the build already passes would change it. Presentation only, and the checklist now names the word to look for | Low |
+| 5 | A fourth copy of the walk that finds `installer/linux` | `protected-feature`'s test | Three were retired into `ShippedInstaller`; test code does not cross between Maven modules, so this one stays | Very low |
+
+## Considered and not raised: a sudoers line is not a MachineAdministrator
+
+`PosixMachineAdministrators` reads `/etc/group` for `root`, `sudo`, `wheel` and `admin`, and
+never `/etc/sudoers`. An account that administers the machine through a hand-written sudoers
+line is refused by the FirstRunWizard, which is what happened on the test machine and what
+cost that run an interruption.
+
+The owner decided not to raise it, and the reason is good: the remedy already exists and is
+documented — put the account in the group, which is what Ubuntu's own installer does anyway.
+Nothing needs to change in code for somebody to get past it, and the alternatives are worse.
+Asking `sudo -l -U` means a process running as root spawning a subprocess to ask, which that
+class avoids on purpose; parsing `sudoers` properly means aliases, netgroups and
+`#includedir`. The class errs towards refusing, which is the safe direction.
+
+What is worth knowing is that its javadoc names the directory-service case as the limit and
+not this one. If anybody ever revisits it, that sentence is where to start.
+
+## The state issue #19 inherits
+
+`installer/linux/verify-on-a-machine.sh` does not exist yet, and its ticket was written
+before either hand-run. Two things it says are no longer true of this repository:
+
+- It lists **"Installing where systemd has not booted succeeds and says what was not
+  enabled"** as a step to automate. That step was deleted from the checklist in `d1c6fdc`,
+  because installing into an image or a chroot is not a way this product is delivered. The
+  scope needs to lose it before the script is written, or the script will be the only place
+  that check exists and nothing will say why.
+- Its prerequisites ask for an account with **passwordless `sudo`**. The test machine does
+  not have one; `%sudo ALL=(ALL:ALL) ALL` asks for a password, and `sudo -n` only appears to
+  succeed when a previous `sudo` in the same session has warmed the credential cache.
+
+Two things this run learned belong in that script if it is written, and neither is in the
+ticket because neither was known when it was written: that `/run/javafx-login-authd.sock`
+is **gone** after a remove and a purge, and that the service unit is **`inactive` and not
+`failed`** after anything that stops it.
