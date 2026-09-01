@@ -121,11 +121,17 @@ Close the application. Then loosen the deployment by hand and put it back with a
 sudo chmod 0755 /var/lib/javafx-login
 sudo apt install --reinstall ./javafx-login_0.1.0_amd64.deb
 ls -ld /var/lib/javafx-login                      # → drwx------ root root again
+systemctl is-active javafx-login-authd.service    # → inactive, and never failed
 ```
 
 - [ ] The mode is `0700` and the owner is `root`, without anybody having repaired it.
 - [ ] The installation reported the CredentialStore's schema version, rather than saying there
       was nothing there.
+- [ ] The service is `inactive`, **not `failed`**. The prerm stops it, and a JVM that is asked
+      to stop ends at 143 — so without `SuccessExitStatus=` in the unit, every upgrade and
+      every removal leaves the unit failed for as long as the machine is up, and
+      `systemctl --failed` names a machine that is installed and well. Socket activation goes
+      on working either way, which is what makes it worth checking rather than noticing.
 - [ ] Log in again as the same Administrator with the same password. The Accounts, the
       configuration and the SecretVault came through the reinstall untouched.
 

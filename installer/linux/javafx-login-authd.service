@@ -38,6 +38,15 @@ StandardError=journal
 # the package runs at install time names the same file and the two must be read together.
 ExecStart=/opt/javafx-login/bin/javafx-login-authd /var/lib/javafx-login/credentials.db
 
+# This service has two normal endings and systemd only recognises one of them by default.
+# It exits 0 five minutes after the last client has gone; and it is stopped by systemd on
+# every upgrade and every removal, where the JVM ends at 143 — 128 + SIGTERM. Undeclared,
+# that second one is recorded as a failure and the unit is left failed long after the
+# installation that caused it has succeeded, so `systemctl --failed` names a machine that
+# is installed and well. Found on a machine and fixed there before it was written here:
+# without this line a `systemctl stop` leaves `failed`, with it `inactive`.
+SuccessExitStatus=143
+
 # Nothing is set about restarting, deliberately: exiting when nobody is using it is this
-# service's normal ending and the defaults already read it that way. The socket unit stays
-# listening either way, so the next connection is what starts it again.
+# service's normal ending, and the socket unit stays listening either way, so the next
+# connection is what starts it again.

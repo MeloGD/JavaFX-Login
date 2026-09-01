@@ -82,6 +82,18 @@ class SystemdUnitFilesTest {
   }
 
   @Test
+  void aServiceSystemdStoppedIsNotAServiceThatFailed() {
+    // systemd stops this service on every upgrade and every removal, and a JVM asked to stop
+    // ends at 143 — 128 + SIGTERM. Undeclared, systemd calls that a failure and leaves the unit
+    // failed long after the installation that caused it succeeded: `systemctl --failed` then
+    // names a machine that is installed and well, which is the one thing this product's Linux
+    // side is careful never to look like.
+    assertTrue(
+        declares(serviceUnit, "SuccessExitStatus=143"),
+        "a service systemd stopped must not be left failed: 143 is what SIGTERM ends a JVM at");
+  }
+
+  @Test
   void theServiceIsHandedTheListeningSocketOnFileDescriptorZero() {
     assertTrue(declares(serviceUnit, "StandardInput=socket"));
   }

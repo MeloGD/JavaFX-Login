@@ -3275,3 +3275,130 @@ PATH=/tmp/fakeroot-bin:$PATH ./installer/linux/build-deb.sh
 scp target/package/dist/javafx-login_0.1.0_amd64.deb <machine>:
 # and docs/manual-checks/linux-packaging.md, top to bottom
 ```
+
+# Manual check re-run — Linux packaging on a machine nobody had installed on (issue #17)
+
+Branch `dev-login`, on top of `d1c6fdc`. The run before this one found the installer bug and
+fixed it, but it found it *by being the first installation*, and everything after that was
+verified on a machine that had been purged rather than one that had never seen the product.
+This is the checklist run again, start to finish, on a machine restored to a snapshot taken
+before any of it — with the `.deb` that carries every fix.
+
+## 1. What the machine was, and what was done to it before step 0
+
+Ubuntu 26.04.1, GNOME 50.1 on Wayland, restored from a snapshot. Verified clean rather than
+assumed: no `/opt/javafx-login`, no `/var/lib/javafx-login`, no group, no units, no socket
+node, no menu entry, and `dpkg-query` did not know the package.
+
+Two things about the account, both the owner's doing and both deliberate. `test_user` is now
+in the `sudo` **group**, and the hand-written `test_user ALL=(ALL:ALL) ALL` line is gone from
+`/etc/sudoers` — so administrative rights come from group membership, which is what Ubuntu's
+own installer produces. The previous run had to add the group membership mid-checklist to get
+past ADR-0008; this one starts from a machine that simply looks like a stock Ubuntu. The
+narrowness of `PosixMachineAdministrators` — a sudoers line is not a MachineAdministrator to
+it — is unchanged and is still worth an issue of its own, and this run no longer papers over
+it by adjusting the machine to fit.
+
+Instrumentation was installed **once, before step 0**, and declared rather than appearing
+mid-checklist as it did last time: `imagemagick`, `x11-utils`, `xdotool`, `sqlite3`,
+`ydotool`. The claim that matters is stronger than last time and was measured: **there is no
+Java on that machine at all** — nothing named `java` on the `PATH`, and zero installed
+packages matching `openjdk|jre|jdk`. Whatever ran, ran on the runtime inside the `.deb`.
+
+## 2. What it found: a unit left failed on a machine that is well
+
+Every step passed, and then the final state of the machine did not:
+
+```
+systemctl is-active javafx-login-authd.service   → failed
+Main PID: 9171 (code=exited, status=143)
+javafx-login-authd.service: Failed with result 'exit-code'.
+```
+
+143 is 128 + SIGTERM. The `prerm` stops this service on **every upgrade and every removal**,
+systemd sends SIGTERM, and the JVM ends at 143. Undeclared, systemd records that as a failure
+and leaves the unit `failed` for as long as the machine is up — long after the installation
+that caused it has reported success. `systemctl --failed` then names a machine that is
+installed and well.
+
+It is not fatal: the socket keeps listening and the next connection starts the service again,
+which is exactly why it survived a whole checklist unnoticed. It is also the precise shape of
+mistake the rest of this product's Linux side is built to avoid — installed and healthy,
+reading as broken — and the two units, the maintainer scripts and the client's startup
+diagnostics all exist to stop a person meeting one of those.
+
+Cause and fix were isolated on the machine before either was written down:
+
+| after `systemctl stop`, which is what the prerm does | unit state |
+|---|---|
+| the unit as it shipped | `failed` |
+| with `SuccessExitStatus=143` | `inactive` |
+
+`SuccessExitStatus=143` is now in the service unit, and the comment there says the thing the
+old one got wrong: this service has **two** normal endings, not one. It exits 0 five minutes
+after the last client has gone — which the previous comment described, correctly — and it is
+stopped by systemd on every upgrade, which that comment claimed "the defaults already read
+that way" and they do not.
+
+`aServiceSystemdStoppedIsNotAServiceThatFailed` holds the unit to it. Step 5 of the checklist
+now asks the question on the machine, because that is the step where the prerm stops a running
+service and the state survives to be looked at.
+
+## 3. The ten steps, on the rebuilt package
+
+| Step | Result |
+|---|---|
+| 0. Build | 55 MB, no skipped bundler, all 186 entries `root/root`, suite green |
+| 1. First installation | No error, nothing asked; group created with the installing account in it; `/var/lib/javafx-login` `drwx------ root root` and **empty**; socket `enabled`, service `static`; exactly one menu entry; said there was no CredentialStore **before** it touched the machine |
+| 2. The one manual step | The desktop session that predated the install had `sudo test_user`; after logging out and back in, `sudo javafx-login test_user` |
+| 3. Logging in | Wizard in Spanish; it **refused the first password** — *"La contraseña necesita algún carácter especial"*, the policy doing its job — and created the Administrator with a compliant one; login reached the AdministrationPanel; the selector says **Español** |
+| 4. Socket activation | `TriggeredBy=javafx-login-authd.socket`; `srw-rw---- root javafx-login` on the path the unit declares; the service was never `enabled` |
+| 5. Reinstalling | `0755` set by hand came back `drwx------ root root`; five files **byte-identical**; reported "schema version 6"; **service `inactive`, not `failed`**; same Administrator, same password |
+| 6. A store from a later build | Refused, naming 99 and 6; `/run/javafx-login-authd.sock` **gone with the unit**; the application said the service is not running. `apt --reinstall` → `Internal Error, No file name`; `dpkg --configure` → `ii`, listening again |
+| 7. Removing | Said what it kept; `/opt` gone, `/var/lib` still `0700`, unit gone, menu entry gone, group kept; after reinstalling, the deployment was **byte-identical** and the same Administrator logged in |
+| 8. Purging | Named every kind of thing it destroyed before destroying it; directory, group, units, socket node and menu entry all gone; `dpkg-query` no longer knows the package |
+| 9. Attribution | Both files present, both naming OpenJDK 21 and OpenJFX 21.0.12 under GPLv2 with the Classpath Exception |
+
+The two fixes the previous run made blind are confirmed on a machine: `RemoveOnStop=yes`
+takes the socket node with the unit, and `dpkg --configure` is the way back from a refused
+upgrade where `apt install --reinstall` is not.
+
+After the fix, the failing scene was walked again from a purge: install, create the
+Administrator, leave the service running, reinstall over it. `inactive`, and
+`systemctl --failed` names nothing — on the reinstall path and on the `apt remove` path both.
+
+## 4. Honest limits, again
+
+- **One machine, one release.** Ubuntu 26.04.1. Nothing here says what a different systemd
+  would do.
+- **The desktop was driven, not used.** GDM autologin, and screenshots by `import` on the
+  app's own X window. Two things cost real time and neither is a fault in this product: the
+  session **locks after five minutes** and everything sent goes to the lock screen instead of
+  the application; and GNOME 50 starts Xwayland with `-enable-ei-portal`, so **XTEST delivers
+  nothing** without a remote-desktop grant — `xdotool` exits 0 and `xev` sees not one key.
+  XSendEvent does reach X clients and JavaFX ignores it. `ydotool`, injecting at the device
+  level, is what works. Anybody repeating this should disable the idle lock first.
+- **The password typed avoids most punctuation.** `ydotool` emits Linux keycodes and the
+  session has a Spanish layout, where `-` and `/` are not where a US layout puts them.
+  Letters, digits and `.` do not move.
+- **What is still open is open elsewhere.** `/usr/share/doc/javafx-login/copyright` does not
+  exist (the licence obligation is met at `/opt/javafx-login/share/doc/copyright`; Debian
+  policy §12.5 is not); the wizard elides the sentence that says what to do when it refuses
+  somebody; three SLF4J warnings head every installation transcript; and
+  `PosixMachineAdministrators` does not read `/etc/sudoers`. None of the four is a packaging
+  fault and none blocks this ticket.
+
+## 5. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+PATH=/tmp/fakeroot-bin:$PATH ./installer/linux/build-deb.sh
+
+# on a machine nothing has been installed on, from an account in the sudo group
+gsettings set org.gnome.desktop.screensaver lock-enabled false   # or everything below fails
+gsettings set org.gnome.desktop.session idle-delay 0
+sudo apt install imagemagick x11-utils xdotool sqlite3 ydotool
+sudo ydotoold --socket-path=/tmp/.ydotool_socket --socket-own=$(id -u):$(id -g) &
+# then docs/manual-checks/linux-packaging.md, top to bottom
+```
