@@ -71,9 +71,11 @@ class TheInstallerReadsWhatSystemdAnswersTest {
 
   @Test
   void aMachineWhoseSystemdHasNotBootedIsToldWhatWasNotDone() throws Exception {
-    // A container image being built, or a chroot: systemctl is there and nothing was booted.
-    // Enabling anything is impossible and failing would make the package unbuildable into an
-    // image, so the one honest ending is to say what is left to do.
+    // A chroot, a rescue shell, an image being built: systemctl is there and nothing was
+    // booted. Enabling anything is impossible, and this product is installed by hand on a
+    // booted machine — so none of those is a state it promises to work in, and none of them
+    // is worth failing an installation over either. The honest ending is to do everything
+    // that does not need systemd and say what is left.
     WhatItDid ran = onAMachineWhoseSystemdHasNotBooted();
 
     assertEquals(

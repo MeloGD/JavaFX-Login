@@ -3142,8 +3142,23 @@ socket listening, nothing lost. The checklist now says so, and says why.
 | 6. A store from a later build | Refused, naming both numbers — "is at schema version 99, but this build understands only version 6". Nothing listening, and the application said *"El servicio de autenticación no está en marcha"* instead of opening a login window |
 | 7. Removing | Said what it kept; `/opt/javafx-login` gone, `/var/lib/javafx-login` still `0700`, unit gone, menu entry gone, group kept. Installed again: the deployment was byte-identical and the same Administrator logged in |
 | 8. Purging | Named every kind of thing it destroyed before destroying it; directory gone, group gone, socket node gone |
-| 9. A machine whose systemd has not booted | **Not run.** No container image or chroot was built for it. The branch is now covered by `TheInstallerReadsWhatSystemdAnswersTest` instead, which is a test of the script and not of a machine |
-| 10. Attribution | Both files present; both name OpenJDK 21 and OpenJFX 21.0.12 under GPLv2 with the Classpath Exception, with the source locations |
+| 9. Attribution | Both files present; both name OpenJDK 21 and OpenJFX 21.0.12 under GPLv2 with the Classpath Exception, with the source locations |
+
+The step that used to be ninth — installing into a chroot or a container image — is **gone
+rather than skipped**. It was written conditionally ("only worth running if this product is
+ever installed into a container image or a chroot") and nothing had ever decided that it was:
+no ADR, no line in `CONTEXT.md`, nothing in issue #17. The owner has since said plainly that
+this product is installed by hand, by a person, on the machine they are sitting at, and that
+nothing automated deploys it. A checklist step for a delivery mode that does not exist is a
+step nobody will ever run, and a checklist with one of those in it teaches people to skip
+steps. `install.sh` keeps its branch for a `systemctl` that cannot run — three lines, covered
+by `TheInstallerReadsWhatSystemdAnswersTest` — but it is now written down as defence against
+a machine in a state nobody meant to be in, not as a promise that installing into an image
+works. Making it a promise is an ADR before it is code.
+
+The review above ends its third finding with "Checklist §9", and that pointer now has
+nothing to point at. It is left as it was written: that section is the record of a review
+that happened, and the step it named was real when it named it.
 
 ## 6. Left standing, for a final reviewer
 

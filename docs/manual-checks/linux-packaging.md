@@ -10,6 +10,14 @@ honest version of this — from an ordinary account that can `sudo`. Half of wha
 checked is that a person who installs this product can then log into it without being told
 one more thing to do.
 
+A booted machine is the only thing checked here, and that is the whole of how this product
+is delivered: somebody installs the `.deb` by hand on the machine they are sitting at. It is
+not baked into images and nothing automated deploys it, so there is no chroot step below and
+there is no need for one. `install.sh` does have a branch for a `systemctl` that cannot run —
+it puts the group, the directory and the units in place and says what it could not enable —
+but that is defence against a machine in a state nobody meant to be in, not a promise that
+installing into an image works. A build that ever needs that promise needs an ADR first.
+
 Work top to bottom: every step depends on the state the one before it left.
 
 ---
@@ -195,22 +203,7 @@ sudo apt purge javafx-login
 _Covered automatically:_ that only the purge destroys anything, and that it says what —
 `DebianPackageTest`.
 
-## 9. A machine whose systemd has not booted
-
-Only worth running if this product is ever installed into a container image or a chroot,
-where `systemctl` is present and nothing has been booted:
-
-```
-sudo chroot <an image with the package> apt install ./javafx-login_0.1.0_amd64.deb
-```
-
-- [ ] The installation succeeds. The group, the state directory and both unit files are in
-      place, and it said plainly that nothing was enabled and which command enables it.
-
-An installation that failed here would be a package that cannot be built into an image; one
-that claimed success without saying anything would be an image with a socket nobody enabled.
-
-## 10. The attribution the licences require
+## 9. The attribution the licences require
 
 ```
 cat /opt/javafx-login/share/doc/copyright                  # before the purge above

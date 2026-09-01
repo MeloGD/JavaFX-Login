@@ -47,10 +47,16 @@ require_systemd() {
 }
 
 systemd_is_running() {
-  # Installed and running are different questions. A container image being built, or a
-  # chroot, has the units and the group and everything else this script puts in place, and
-  # a systemctl that refuses because nothing was booted. Everything that does not need a
-  # running systemd is still done there, and what is left is said out loud.
+  # Installed and running are different questions: a machine can have systemctl and have
+  # booted nothing — a chroot, a rescue shell, an image being built. Everything that does
+  # not need a running systemd is still done there, and what is left is said out loud
+  # rather than failing the installation over it.
+  #
+  # This is defence and not a promise. This product is installed by hand, by a person, on
+  # the booted machine they are sitting at; nothing here claims that building it into an
+  # image works, and docs/manual-checks/linux-packaging.md has no step for it because that
+  # is not a way this product is delivered. Making it one would be an ADR before it was
+  # code.
   [[ -d /run/systemd/system ]]
 }
 
