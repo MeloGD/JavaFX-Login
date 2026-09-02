@@ -5,6 +5,11 @@ what systemd does with a process rather than what the process computes. What *is
 automatically is named under each step, so that this checklist covers the machine and
 nothing else.
 
+Most of what is below is now run by `installer/linux/verify-on-a-machine.sh`, which is worth
+starting with: it takes a throwaway machine from a build to a purge and says, per step, what it
+expected and what it found. What it does not cover is marked under the section it belongs to, and
+this document is still the whole list — a script only checks what somebody already knew to check.
+
 Run it on a machine the product has been installed on with `installer/linux/install.sh`,
 from an ordinary account that is a member of the `javafx-login` group — **not** from a root
 shell, and not with `sudo` in front of the client. Half of what is being checked here is
@@ -17,18 +22,27 @@ Work top to bottom: several steps depend on the state the one before it left.
 ## 0. The product is where the unit says it is
 
 ```
-ls -l /opt/javafx-login/runtime/bin/java   # → executable
-ls    /opt/javafx-login/lib/*.jar          # → at least one
-ls -ld /var/lib/javafx-login               # → drwx------ root root
+ls -l /opt/javafx-login/bin/javafx-login-authd   # → executable, and what ExecStart= names
+ls    /opt/javafx-login/lib/app/*.jar            # → at least one
+ls -l /opt/javafx-login/lib/runtime/bin/java     # → the runtime the package ships
+ls -ld /var/lib/javafx-login                     # → drwx------ root root
 ```
 
 - [ ] The launcher named by `ExecStart=` exists and is executable.
 - [ ] The state directory is root-owned and `0700`: nothing unprivileged may read the
       CredentialStore, the SecretVault, the Lockout records or the AuthenticationEvents.
 
+Those are the paths a package leaves: jpackage puts the jars and the trimmed runtime under the
+image's `lib/`, and the launcher in `bin/`. A hand-assembled payload on a development machine has
+the same shape, because `install.sh` refuses one that has not.
+
 `install.sh` refuses to enable anything when the first of these is missing, because the
 failure it would otherwise cause is the quiet one: a socket that listens, and an activation
 that dies on `ExecStart` the first time somebody tries to log in.
+
+_Covered by `verify-on-a-machine.sh`:_ both boxes. It reads the launcher out of the unit's
+`ExecStart=` rather than writing the path out again, which is the same thing `install.sh` does and
+for the same reason.
 
 ## 1. Before anything has connected
 
@@ -48,6 +62,9 @@ the design is gone: there is a privileged JVM up on a machine nobody has logged 
 _Covered automatically:_ that the shipped `.service` has no `[Install]` section at all —
 `SystemdUnitFilesTest.onlyTheSocketIsEnabledAtBoot`.
 
+_Covered by `verify-on-a-machine.sh`:_ both boxes, on a machine that has just been installed on
+and never connected to.
+
 ## 2. The socket's ownership and mode are what was declared
 
 ```
@@ -65,6 +82,8 @@ other permissions — there is no window here to lose a race in.
 _Covered automatically:_ that the unit declares `SocketUser=`, `SocketGroup=` and
 `SocketMode=` — `SystemdUnitFilesTest.theSocketsOwnershipAndModeAreDeclaredRatherThanLeftToUmask`.
 
+_Covered by `verify-on-a-machine.sh`:_ both boxes, against the node systemd actually made.
+
 ## 3. Connecting starts the service, and the connection waits
 
 Start the application (or any client that connects to the socket) and time the first
@@ -80,6 +99,12 @@ The connection waits in the socket's backlog while the JVM boots. The spike meas
 for the first round trip on Ubuntu 26.04; anything of that order is right, and a *failure*
 to connect is the thing to stop on.
 
+_Covered by `verify-on-a-machine.sh`:_ every box, with a client of its own rather than the
+packaged application — it asserts the service was `inactive` before the connection and `active`
+after it, and that the journal has something to say since. The round trip is not timed: what that
+number would mean on a machine nobody chose is nothing, and a failure to connect is the thing
+this stops on too.
+
 ## 4. One process serves several Sessions in turn
 
 With the client still connected, log in, log out and log in again — three Sessions.
@@ -90,6 +115,9 @@ systemctl show -p MainPID --value javafx-login-authd.service
 
 - [ ] The PID is the same before and after all three, so `Accept=no` is doing what it says:
       one process, not one JVM per connection.
+
+_Covered by `verify-on-a-machine.sh`:_ the box, with three Sessions over one connection spoken to
+the socket.
 
 ## 5. Diagnostics reach the journal and never the client
 
@@ -106,6 +134,11 @@ is inheriting the socket. That is the trap this step exists for.
 
 _Covered automatically:_ that the unit sets both streams to the journal —
 `SystemdUnitFilesTest.theServicesDiagnosticsGoToTheJournalAndNotIntoAClientConnection`.
+
+_Covered by `verify-on-a-machine.sh`:_ both boxes. The second one it gets for nothing: every
+answer its client read was decoded by the shipped `MessageCodec`, which refuses anything that is
+not a message of the catalogue, so a JVM warning written into the connection would have ended the
+run rather than been read past.
 
 ## 6. It stops by itself once nobody is using it
 
@@ -126,6 +159,12 @@ watch -n 30 systemctl is-active javafx-login-authd.service
 _Covered automatically:_ the countdown itself and what counts as being in use —
 `IdleShutdownTest`, and `ServiceStopsWhenNobodyIsUsingItTest` over a real socket.
 
+_Covered by `verify-on-a-machine.sh`:_ every box but the second. It waits the five minutes out and
+refuses an exit that arrived in under four, so an exit that was never an idle shutdown is not read
+as one. **Whether it stays up while an idle client is still connected stays here, for a person**:
+answering it costs another five minutes of a script that is already the slow part of the run, and
+the honest version of it is somebody sitting at a login window.
+
 ## 7. It comes back, repeatedly
 
 - [ ] Connect again: the service starts, the PID is a new one, and the client is answered.
@@ -134,6 +173,11 @@ _Covered automatically:_ the countdown itself and what counts as being in use �
 An activation that works once and not twice usually means the socket was removed by the
 service on the way out. Nothing that adopted an inherited channel may delete the socket
 file: it belongs to systemd and is what the next activation arrives on.
+
+_Covered by `verify-on-a-machine.sh`:_ the first box — the service comes back on the next
+connection, with a new PID. **The third cycle stays here**: the script goes on to reinstall,
+remove and reinstall again, each of which starts it once more, so what a fourth idle exit would
+add is another five minutes and no new answer.
 
 ## 8. Nothing was remembered across the idle exit
 

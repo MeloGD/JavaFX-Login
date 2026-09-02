@@ -5,6 +5,12 @@ being checked is what a machine is left like rather than what any code computes.
 tested automatically is named under each step, so that this checklist covers the machine and
 nothing else. `DebianPackageTest` holds the maintainer scripts to what is written below.
 
+Most of what is below is now run by `installer/linux/verify-on-a-machine.sh`, which is worth
+starting with: it takes a throwaway machine from a build to a purge and says, per step, what it
+expected and what it found. What it does not cover is marked under the section it belongs to, and
+this document is still the whole list — a script only checks what somebody already knew to check,
+and neither defect the first two hand-runs of this found would have been caught by one.
+
 Run it on a machine nothing has been installed on — a fresh Ubuntu virtual machine is the
 honest version of this — from an ordinary account that can `sudo`. Half of what is being
 checked is that a person who installs this product can then log into it without being told
@@ -40,6 +46,10 @@ ls target/package/dist/*.deb
 _Covered automatically:_ that the launcher the `.service` unit starts runs on the runtime that
 was just linked — `build-deb.sh` asks it, in its upgrade mode, before it packages anything.
 
+_Covered by `verify-on-a-machine.sh`:_ both boxes, and that every entry in the `.deb` is
+`root/root`. It builds with `--skip-tests`, because what the suite says is a build-machine
+question and that script is only ever about what a machine is left like.
+
 ## 1. A first installation
 
 ```
@@ -58,6 +68,11 @@ sudo apt install ./javafx-login_0.1.0_amd64.deb
 
 _Covered automatically:_ that the upgrade mode creates nothing where there is nothing —
 `UpgradeBringsTheFilesForwardTest`.
+
+_Covered by `verify-on-a-machine.sh`:_ every box, and two more — that both units are installed,
+and that exactly one `.desktop` entry is registered and it is not the AuthenticationService's. It
+performs the installation with `SUDO_USER` set, which is how sudo says who an installation was
+for, so the group membership is a real one rather than the one a root shell would leave.
 
 ## 2. The one manual step there is
 
@@ -138,6 +153,12 @@ systemctl is-active javafx-login-authd.service    # → inactive, and never fail
 An upgrade that quietly loosened that directory would take away the only real security
 property this product has, and everything would go on working.
 
+_Covered by `verify-on-a-machine.sh`:_ every box, and that the files under
+`/var/lib/javafx-login` come through **byte-identical**. It leaves the service running when the
+reinstall starts, on purpose: the `prerm` is what stops it, and stopping it is the only thing that
+exercises `SuccessExitStatus=143`. The last box it answers by logging in over the socket rather
+than through the window — whether a person gets a window stays here.
+
 ## 6. A store from a later build stops the installation
 
 ```
@@ -172,6 +193,10 @@ to yet.
 _Covered automatically:_ the refusal and the two numbers in it —
 `UpgradeBringsTheFilesForwardTest`, `CredentialStoreSchemaTest`.
 
+_Covered by `verify-on-a-machine.sh`:_ every box, including that `apt install --reinstall` is not
+the way back — it asserts that the reinstall fails and that the machine is still not `ii` after
+it, rather than trusting the sentence above.
+
 ## 7. Removing keeps the deployment
 
 ```
@@ -191,6 +216,10 @@ Then install it again and log in as the same Administrator:
 - [ ] The Accounts, their passwords, the Lockout state and the AuthenticationEvents are all
       where they were. A reinstall is not a way to lose a deployment.
 
+_Covered by `verify-on-a-machine.sh`:_ every box. The last one it answers twice — the deployment
+is byte-identical after the second installation, and the same Administrator logs in again over the
+socket with the same password.
+
 ## 8. Purging destroys it, and says so
 
 ```
@@ -208,6 +237,9 @@ sudo apt purge javafx-login
 
 _Covered automatically:_ that only the purge destroys anything, and that it says what —
 `DebianPackageTest`.
+
+_Covered by `verify-on-a-machine.sh`:_ every box, and that `dpkg-query` no longer knows the
+package. It is the last step that script runs, and the state it leaves the machine in.
 
 ## 9. The attribution the licences require
 
