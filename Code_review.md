@@ -3453,3 +3453,230 @@ Two things this run learned belong in that script if it is written, and neither 
 ticket because neither was known when it was written: that `/run/javafx-login-authd.sock`
 is **gone** after a remove and a purge, and that the service unit is **`inactive` and not
 `failed`** after anything that stops it.
+
+# Making the Linux checklists runnable (issue #19)
+
+Branch `dev-login`, on top of `ff6bc6d`. `installer/linux/verify-on-a-machine.sh` did not exist;
+it does now, with the class it speaks the protocol with, two tests that hold it to the documents
+it automates, and the annotations that make those documents say what it covers.
+
+## 1. What the thing is, and what it deliberately is not
+
+**It is not for discovery, and the ticket says so before it says anything else.** Both checklists
+were run by hand twice under #17. The two defects those runs found — `is-enabled` read as an exit
+status, and a unit left `failed` on a healthy machine — are in the checklists *now* because they
+were found, and a script would have caught neither. The first broke every installation and was
+impossible to miss; the second survived a whole hand-run and surfaced because a person looked at a
+status line nothing had asked them to look at.
+
+**It is for regression, and the case for that is arithmetic.** Every automated test in this
+repository reads the installer as text: `DebianPackageTest`, `SystemdUnitFilesTest`,
+`TheInstalledSocketIsTheOneSystemdListensOnTest`, `TheInstallerReadsWhatSystemdAnswersTest`. Not
+one of them installs anything. The distance between a green build and a working machine is the
+whole risk surface of the packaging, and nothing was watching it between releases.
+
+## 2. The design decision the ticket asked to be made first
+
+Several steps assert a deployment survives byte for byte, and by ADR-0017 the package never makes
+one — only the FirstRunWizard does, and the wizard is out of scope. The ticket named three ways
+out and recommended the first.
+
+**Taken: speak the protocol.** `installer/linux/verify/SpeakTheProtocol.java` is compiled by the
+JDK that built the package, against the jars the package installed, and run on the runtime the
+package installed. It performs the bootstrap over `/run/javafx-login-authd.sock` as any client
+would: the kernel names it as the Peer, and root is a MachineAdministrator, which is the whole of
+what ADR-0008 asks of whoever creates the Administrator.
+
+That decision is worth what it costs, and the cost is a `javac` on the machine. The script builds
+the `.deb` there anyway — the build is the ticket's first in-scope step — so a JDK is a
+requirement the run already had. What is bought is that **"preserved" in the report means an
+Administrator that really logs in again afterwards, with the same password, over the same
+socket** — rather than a set of files that happened to still be there, which is all the cheap
+option would have given.
+
+## 3. What the two tests are for
+
+Neither tests a machine. Both test the two things about this script a suite can reach.
+
+**`TheMachineVerifierRefusesADeploymentItDidNotMakeTest`** sources the script and asks
+`refuse_a_deployment_this_script_did_not_make` about five directories: one holding a deployment
+with no mark, one holding the same deployment with the mark, an absent directory, an empty one,
+and one holding the mark and nothing else. The script purges as its last step. The mark it leaves
+is the whole of how it tells its own deployments apart, and there is deliberately no flag that
+overrides the refusal — a machine holding a real deployment is one somebody should be taking a
+Backup off, not arguing with a script about.
+
+**`TheMachineVerifierAndTheChecklistsNameEachOtherTest`** holds the script and the two documents
+together in three directions, because there are three ways they can part:
+
+| Direction | What it catches |
+|---|---|
+| Every step names a section that exists | a section renamed, with nothing to say the script now cites a heading nobody wrote |
+| Every covered section says the script covers it | a person running the checklist by hand not knowing which boxes a machine has already answered |
+| No section claims cover the script has stopped having | the worse one: a box nobody ticks because a machine was said to be ticking it |
+
+All three were confirmed to fail by renaming one heading, and the refusal test by short-circuiting
+the refusal.
+
+## 4. What was found while writing it, on this machine rather than the test one
+
+The `.deb` was built here and taken apart, and the client was run end to end against the packaged
+service on a bound socket. Four things that would each have failed a first run:
+
+1. **The bootstrap password did not satisfy the `PasswordRules`.** `verify-on-a-machine-9134` was
+   refused with `PASSWORD_WITHOUT_UPPERCASE`, and the whole run after the bootstrap would have
+   failed with it. It is `Verify-On-A-Machine-9134` now — the length, an upper case, a digit and a
+   symbol. The AuthenticationService applies the policy to the bootstrap like any other password,
+   which is right and is not something a verification script gets an exemption from.
+2. **The bootstrap is answered with `Ok`, not `Granted`.** The step asserted the word `granted`.
+3. **Six checks whose `expected` could never equal what they reported as `found`.** Every one had
+   the shape `expected "one .deb"` against `found "one .deb: javafx-login_0.1.0_amd64.deb"` — the
+   detail was being appended to the found half of a string equality. They would all have failed on
+   a machine that was perfectly right. The detail now goes in the description, where it belongs,
+   and both halves compare.
+4. **A `set -e` trap in the idle loop.** `((waited % 60 == 0)) && note …` as the last statement of
+   a `while` body exits the script the first time the arithmetic is false.
+
+None of those is a defect in the product. All four are why a script like this is written against a
+machine and not against a reading of one.
+
+**And one thing about the product, small and worth writing down:** `linux-service-activation.md`
+§0 named `/opt/javafx-login/runtime/bin/java` and `/opt/javafx-login/lib/*.jar`. jpackage puts
+both under the image's `lib/` — `lib/runtime/bin/java` and `lib/app/*.jar` — which is what
+`install.sh`'s own `require_payload` already checks for. The paths predate the package and are
+corrected here; nothing in code was wrong.
+
+## 5. What it covers, and what it leaves for a person
+
+`linux-packaging.md` §§0, 1, 5, 6, 7, 8 and `linux-service-activation.md` §§0–7. Fourteen steps,
+in the order the documents put them, on one machine, ending in a purge.
+
+**Not covered, and why, in each document under the section it belongs to:**
+
+| Left for a person | Why |
+|---|---|
+| packaging §2, §3 — the log-out, the wizard, the window, `Español` in the selector | needs a screen and a person. `TheTrimmedRuntimeCarriesEveryOfferedLanguageTest` already fails when a language the selector offers has no locale data |
+| packaging §4 | it is about the *packaged application* connecting; the script uses a client of its own, and claiming it would be claiming the window |
+| packaging §9 | `DebianPackageTest` already holds it, and it is not in the ticket's scope |
+| activation §6, second box — that it stays up while an idle client is connected | another five minutes on the slow step of the run, and the honest version is somebody at a login window |
+| activation §7, the third cycle | the script reinstalls, removes and reinstalls after it, each of which starts the service again |
+| activation §8 | not in the ticket's scope |
+| Installing where systemd has not booted | deleted from the checklist in `d1c6fdc`; not a way this product is delivered |
+| Driving the wizard on Xvfb | in the ticket's original scope, and out by its rewrite: duplicates cover this repository has |
+
+## 6. Reproducing
+
+```bash
+# from the repo root, on branch dev-login
+mvn -o clean test
+mvn -o -pl login-core test -Dtest='TheMachineVerifierRefusesADeploymentItDidNotMakeTest,TheMachineVerifierAndTheChecklistsNameEachOtherTest'
+bash -n installer/linux/verify-on-a-machine.sh
+
+# what was checked here, short of a machine: the package, and the client against it
+PATH=/tmp/fakeroot-bin:$PATH ./installer/linux/build-deb.sh --skip-tests
+dpkg-deb -c target/package/dist/javafx-login_0.1.0_amd64.deb | awk '{print $2}' | sort -u   # → root/root
+IMG=target/package/image/javafx-login
+javac -d /tmp/verify-client -cp "$IMG/lib/app/*" installer/linux/verify/SpeakTheProtocol.java
+"$IMG/bin/javafx-login-authd" /tmp/vdep/credentials.db --socket /tmp/vdep.sock &
+"$IMG/lib/runtime/bin/java" -cp "/tmp/verify-client:$IMG/lib/app/*" SpeakTheProtocol /tmp/vdep.sock \
+    bootstrap verifier 'Verify-On-A-Machine-9134'
+```
+
+## 7. The honest limit on all of the above
+
+**The script has not been run on a machine.** Everything in §4 was found by building the package
+here, running the client against the packaged service over a bound socket, and reading the script
+against what the machine transcripts in this file already record. What has not happened is the run
+the ticket's last criterion asks for: on `test_user@10.200.13.21`, rolled back to before the
+tooling #17 put on it, which is what would prove the script leans on none of it.
+
+Two things that run will decide, and neither can be decided from here:
+
+- **Whether `apt-get` says what the checklist says `apt` says.** The refused-reinstall step
+  asserts a failure and a package that is still not `ii`, rather than the English of
+  `Internal Error, No file name for javafx-login:amd64`, precisely because that wording is apt's
+  and not this repository's. `LC_ALL=C` is set for the whole run so that every phrase it does
+  match is matched in the language the machine was written about.
+- **Whether the byte-identical assertion holds across a real `dpkg` upgrade.** It holds across an
+  `--upgrade` run by hand here — the five files of a fresh deployment came through unchanged, and
+  the store is at schema version 6 either side — but a reinstall is `prerm`, unpack, `postinst`,
+  and only a machine runs that.
+
+## 8. What the two-axis review of this found, and what was done
+
+**Spec found the one thing here that would have broken a run, and it is the worst shape a bug in
+a reporting script can have.** `expect_said_before` read both line numbers with
+`at_first="$(grep -n … | cut …)"`. Under `set -euo pipefail` an assignment whose command
+substitution failed ends the script — and the substitution that fails is a phrase that is *not in
+the transcript*, which is precisely the finding that check exists to report. So the one machine
+state worth stopping on was the state that stopped the run before it could say so, silently, with
+the EXIT trap naming a machine mid-installation and no reason given.
+
+Three assignments of the same class went with it: `package=` from a `find` over a
+`target/package/dist` a failed build never made — which made the `abandon 'there is no package to
+install'` on the very next line unreachable — and `launcher=`/`jars=` in the activation §0 step,
+which aborted on a missing payload rather than reporting one. All four carry `|| true` now, with
+the reason written where it is, because it reads as tidiness and is load-bearing.
+
+**Spec was right that two annotations overclaimed**, and both were already narrowed before the
+report arrived, by the same reading:
+
+- packaging §1's *"It ends without an error, and without asking anything"* — the script sets
+  `DEBIAN_FRONTEND=noninteractive`, which is what makes an installation that wanted to ask fail
+  rather than ask. That half stays for a person, and now says so.
+- packaging §6's *"starting the application reports the service as not running"* — needs the
+  screen the script refuses to have. It answers the machine's half of that box, and now says
+  which half.
+
+**Spec found the purge step asserts less than it says.** *"It names every kind of thing it
+destroys before destroying it"* — from outside, a transcript cannot show the order of an `echo`
+and an `rm -rf` inside one postrm. That order is `DebianPackageTest`'s, which reads the script.
+What a machine can show is that it was said and that the directory then went, and that is now
+what the step claims.
+
+**Spec found a comment that was false.** `name_the_state_the_machine_is_left_in` said it runs on
+"the refusals above"; the `trap … EXIT` is installed after both of them. The refusals name their
+own state and nothing has been touched when either fires, which is what it says now — and on the
+test machine as it stands, the refusal is the only path that will run at all.
+
+**Spec called activation §0 and §2 scope creep, and they are: kept.** The rewritten scope's
+activation bullet names four things and neither of those is among them. Both are pure
+machine-state assertions with no screen in them, which is the line the ticket's own "in scope"
+draws, and both are free — the launcher, the jars, the runtime and the socket's mode are read off
+a machine that has just been installed on. The same goes for correcting §0's command block, which
+named pre-jpackage paths.
+
+**Standards found the ADR-0017 argument written out three times** — the class javadoc, the
+script's design-decision block, and again as lines the script prints at run time. It is written
+once now, on `SpeakTheProtocol.java`, which is the thing that makes it true; the other two point
+at it and keep only the sentence they need.
+
+**Standards found the repeated assertion shapes.** `((last_status != 0)) ? 'a failure' :
+'it succeeded'` was said twice and is `whether_it_failed` now; the five
+`attempt env "SUDO_USER=…" apt-get install …` invocations are `install_the_package` and
+`reinstall_the_package`, two named helpers rather than one with a flag — which is the correction
+the review of #17 made to `enableTheSocketOnly("static", false)` and worth not repeating.
+
+**Standards found a name that reads as a boolean and holds a filename.** `MADE_BY_THIS` is
+`MARK_IT_LEAVES`, and the test that was calling the same thing `MARK` agrees with it.
+
+**Standards found a Middle Man**: `headingsOf(checklist)` was `bodiesOf(checklist).keySet()` with
+one caller. Inlined.
+
+**Not done, with reasons:**
+
+- **`SpeakTheProtocol` has no package statement.** Deliberate, and now said so in its javadoc: the
+  default package is the honest signal that this is not part of the product. It is compiled into a
+  temporary directory by the script and thrown away with the run, and it is the only class in this
+  repository that is never on a classpath anything ships.
+- **`attempt` returns through the globals `transcript` and `last_status`.** Named as a Data Clump
+  against the `WhatItDid` record in the test beside it, and the comparison does not carry: a shell
+  function has one return value and it is a number. The alternative is a serialised string both
+  sides parse, which is worse in every way that matters.
+- **The paths and unit names are declared a third time**, beside `install.sh` and `build-deb.sh`.
+  There is no import in shell, those two already each carry their own copy, and a fourth file
+  sourced by all three would be a file the package would then have to ship to keep `install.sh`
+  runnable from the payload.
+- **The checklist intros repeat a sentence from the script header.** Each document stands alone
+  and is read on a machine, out of `/opt/javafx-login/lib/doc`, by somebody who has not opened the
+  script.

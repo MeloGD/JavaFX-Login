@@ -35,7 +35,10 @@ import java.nio.file.Path;
  *
  * <p>It is compiled by the JDK that built the package and run on the runtime the package ships,
  * over the jars the package ships. Nothing here is part of the product and nothing here is
- * installed: the class is built into a temporary directory and thrown away with the run.
+ * installed: the class is built into a temporary directory and thrown away with the run. It is in
+ * the default package deliberately, and it is the only class in this repository that is — a
+ * package name would put it somewhere, and there is nowhere it belongs: no artifact ships it and
+ * nothing is ever compiled against it.
  *
  * <p>Everything it prints goes to standard output, one fact to a line, for a shell to read. An
  * answer that is not a message of the protocol never reaches this far — {@code MessageCodec}

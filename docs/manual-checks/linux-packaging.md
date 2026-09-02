@@ -72,7 +72,10 @@ _Covered automatically:_ that the upgrade mode creates nothing where there is no
 _Covered by `verify-on-a-machine.sh`:_ every box, and two more — that both units are installed,
 and that exactly one `.desktop` entry is registered and it is not the AuthenticationService's. It
 performs the installation with `SUDO_USER` set, which is how sudo says who an installation was
-for, so the group membership is a real one rather than the one a root shell would leave.
+for, so the group membership is a real one rather than the one a root shell would leave. **The
+half of the first box that says "without asking anything" stays here**: that script sets
+`DEBIAN_FRONTEND=noninteractive`, which is what makes an installation that wanted to ask fail
+rather than ask, so a person running this by hand is the only one who ever sees the question.
 
 ## 2. The one manual step there is
 
@@ -195,7 +198,9 @@ _Covered automatically:_ the refusal and the two numbers in it —
 
 _Covered by `verify-on-a-machine.sh`:_ every box, including that `apt install --reinstall` is not
 the way back — it asserts that the reinstall fails and that the machine is still not `ii` after
-it, rather than trusting the sentence above.
+it, rather than trusting the sentence above. Of the second box it answers the machine's half:
+nothing is listening and the node is gone. **What a person starting the application is told stays
+here**, and it is the half that matters to whoever hits this.
 
 ## 7. Removing keeps the deployment
 

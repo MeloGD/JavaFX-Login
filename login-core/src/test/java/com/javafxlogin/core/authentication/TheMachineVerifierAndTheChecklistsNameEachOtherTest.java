@@ -60,7 +60,7 @@ class TheMachineVerifierAndTheChecklistsNameEachOtherTest {
     stepsByChecklist()
         .forEach(
             (checklist, sections) -> {
-              Set<String> headings = headingsOf(checklist);
+              Set<String> headings = bodiesOf(checklist).keySet();
               for (String section : sections) {
                 assertTrue(
                     headings.contains(section),
@@ -135,11 +135,6 @@ class TheMachineVerifierAndTheChecklistsNameEachOtherTest {
     }
     assertFalse(declared.isEmpty(), SCRIPT + " declares no steps at all");
     return declared;
-  }
-
-  /** Every {@code ## } heading in a checklist, with its number, as a step names it. */
-  private Set<String> headingsOf(String checklist) {
-    return bodiesOf(checklist).keySet();
   }
 
   /** Each {@code ## } section of a checklist against everything written under it. */

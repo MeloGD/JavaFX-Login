@@ -50,8 +50,8 @@ readonly UNIT_DIRECTORY='/etc/systemd/system'
 readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY="$(cd "${HERE}/../.." && pwd)"
 
-# What this script leaves in a deployment of its own, and looks for before it destroys one.
-readonly MADE_BY_THIS='.made-by-verify-on-a-machine'
+# The file this script leaves in a deployment of its own, and looks for before it destroys one.
+readonly MARK_IT_LEAVES='.made-by-verify-on-a-machine'
 
 # The Administrator this script creates over the socket, and never through a window. The password
 # is here in the clear on purpose: it guards a deployment this script is about to purge, on a
@@ -197,9 +197,14 @@ expect_silent() {
 # report was supposed to be able to stop.
 expect_said_before() {
   local what="$1" first="$2" second="$3" said="$4"
+  # Both are read with `|| true`, and that is load-bearing rather than tidy. Under `set -e` an
+  # assignment whose command substitution failed ends the script, and the substitution that fails
+  # here is a phrase that is not in the transcript — which is the finding this check exists to
+  # report. Unguarded, the one machine state worth stopping on is the one that stops the run
+  # before it can say so.
   local at_first at_second
-  at_first="$(grep -n -m 1 -E -- "${first}" <<<"${said}" | cut -d: -f1)"
-  at_second="$(grep -n -m 1 -E -- "${second}" <<<"${said}" | cut -d: -f1)"
+  at_first="$(grep -n -m 1 -E -- "${first}" <<<"${said}" | cut -d: -f1 || true)"
+  at_second="$(grep -n -m 1 -E -- "${second}" <<<"${said}" | cut -d: -f1 || true)"
   local expected="${first} before ${second}"
   if [[ -z ${at_first} || -z ${at_second} ]]; then
     report no "${what}" "${expected}" "it did not say both of those"
@@ -281,6 +286,14 @@ whether_anything_is_listening() {
   fi
 }
 
+# Whether the last thing `attempt` ran ended badly, which for two steps below is the assertion
+# rather than the accident: an installation that a store from a later build did not stop, and an
+# `apt install --reinstall` that recovered a half-configured package, are both this script finding
+# the machine wrong.
+whether_it_failed() {
+  if ((last_status != 0)); then printf 'a failure'; else printf 'it succeeded'; fi
+}
+
 whether_the_journal_has_anything_since() {
   if [[ -n "$(journalctl -u "${UNIT}.service" --since "$1" --no-pager -q 2>/dev/null)" ]]; then
     printf 'the journal has something to say'
@@ -354,19 +367,12 @@ expect_the_deployment_came_through() {
 # Speaking the protocol
 # ---------------------------------------------------------------------------------------------
 #
-# THE DESIGN DECISION, made where it can be read against what depends on it. Several steps below
-# assert that a deployment survives byte for byte, and by ADR-0017 the package never creates one:
-# only the FirstRunWizard does, and driving that wizard needs a screen this script does not have.
-#
-# The way out taken here is to speak the protocol. A small class — installer/linux/verify — is
-# compiled against the jars the package installed, run on the runtime the package installed, and
-# performs the bootstrap over /run/javafx-login-authd.sock as any other client would. The kernel
-# names it as the peer, and root is a MachineAdministrator, which is the whole of what ADR-0008
-# asks of whoever creates the Administrator.
-#
-# So "preserved" in this report means an Administrator that was really created and really logs in
-# again afterwards, with the same password, over the same socket. It is not a set of files that
-# happened to still be there, which is what the cheaper option would have bought.
+# THE DESIGN DECISION. Several steps below assert that a deployment survives byte for byte, and by
+# ADR-0017 the package never creates one. The way out taken here is to speak the protocol rather
+# than to drive a wizard or to compare whatever files happen to be there, and the argument for it
+# is written once, on installer/linux/verify/SpeakTheProtocol.java, which is the thing that makes
+# it true. What it buys the report below is one sentence: "preserved" here means an Administrator
+# that really logs in again afterwards, over the same socket, with the same password.
 
 compile_the_client() {
   install -d "${work}/client"
@@ -395,7 +401,7 @@ require_root() {
 refuse_a_deployment_this_script_did_not_make() {
   local directory="$1"
   [[ -d ${directory} ]] || return 0
-  [[ -e ${directory}/${MADE_BY_THIS} ]] && return 0
+  [[ -e ${directory}/${MARK_IT_LEAVES} ]] && return 0
 
   local held
   held="$(find "${directory}" -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null || true)"
@@ -474,6 +480,23 @@ take_the_product_off_the_machine() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# Installing, the way sudo does it
+# ---------------------------------------------------------------------------------------------
+#
+# SUDO_USER is how sudo says who an installation was for, and the postinst reads it to decide whom
+# to admit to the group. It is set here rather than inherited, because this script is root: an
+# installation that said nothing would admit nobody, which is a different step of the checklist and
+# never the one being run.
+
+install_the_package() {
+  install_the_package
+}
+
+reinstall_the_package() {
+  reinstall_the_package
+}
+
+# ---------------------------------------------------------------------------------------------
 # The steps
 # ---------------------------------------------------------------------------------------------
 
@@ -492,8 +515,11 @@ building_the_package() {
   expect_silent 'it said nothing about a skipped bundler' \
     '[Bb]undler .*skipped|skipp(ed|ing) .*bundler' "${transcript}"
 
+  # `|| true` for the reason expect_said_before carries one: a build that produced no directory
+  # at all is what the next line is written to abandon on, and an assignment that ended the run
+  # would never reach it.
   package="$(find "${REPOSITORY}/target/package/dist" -maxdepth 1 -name '*.deb' 2>/dev/null \
-    | sort | tail -1)"
+    | sort | tail -1 || true)"
   expect_equal "a .deb was produced: ${package:-none}" 'a .deb' \
     "$(if [[ -n ${package} ]]; then printf 'a .deb'; else printf 'no .deb at all'; fi)"
   [[ -n ${package} ]] || abandon 'there is no package to install, so there is nothing below to run'
@@ -522,11 +548,7 @@ a_first_installation() {
   expect_equal 'nothing of this product was on the machine to begin with' \
     'no package, no payload, no deployment, no group' "$(what_is_on_the_machine)"
 
-  # SUDO_USER is how sudo says who an installation was for, and the postinst reads it to decide
-  # whom to admit to the group. Set here rather than inherited, because this script is root and
-  # an installation that said nothing would admit nobody — which is a different step of the
-  # checklist and not this one.
-  attempt env "SUDO_USER=${account}" apt-get install -y "${package}"
+  install_the_package
   local installation="${transcript}"
   expect_equal 'the installation ended without an error' '0' "${last_status}"
   expect_equal 'dpkg has the package installed and configured' 'ii' "$(package_status)"
@@ -577,14 +599,16 @@ the_product_is_where_the_unit_says_it_is() {
     'the launcher ExecStart= names, the jars beside it, and the directory nothing may read'
 
   local launcher
-  launcher="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "${UNIT_DIRECTORY}/${UNIT}.service")"
+  launcher="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "${UNIT_DIRECTORY}/${UNIT}.service" \
+    2>/dev/null || true)"
   expect_equal 'the launcher the unit starts exists and is executable' \
     "${launcher} is executable" \
     "$(if [[ -x ${launcher} ]]; then printf '%s is executable' "${launcher}"; \
        else printf '%s is not' "${launcher}"; fi)"
 
   local jars
-  jars="$(find "${PAYLOAD_DIRECTORY}/lib/app" -maxdepth 1 -name '*.jar' 2>/dev/null | wc -l)"
+  jars="$(find "${PAYLOAD_DIRECTORY}/lib/app" -maxdepth 1 -name '*.jar' 2>/dev/null | wc -l \
+    || true)"
   expect_equal "there are jars for it to run: ${jars} of them" 'at least one jar' \
     "$(if ((jars > 0)); then printf 'at least one jar'; else printf 'none'; fi)"
 
@@ -651,19 +675,17 @@ connecting_starts_the_service() {
 make_a_deployment_over_the_socket() {
   arrangement 'creating the Administrator by speaking the protocol'
 
-  note 'The package never makes a deployment — ADR-0017 — and the FirstRunWizard needs a screen'
-  note 'this machine is not being given one of. So the bootstrap is spoken over the socket, by a'
-  note 'class compiled against the jars the package installed and run on the runtime it installed.'
-  note 'What "preserved" means below is therefore an Administrator that really logs in again'
-  note 'afterwards, rather than files that happened to still be there.'
+  note 'ADR-0017: the package installs the application and never a deployment, so this makes the'
+  note 'one the steps below assert survives — over the socket, on the packaged runtime, against'
+  note 'the packaged jars. See installer/linux/verify/SpeakTheProtocol.java for why that way.'
 
   attempt speak bootstrap "${ADMINISTRATOR}" "${ADMINISTRATOR_PASSWORD}"
   expect_equal 'the Administrator was created over the socket' '0' "${last_status}"
   expect_said 'and the service made it' 'bootstrap (ok|granted)' "${transcript}"
 
   printf 'This deployment was made by installer/linux/verify-on-a-machine.sh and is a fixture.\n' \
-    >"${STATE_DIRECTORY}/${MADE_BY_THIS}"
-  chmod 0600 "${STATE_DIRECTORY}/${MADE_BY_THIS}"
+    >"${STATE_DIRECTORY}/${MARK_IT_LEAVES}"
+  chmod 0600 "${STATE_DIRECTORY}/${MARK_IT_LEAVES}"
   note "marked ${STATE_DIRECTORY} as made here, so that a later run may destroy it"
 }
 
@@ -781,7 +803,7 @@ reinstalling_reasserts_what_an_upgrade_could_have_loosened() {
   expect_equal 'the service is running, so that the prerm stopping it means something' \
     'active' "$(unit_state is-active service)"
 
-  attempt env "SUDO_USER=${account}" apt-get install -y --reinstall "${package}"
+  reinstall_the_package
   expect_equal 'the reinstall ended without an error' '0' "${last_status}"
 
   expect_equal 'the mode and the owner are back, without anybody having repaired them' \
@@ -811,9 +833,8 @@ a_store_from_a_later_build_stops_the_installation() {
   sqlite3 "${STORE}" 'PRAGMA user_version = 99'
   note 'set the schema version in the store to 99, as a later build would have left it'
 
-  attempt env "SUDO_USER=${account}" apt-get install -y --reinstall "${package}"
-  expect_equal 'the installation fails' 'a failure' \
-    "$(if ((last_status != 0)); then printf 'a failure'; else printf 'it succeeded'; fi)"
+  reinstall_the_package
+  expect_equal 'the installation fails' 'a failure' "$(whether_it_failed)"
   expect_said 'and names the version it found' 'schema version 99' "${transcript}"
   expect_said 'and the version this build understands' \
     "understands only version ${schema_this_build_understands}" "${transcript}"
@@ -828,9 +849,8 @@ a_store_from_a_later_build_stops_the_installation() {
 
   # What the checklist used to say, and it was wrong. A package whose postinst failed is
   # half-configured, and apt refuses it rather than running the postinst again.
-  attempt env "SUDO_USER=${account}" apt-get install -y --reinstall "${package}"
-  expect_equal 'apt install --reinstall is not the way back' 'a failure' \
-    "$(if ((last_status != 0)); then printf 'a failure'; else printf 'it succeeded'; fi)"
+  reinstall_the_package
+  expect_equal 'apt install --reinstall is not the way back' 'a failure' "$(whether_it_failed)"
   expect_equal 'and the machine is still half-configured after it' 'not ii' \
     "$(if [[ "$(package_status)" == 'ii' ]]; then printf 'ii'; else printf 'not ii'; fi)"
 
@@ -874,7 +894,7 @@ removing_keeps_the_deployment() {
     "$(whether_the_group_admits "${account}")"
 
   arrangement 'installing it again over the deployment that was kept'
-  attempt env "SUDO_USER=${account}" apt-get install -y "${package}"
+  install_the_package
   expect_equal 'it installs again without an error' '0' "${last_status}"
   expect_the_deployment_came_through \
     'and finds the deployment byte-identical: a reinstall is not a way to lose one' \
@@ -890,7 +910,10 @@ purging_destroys_it_and_says_so() {
   attempt apt-get purge -y "${PACKAGE_NAME}"
   expect_equal 'the purge ended without an error' '0' "${last_status}"
 
-  # By the time it has run, that sentence is the only record left of what was there.
+  # By the time it has run, that sentence is the only record left of what was there. That it is
+  # said *before* the directory goes is the postrm's own order and DebianPackageTest holds it; what
+  # a machine can show from outside is that it was said and that the directory then went, which is
+  # the pair asserted here.
   expect_said 'it names every Account and its password' \
     'every Account and its password' "${transcript}"
   expect_said 'the SecretVault and every secret in it' \
@@ -922,7 +945,9 @@ abandon() {
 }
 
 # The machine is left somewhere it is named rather than wherever the last step happened to leave
-# it. Run whatever ends this script, including the refusals above and a step that abandoned it.
+# it. Run whatever ends this script from the first step onwards, including a step that abandoned
+# it. The two refusals before that name their own state and are the whole of it: nothing has been
+# touched yet when either of them fires.
 name_the_state_the_machine_is_left_in() {
   local status=$?
   printf '\n=== The machine is left like this\n'

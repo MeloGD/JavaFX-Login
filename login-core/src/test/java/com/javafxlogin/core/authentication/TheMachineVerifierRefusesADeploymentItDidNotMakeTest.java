@@ -27,8 +27,8 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class TheMachineVerifierRefusesADeploymentItDidNotMakeTest {
 
-  /** What the script leaves in a deployment of its own, and looks for before it destroys one. */
-  private static final String MARK = ".made-by-verify-on-a-machine";
+  /** The file the script leaves in a deployment of its own, under the name the script gives it. */
+  private static final String MARK_IT_LEAVES = ".made-by-verify-on-a-machine";
 
   @TempDir private Path directory;
 
@@ -48,7 +48,7 @@ class TheMachineVerifierRefusesADeploymentItDidNotMakeTest {
   void aDeploymentItMadeIsOneItMayDestroyAgain() throws Exception {
     // The second run on the same throwaway machine, and the first one's mark is still there.
     Path deployment = aDeploymentSomebodyElseMade();
-    Files.writeString(deployment.resolve(MARK), "made by verify-on-a-machine.sh\n");
+    Files.writeString(deployment.resolve(MARK_IT_LEAVES), "made by verify-on-a-machine.sh\n");
 
     WhatItDid ran = pointedAt(deployment);
 
@@ -77,7 +77,7 @@ class TheMachineVerifierRefusesADeploymentItDidNotMakeTest {
     // A run that was interrupted between the installation and the bootstrap. Its mark is there
     // and no Account ever was.
     Path deployment = Files.createDirectory(directory.resolve("state"));
-    Files.writeString(deployment.resolve(MARK), "made by verify-on-a-machine.sh\n");
+    Files.writeString(deployment.resolve(MARK_IT_LEAVES), "made by verify-on-a-machine.sh\n");
 
     WhatItDid ran = pointedAt(deployment);
 

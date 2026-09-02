@@ -82,7 +82,9 @@ other permissions — there is no window here to lose a race in.
 _Covered automatically:_ that the unit declares `SocketUser=`, `SocketGroup=` and
 `SocketMode=` — `SystemdUnitFilesTest.theSocketsOwnershipAndModeAreDeclaredRatherThanLeftToUmask`.
 
-_Covered by `verify-on-a-machine.sh`:_ both boxes, against the node systemd actually made.
+_Covered by `verify-on-a-machine.sh`:_ both boxes, against the node systemd actually made. The
+second one it answers for the installing account, which is the only account on that machine the
+group admits — a machine with more of them is one this stays a question about.
 
 ## 3. Connecting starts the service, and the connection waits
 
@@ -100,10 +102,11 @@ for the first round trip on Ubuntu 26.04; anything of that order is right, and a
 to connect is the thing to stop on.
 
 _Covered by `verify-on-a-machine.sh`:_ every box, with a client of its own rather than the
-packaged application — it asserts the service was `inactive` before the connection and `active`
-after it, and that the journal has something to say since. The round trip is not timed: what that
-number would mean on a machine nobody chose is nothing, and a failure to connect is the thing
-this stops on too.
+packaged application. The third box it answers with the state on either side rather than with
+timestamps: the service was `inactive` immediately before the connection and `active` immediately
+after, which is what "started after the client connected" means, and the journal is then asked
+whether it has anything to say since. The round trip is not timed — what that number would mean on
+a machine nobody chose is nothing, and a failure to connect is what this stops on too.
 
 ## 4. One process serves several Sessions in turn
 
