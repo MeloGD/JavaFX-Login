@@ -82,9 +82,6 @@ readonly SESSIONS_OVER_ONE_CONNECTION=3
 # machine this product is ever installed on, and is refused by name rather than installed.
 readonly TOOLS_IT_INSTALLS=(
   'mvn:maven'
-  'javac:default-jdk'
-  'jlink:default-jdk'
-  'jpackage:default-jdk'
   'fakeroot:fakeroot'
   'sqlite3:sqlite3'
 )
@@ -423,6 +420,8 @@ refuse_a_deployment_this_script_did_not_make() {
 # imagemagick, xdotool, sqlite3 and a JDK put on it for an afternoon, and a script that leaned on
 # any of them would pass there and nowhere else.
 install_what_it_needs() {
+  apt-get update -qq || true
+
   local missing=() tool_and_package tool
   for tool in "${TOOLS_THE_MACHINE_MUST_ALREADY_HAVE[@]}"; do
     command -v "${tool}" >/dev/null 2>&1 || missing+=("${tool}")
@@ -441,7 +440,6 @@ install_what_it_needs() {
   done
   if ((${#wanted[@]} > 0)); then
     note "installing what this script needs and this machine has not got: ${wanted[*]}"
-    apt-get update -qq || true
     apt-get install -y "${wanted[@]}" || true
   fi
 
@@ -452,6 +450,55 @@ install_what_it_needs() {
   done
   ((${#missing[@]} == 0)) \
     || fail "these are still missing, as tool:package — ${missing[*]}; install them and run this again"
+}
+
+# The JDK is chosen by version, and it is the version in the pom rather than whatever javac the
+# machine has. Two things make that worth the twenty lines: `default-jdk` on Ubuntu 26.04 is 25,
+# and installing maven pulls a default JDK in whether or not anything asked for one — so a machine
+# that had no Java at all ends up with 25 in front on the PATH.
+#
+# A .deb linked by a jlink and packaged by a jpackage nobody here has ever built with is not the
+# .deb this repository ships, and the difference would land in the one place this script cannot
+# see it: the trimmed runtime. What guards that runtime is
+# TheTrimmedRuntimeCarriesEveryOfferedLanguageTest, and this script does not run the suite.
+use_the_jdk_this_product_is_built_with() {
+  local release
+  release="$(sed -n \
+    's#.*<maven.compiler.release>\([0-9][0-9]*\)</maven.compiler.release>.*#\1#p' \
+    "${REPOSITORY}/pom.xml" | head -1)"
+  [[ -n ${release} ]] || fail 'no <maven.compiler.release> could be read out of pom.xml'
+
+  local home
+  home="$(jdk_directory_for "${release}")"
+  if [[ -z ${home} ]]; then
+    note "installing openjdk-${release}-jdk, which is the JDK this product is built with"
+    apt-get install -y "openjdk-${release}-jdk" || true
+    home="$(jdk_directory_for "${release}")"
+  fi
+  [[ -n ${home} ]] \
+    || fail "openjdk-${release}-jdk is what this builds with, and apt would not put one here"
+
+  # In front of everything, so that mvn, jlink, jpackage and the javac that compiles the client
+  # are all the same JDK — including on a machine where installing maven has just left a newer
+  # one as the default.
+  export JAVA_HOME="${home}"
+  export PATH="${home}/bin:${PATH}"
+  local tool
+  for tool in javac jlink jpackage; do
+    command -v "${tool}" >/dev/null 2>&1 || fail "there is no ${tool} in ${JAVA_HOME}"
+  done
+  note "building with $("${home}/bin/java" -version 2>&1 | head -1), at ${home}"
+}
+
+# Where Debian puts a JDK of that release, and nothing if it has not got one.
+jdk_directory_for() {
+  local found
+  found="$(find /usr/lib/jvm -maxdepth 1 -name "java-$1-openjdk-*" 2>/dev/null | sort | head -1 \
+    || true)"
+  if [[ -n ${found} && -x ${found}/bin/javac && -x ${found}/bin/jlink && -x ${found}/bin/jpackage ]]
+  then
+    printf '%s' "${found}"
+  fi
 }
 
 # The machine is put back to nothing of this product before step 1, because "a first installation
@@ -994,6 +1041,7 @@ main() {
   read_the_arguments "$@"
   refuse_a_deployment_this_script_did_not_make "${STATE_DIRECTORY}"
   install_what_it_needs
+  use_the_jdk_this_product_is_built_with
 
   work="$(mktemp -d)"
   trap name_the_state_the_machine_is_left_in EXIT

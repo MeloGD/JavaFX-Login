@@ -3680,3 +3680,26 @@ one caller. Inlined.
 - **The checklist intros repeat a sentence from the script header.** Each document stands alone
   and is read on a machine, out of `/opt/javafx-login/lib/doc`, by somebody who has not opened the
   script.
+
+## 9. Found while preparing the machine run: the build would not have used this product's JDK
+
+Not a review finding and not a defect in the product, but it would have made the first run on a
+machine mean less than it looked like it meant.
+
+`TOOLS_IT_INSTALLS` asked apt for `default-jdk`. On Ubuntu 26.04 that is **JDK 25**, and the
+archive carries `openjdk-21-jdk` at exactly `21.0.12+8`, which is the JDK this repository is built
+with. Worse, `maven` depends on a default JDK, so a machine rolled back to having no Java at all
+ends up with 25 in front on the `PATH` whether anything asked for it or not.
+
+The `.deb` would still have built — `maven.compiler.release` is 21 — but it would have been linked
+by a `jlink` and packaged by a `jpackage` nobody here has ever built with, and the difference
+lands in the one place this script cannot see: the trimmed runtime. What guards that runtime is
+`TheTrimmedRuntimeCarriesEveryOfferedLanguageTest`, and this script does not run the suite. A
+green report over a package assembled by a toolchain the project does not use is exactly the kind
+of quiet distance the script exists to close.
+
+`use_the_jdk_this_product_is_built_with` now reads the release out of `pom.xml`, installs
+`openjdk-<release>-jdk` by name, and puts its `bin` in front of everything on the `PATH` so that
+`mvn`, `jlink`, `jpackage` and the `javac` that compiles the protocol client are all one JDK. It
+refuses, naming the package, if apt will not produce one. `javac`, `jlink` and `jpackage` are out
+of `TOOLS_IT_INSTALLS` accordingly: they are not tools to be found, they are that JDK.

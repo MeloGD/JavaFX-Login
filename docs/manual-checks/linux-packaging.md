@@ -48,7 +48,12 @@ was just linked — `build-deb.sh` asks it, in its upgrade mode, before it packa
 
 _Covered by `verify-on-a-machine.sh`:_ both boxes, and that every entry in the `.deb` is
 `root/root`. It builds with `--skip-tests`, because what the suite says is a build-machine
-question and that script is only ever about what a machine is left like.
+question and that script is only ever about what a machine is left like — and it builds with the
+JDK named in `maven.compiler.release`, installed by version, rather than with whatever `javac` the
+machine has. On Ubuntu 26.04 `default-jdk` is 25, and installing `maven` pulls one in whether
+anything asked for it or not; a `.deb` linked by a `jlink` nobody here builds with is not the
+`.deb` this repository ships, and the difference would land in the trimmed runtime, which is the
+one thing that script cannot see.
 
 ## 1. A first installation
 
