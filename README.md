@@ -15,18 +15,62 @@ mvn test
 
 Everything runs headless: no display is needed, and no test needs privileges.
 
-## Installing it on Ubuntu
+## Packaging it, on a machine that has the tools
 
 ```bash
-sudo apt install fakeroot        # jpackage shells out to it, and skips the .deb without it
-./installer/linux/build-deb.sh   # jlink trims a runtime, jpackage packages it
+sudo apt install openjdk-21-jdk maven fakeroot   # the JDK by version: see below
+./installer/linux/build-deb.sh                   # jlink trims a runtime, jpackage packages it
 sudo apt install ./target/package/dist/javafx-login_0.1.0_amd64.deb
 ```
 
-That is the whole of it: log out and back in — a group membership does not reach a session that
-already existed — and the product is in the applications menu. Nothing else is asked of the
-machine, and nothing is running until the window is opened, which is what socket activation is
-for. `docs/manual-checks/linux-packaging.md` is the checklist to hold an installation against.
+`build-deb.sh` refuses and names what is missing rather than half-building, and the JDK is named
+by version on purpose. This compiles to `maven.compiler.release`, which is 21; `default-jdk` on
+Ubuntu 26.04 is 25, and installing `maven` pulls a 25 runtime in whether anything asked for it or
+not. A `.deb` linked by a `jlink` this project does not build with is not the `.deb` this project
+ships, and the difference lands in the trimmed runtime, where nothing would notice it.
+`fakeroot` is jpackage's, not this repository's: without it jpackage *skips* the DEB bundler with
+a message and exits successfully having built nothing.
+
+The last line above installs it here, which is convenient on a developer's machine and is not how
+anybody else gets it. That is the next section.
+
+## Installing it on a machine that will not build it
+
+**The package carries everything the product runs on, the trimmed runtime included, so this
+machine needs no JDK, no Maven and nothing of this repository.** What it needs is what the package
+declares: system libraries a desktop Ubuntu already has, and `xdg-utils`. apt resolves them.
+
+```bash
+# the path needs a / in it, or apt reads it as the name of a package
+sudo apt install ./javafx-login_0.1.0_amd64.deb
+```
+
+Then log out and back in — a group membership does not reach a session that already existed — and
+"javafx-login" is in the applications menu. Nothing else is asked of the machine, and nothing is
+running until the window is opened, which is what socket activation is for.
+
+Three things worth knowing before rather than after:
+
+- **Run it with `sudo`, from the account that is going to use the product.** That is how the
+  installation learns who it was for, and it is what puts that account in the `javafx-login`
+  group — which is the whole of what "may reach the `AuthenticationService`" means. From a root
+  shell, or through a package manager that discards the environment, nobody is admitted: the
+  installation says so in as many words and names what to run,
+  `sudo /opt/javafx-login/lib/systemd/install.sh <account>`.
+- **Whoever runs the `FirstRunWizard` has to administer the machine**, by being in a group the
+  operating system treats as administrative — `root`, `sudo`, `wheel` or `admin`. That is
+  ADR-0008, and it is checked against the connecting peer rather than against anything typed. A
+  hand-written `sudoers` line is not enough, because nothing here reads `sudoers`.
+- **systemd has to have booted.** This product is installed by hand, by a person, on the machine
+  they are sitting at. `install.sh` has a branch for a `systemctl` that cannot run and says what
+  it could not enable, but that is defence against a machine in a state nobody meant to be in,
+  not a promise that baking this into an image works.
+
+The machine keeps its own copy of the checks under `/opt/javafx-login/lib/doc/`, which is the path
+both systemd units name in `Documentation=`.
+`docs/manual-checks/linux-packaging.md` is the checklist to hold an installation against, and
+`installer/linux/verify-on-a-machine.sh` runs the machine-state half of it on a machine that can
+be thrown away.
 
 The package installs an application and never a `Deployment`. The Accounts, the `SecretVault`,
 the configuration and the `AuthenticationEvents` live in `/var/lib/javafx-login`, owner-only and
