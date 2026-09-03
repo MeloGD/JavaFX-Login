@@ -65,10 +65,19 @@ version_from_the_pom() {
 
 build_the_jars() {
   local skip="$1"
-  ( cd "${REPOSITORY}" && mvn -q ${skip} package )
+  # One invocation, and that is load-bearing rather than tidy. `dependency:copy-dependencies` run
+  # on its own is a standalone goal: it resolves this project's own modules from the local Maven
+  # repository, and nothing here ever installs them into one. So it worked only on a machine that
+  # had run `mvn install` at some point — which is every developer's machine and no machine that
+  # has just been handed this source. Run in the same session as `package`, each module is
+  # resolved from the reactor that has just built it, and the local repository is not consulted.
+  #
+  # Found on a machine with a cold ~/.m2, where every build failed naming login-core.
+  # DebianPackageTest holds the two goals together, because the failure is invisible anywhere the
+  # build has ever succeeded before.
   ( cd "${REPOSITORY}" \
-      && mvn -q -DskipTests -DincludeScope=runtime -DoutputDirectory="${WORK}/input" \
-             dependency:copy-dependencies )
+      && mvn -q ${skip} -DincludeScope=runtime -DoutputDirectory="${WORK}/input" \
+             package dependency:copy-dependencies )
   local module
   for module in login-core login-ui protected-feature; do
     cp "${REPOSITORY}/${module}/target/${module}-"*.jar "${WORK}/input/"

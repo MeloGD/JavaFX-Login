@@ -56,6 +56,19 @@ class DebianPackageTest {
   }
 
   @Test
+  void theJarsAndTheirDependenciesAreCollectedInTheSessionThatBuiltThem() {
+    // `dependency:copy-dependencies` is a standalone goal. On its own it resolves this project's
+    // own modules from the local Maven repository, and nothing in this repository ever installs
+    // them into one — so the build worked on every machine that had run `mvn install` at some
+    // point, which is every developer's, and on no machine that had just been handed the source.
+    // Found on a machine with a cold local repository, where it failed naming login-core.
+    assertTrue(
+        buildScript.contains("package dependency:copy-dependencies"),
+        "build-deb.sh collects the dependencies in a session of its own, where this project's"
+            + " modules can only come from a local repository nothing installs them into");
+  }
+
+  @Test
   void theServiceIsStartedByAPathThePackageActuallyPutsSomethingAt() {
     // The unit is registered by the postinst and read by systemd at the first connection, so an
     // ExecStart= that names nothing fails days later, at somebody's login screen.
