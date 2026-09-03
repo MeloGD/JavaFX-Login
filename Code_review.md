@@ -3711,6 +3711,16 @@ Branch `dev-login`, on top of `38411ad`. `installer/linux/verify-on-a-machine.sh
 on it. **94 checks, 0 failed, exit 0.** It took three attempts to get there, and the first two are
 the interesting part.
 
+**Run twice, and the second time from a snapshot.** The passing run below was the third attempt on
+a machine this session had already installed on and reset by hand. It was then run again, whole,
+on the same machine restored from a snapshot by its owner — up one minute, no `~/JavaFX-Login`, no
+`/usr/lib/jvm`, no `~/.m2` under either account, none of the packages, and
+`unattended-upgrades` still starting, so the dpkg lock wait was exercised rather than got away
+with. Same 94 checks, same 0 failures, same exit 0; the `.deb` differed by 28 bytes, which is the
+timestamps in it. That is the run the ticket asks for — the one on a machine rolled back to before
+all of it, which is what proves the script leans on none of it — and the numbers below are from
+both.
+
 ## 1. The machine it was run on, verified rather than assumed
 
 Checked before anything was touched: `xdotool`, `ydotool` and `sqlite3` not known to dpkg,
@@ -3811,7 +3821,9 @@ version in `maven.compiler.release` and putting its `bin` in front is what makes
 - **The build ran as root**, from a tree under `test_user`'s home, so `target/` and `/root/.m2`
   are root's afterwards. On a throwaway machine that is nothing; on anything else it would be
   worth a word.
-- **Three attempts, and the machine was reset between the second and the third** — packages
-  purged, `/root/.m2` and every `target/` removed — so the passing run is a cold one and not one
-  standing on what the two before it left. The `~/.m2` it built against had nothing of
-  `com.javafxlogin` in it, which is the condition that made attempt one fail.
+- **Three attempts to a passing run, and the machine was reset between the second and the
+  third** — packages purged, `/root/.m2` and every `target/` removed. That reset is why the run
+  was repeated from a snapshot afterwards rather than argued about: a cold `~/.m2` is the
+  condition that made attempt one fail, and the difference between a directory somebody deleted
+  and one that was never there is exactly the kind of difference this whole script exists because
+  nobody can see.
