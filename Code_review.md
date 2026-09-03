@@ -3703,3 +3703,115 @@ of quiet distance the script exists to close.
 `mvn`, `jlink`, `jpackage` and the `javac` that compiles the protocol client are all one JDK. It
 refuses, naming the package, if apt will not produce one. `javac`, `jlink` and `jpackage` are out
 of `TOOLS_IT_INSTALLS` accordingly: they are not tools to be found, they are that JDK.
+
+# The machine run (issue #19)
+
+Branch `dev-login`, on top of `38411ad`. `installer/linux/verify-on-a-machine.sh` run on
+`test_user@10.200.13.21` — Ubuntu 26.04.1, rolled back by the owner to before the tooling #17 put
+on it. **94 checks, 0 failed, exit 0.** It took three attempts to get there, and the first two are
+the interesting part.
+
+## 1. The machine it was run on, verified rather than assumed
+
+Checked before anything was touched: `xdotool`, `ydotool` and `sqlite3` not known to dpkg,
+`imagemagick` at `un`, no Java, no maven, no fakeroot, no `/usr/lib/jvm`, no `~/.m2`. Nothing of
+`javafx-login`: no package, no `/opt`, no `/var/lib`, no group, no units, no socket node, no menu
+entry, and `systemctl --failed` naming zero units. `x11-utils` is still `ii`, and stays: it is a
+stock desktop dependency rather than one of #17's, and nothing in this script touches X.
+
+So the three install paths — `sqlite3`, the JDK, maven and fakeroot — were all walked for real,
+which is what acceptance criterion 5 is worth on a machine that already had them.
+
+## 2. First attempt: `build-deb.sh` cannot build on a machine that has never built this
+
+The script reported, abandoned, and named the state — which is the machinery doing its job. What
+it had found was a defect in the product's build script that no hand-run could have found, because
+every hand-run was on a machine where it had already worked.
+
+`build_the_jars` ran two Maven invocations: `package`, and then `dependency:copy-dependencies`.
+The second is a **standalone goal**, so it does not build the reactor: it resolves this project's
+own modules from the local Maven repository, and nothing in this repository ever installs them
+into one.
+
+```
+Could not resolve dependencies for project com.javafxlogin:login-ui:jar:0.1.0-SNAPSHOT
+  Could not find artifact com.javafxlogin:login-core:jar:0.1.0-SNAPSHOT
+```
+
+It worked on every machine that had run `mvn install` at some point — every developer's — and on
+no machine handed the source. Isolated on the machine with `com/javafxlogin` absent from `~/.m2`:
+`copy-dependencies` alone fails, `package dependency:copy-dependencies` in one session succeeds,
+eighteen dependency jars and three module jars, exit 0. `mvn install` would fix it too and is the
+wrong fix: `build-deb.sh` says at the top that nothing in it touches the machine it runs on.
+`DebianPackageTest.theJarsAndTheirDependenciesAreCollectedInTheSessionThatBuiltThem` holds it.
+
+## 3. Second attempt: two more, and one of them was mine
+
+**`unattended-upgrades` held the dpkg lock.** The script refused, correctly and by its own
+criterion, naming `maven`, `fakeroot` and `sqlite3` as missing. But what it had found was the
+timing of somebody else's cron job on a machine that had just booted — which is every machine this
+is pointed at — and a step failing over that later would have been reporting a lie. Every apt
+invocation now waits on `DPkg::Lock::Timeout` instead of failing on it.
+
+**And going to fix that turned up a live defect in the verifier.** `install_the_package` and
+`reinstall_the_package` were bodies that called themselves. Extracting them during the two-axis
+review was a global replace over a string that also appeared inside the two functions it had just
+written, so each ate its own body. Neither of the first two runs reached them — one abandoned at
+the build, the other refused at the tool check — so it would have surfaced as a hung step 1
+twenty-five minutes into the third. Nothing in a Java suite can hold a shell function to not being
+infinitely recursive; the run is what holds it.
+
+The `env` prefix had to move inside the new `apt_get` wrapper along the way, because `env`
+executes a binary and cannot execute a shell function — which is what the old shape would have
+become the moment a wrapper existed.
+
+## 4. What the passing run establishes
+
+Every number below is off the machine, not off a reading of it.
+
+| | What it found |
+|---|---|
+| packaging §0 | 56 097 548 bytes, every one of the entries `root/root`, nothing said about a skipped bundler |
+| packaging §1 | `javafx-login admits test_user`; `/var/lib/javafx-login` at `700 root root` and holding **nothing**; socket `enabled`, service `static`; one entry, `/usr/share/applications/javafx-login-javafx-login.desktop`, and it does not start the service; and "there is no CredentialStore" on line 16, "created group javafx-login" on line 17 — the order, on a machine |
+| activation §0–§2 | the launcher `ExecStart=` names is executable, the packaged runtime runs, `srw-rw---- root javafx-login` |
+| activation §3 | `inactive`, then `active`, on one connection from a client of the script's own |
+| the bootstrap | the Administrator created **over the socket**, on the packaged runtime, against the packaged jars |
+| activation §4 | three Sessions, one PID, unchanged |
+| activation §6 | **`inactive` 300 s after the last client closed**, `Deactivated successfully` in the journal, not failed, socket still listening, node still there |
+| activation §7 | back on the next connection, new PID |
+| packaging §5 | `0755` put back to `700 root root` by the reinstall; "is at schema version 6"; **6 files byte-identical**; `inactive, not failed` — which is `SuccessExitStatus=143` earning its line, on the one path that exercises it |
+| packaging §6 | refused naming 99 and 6; nothing listening; node gone; `apt install --reinstall` → `E: Internal Error, No file name for javafx-login:amd64`, still not `ii`; `dpkg --configure` → `ii` and listening |
+| packaging §7 | deployment kept and byte-identical after installing again, group kept, `/opt` gone, units gone, node gone, menu entry gone |
+| packaging §8 | every kind of thing named, then gone: directory, group, units, node, and `dpkg-query` no longer knows the package |
+
+The end state the script named was confirmed independently afterwards over SSH: no package, no
+`/opt`, no `/var/lib`, no group, no units, no node, `ss -lx` with nothing in it, no menu entry,
+`systemctl --failed` at zero.
+
+## 5. What the run proved about the JDK pin, more sharply than expected
+
+`/usr/lib/jvm` after the run holds **both** `java-21-openjdk-amd64` and `java-25-openjdk-amd64`,
+and `default-java` points at 25: installing `maven` pulls `default-jre-headless`, which on Ubuntu
+26.04 is 25. Unpinned, `java` on the `PATH` is 25 on this machine.
+
+Sharper than that, and the reason the old shape was a trap rather than a preference:
+`openjdk-25-jre-headless` ships **`jpackage` but not `javac` and not `jlink`**. The list this
+script used to carry asked `command -v jpackage`, found the JRE's, and would have concluded a JDK
+was present — then refused over the `javac` and `jlink` that were not. Naming the JDK by the
+version in `maven.compiler.release` and putting its `bin` in front is what makes `mvn`, `jlink`,
+`jpackage` and the `javac` that compiles the protocol client one toolchain.
+
+## 6. Honest limits
+
+- **One machine, one release.** Ubuntu 26.04.1 on kernel 7.0.0-30. Nothing here says what a
+  different systemd would do.
+- **Nothing was looked at.** No window was opened and no menu was read. Whether a person gets a
+  login window, whether `Español` is spelled that way, and whether the wizard reads well are in
+  the checklists, for a person, and are marked there.
+- **The build ran as root**, from a tree under `test_user`'s home, so `target/` and `/root/.m2`
+  are root's afterwards. On a throwaway machine that is nothing; on anything else it would be
+  worth a word.
+- **Three attempts, and the machine was reset between the second and the third** — packages
+  purged, `/root/.m2` and every `target/` removed — so the passing run is a cold one and not one
+  standing on what the two before it left. The `~/.m2` it built against had nothing of
+  `com.javafxlogin` in it, which is the condition that made attempt one fail.
