@@ -77,6 +77,13 @@ readonly HOW_OFTEN_TO_ASK=15
 # them all rather than one JVM per connection.
 readonly SESSIONS_OVER_ONE_CONNECTION=3
 
+# How long every apt invocation waits for the dpkg lock rather than failing on it. A machine that
+# has just booted is a machine unattended-upgrades is holding dpkg on for the first few minutes,
+# and a rolled-back machine is exactly what this is written to be pointed at. An installation
+# refused over that is a fact about the timing of somebody else's cron job and not about this
+# package, and a step of this run that failed over it would be reporting a lie.
+readonly LONGEST_WAIT_FOR_THE_DPKG_LOCK=600
+
 # The tools this script needs that a stock Ubuntu has not got, against the package that brings
 # each of them. Everything else it uses — systemd, dpkg, apt, coreutils, iproute2 — is on every
 # machine this product is ever installed on, and is refused by name rather than installed.
@@ -420,7 +427,7 @@ refuse_a_deployment_this_script_did_not_make() {
 # imagemagick, xdotool, sqlite3 and a JDK put on it for an afternoon, and a script that leaned on
 # any of them would pass there and nowhere else.
 install_what_it_needs() {
-  apt-get update -qq || true
+  apt_get update -qq || true
 
   local missing=() tool_and_package tool
   for tool in "${TOOLS_THE_MACHINE_MUST_ALREADY_HAVE[@]}"; do
@@ -440,7 +447,7 @@ install_what_it_needs() {
   done
   if ((${#wanted[@]} > 0)); then
     note "installing what this script needs and this machine has not got: ${wanted[*]}"
-    apt-get install -y "${wanted[@]}" || true
+    apt_get install -y "${wanted[@]}" || true
   fi
 
   missing=()
@@ -472,7 +479,7 @@ use_the_jdk_this_product_is_built_with() {
   home="$(jdk_directory_for "${release}")"
   if [[ -z ${home} ]]; then
     note "installing openjdk-${release}-jdk, which is the JDK this product is built with"
-    apt-get install -y "openjdk-${release}-jdk" || true
+    apt_get install -y "openjdk-${release}-jdk" || true
     home="$(jdk_directory_for "${release}")"
   fi
   [[ -n ${home} ]] \
@@ -508,7 +515,7 @@ jdk_directory_for() {
 take_the_product_off_the_machine() {
   if [[ "$(package_status)" != 'not known to dpkg' ]]; then
     note "dpkg knows ${PACKAGE_NAME} here, as $(package_status), and it is purged first"
-    apt-get purge -y "${PACKAGE_NAME}" >/dev/null 2>&1 || dpkg --purge "${PACKAGE_NAME}" || true
+    apt_get purge -y "${PACKAGE_NAME}" >/dev/null 2>&1 || dpkg --purge "${PACKAGE_NAME}" || true
   fi
   # And whatever a run that was interrupted left behind, which dpkg would not know about: the
   # units are stopped before their files go, because a socket unit systemd is still holding open
@@ -529,18 +536,28 @@ take_the_product_off_the_machine() {
 # ---------------------------------------------------------------------------------------------
 # Installing, the way sudo does it
 # ---------------------------------------------------------------------------------------------
+
+# Every apt invocation this script makes, carrying the two things that are true of all of them.
 #
 # SUDO_USER is how sudo says who an installation was for, and the postinst reads it to decide whom
 # to admit to the group. It is set here rather than inherited, because this script is root: an
 # installation that said nothing would admit nobody, which is a different step of the checklist and
-# never the one being run.
+# never the one being run. A person running these by hand under sudo has it set on every one of
+# them too, which is the whole reason it is set on every one of these.
+#
+# The lock wait is the other. Neither belongs to any one step, and this is not a middle man: what
+# it adds is what makes the difference between working on the machines this is for and not.
+apt_get() {
+  env "SUDO_USER=${account}" \
+    apt-get -o "DPkg::Lock::Timeout=${LONGEST_WAIT_FOR_THE_DPKG_LOCK}" "$@"
+}
 
 install_the_package() {
-  install_the_package
+  attempt apt_get install -y "${package}"
 }
 
 reinstall_the_package() {
-  reinstall_the_package
+  attempt apt_get install -y --reinstall "${package}"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -913,7 +930,7 @@ removing_keeps_the_deployment() {
     'the application taken away, and everything that is not the application left alone'
 
   remember_the_deployment 'before-the-removal'
-  attempt apt-get remove -y "${PACKAGE_NAME}"
+  attempt apt_get remove -y "${PACKAGE_NAME}"
   expect_equal 'the removal ended without an error' '0' "${last_status}"
 
   expect_said 'it says the deployment has been kept' 'has been kept' "${transcript}"
@@ -954,7 +971,7 @@ purging_destroys_it_and_says_so() {
   step packaging '8. Purging destroys it, and says so' \
     'the one word that destroys a deployment, and the sentence that is the last record of it'
 
-  attempt apt-get purge -y "${PACKAGE_NAME}"
+  attempt apt_get purge -y "${PACKAGE_NAME}"
   expect_equal 'the purge ended without an error' '0' "${last_status}"
 
   # By the time it has run, that sentence is the only record left of what was there. That it is
